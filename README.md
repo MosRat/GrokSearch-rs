@@ -32,27 +32,49 @@ The npm package ships a native Rust binary; the `grok-search-rs` command is what
 
 ## Quick Start
 
-1. Scaffold a global config file (one‑time, optional):
+1. After `npm install -g grok-search-rs`, add this MCP server entry to your client config:
+
+   ```json
+   {
+     "grok-search-rs": {
+       "command": "grok-search-rs",
+       "args": [],
+       "env": {
+         "GROK_SEARCH_API_KEY": "",
+         "GROK_SEARCH_URL": "",
+         "GROK_SEARCH_MODEL": "grok-4.20-fast",
+         "TAVILY_API_KEY": "",
+         "TAVILY_API_URL": "https://api.tavily.com",
+         "FIRECRAWL_API_KEY": ""
+       }
+     }
+   }
+   ```
+
+   For Codex TOML config:
+
+   ```toml
+   [mcp_servers.grok-search-rs]
+   type = "stdio"
+   command = "grok-search-rs"
+
+   [mcp_servers.grok-search-rs.env]
+   FIRECRAWL_API_KEY = ""
+   GROK_SEARCH_API_KEY = ""
+   GROK_SEARCH_MODEL = "grok-4.20-fast"
+   GROK_SEARCH_URL = ""
+   TAVILY_API_KEY = ""
+   TAVILY_API_URL = "https://api.tavily.com"
+   ```
+
+   Put your real keys in the empty values. If your client expects a top-level `mcpServers` / `mcp_servers` object, place the `grok-search-rs` entry under that section.
+
+2. Optional: scaffold a shared global config file instead of duplicating env blocks in every MCP client:
 
    ```bash
    grok-search-rs --init
    $EDITOR ~/.config/grok-search-rs/config.toml
    ```
-
-2. Wire it into one MCP client. Example for Claude Code:
-
-   ```bash
-   claude mcp add-json grok-search-rs --scope user '{
-     "type": "stdio",
-     "command": "grok-search-rs",
-     "env": {
-       "GROK_SEARCH_API_KEY": "xai-...",
-       "TAVILY_API_KEY": "tvly-..."
-     }
-   }'
-   ```
-
-   For other clients (Codex / Cursor / Gemini / VS Code / Windsurf), use the same JSON shape inside their MCP config file. If you ran `--init` and put your keys in the config file, the `env` block can be omitted.
 
 3. Verify:
 
