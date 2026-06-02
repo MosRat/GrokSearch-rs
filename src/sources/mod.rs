@@ -101,10 +101,35 @@ impl SourceRouter {
     }
 }
 
+/// Unified content resolution (decision D-06). Tries the first matching
+/// specialist extractor; on success returns `(markdown, source_type)`.
+///
+/// The `Err` variant is a human-readable string, **not** a `GrokSearchError` —
+/// a fallback is not a service error, it is a routing outcome. The service layer
+/// inspects this:
+/// - `Err(NO_SPECIALIST_MATCH)` → go generic silently (no `fallback_reason`).
+/// - any other `Err(reason)` → go generic and surface `reason` as
+///   `fallback_reason` (a specialist matched but failed or rendered empty).
+pub async fn resolve_content(
+    client: &Client,
+    url: &Url,
+    router: &SourceRouter,
+    caps: &SourceCaps,
+) -> std::result::Result<(String, SourceType), String> {
+    let Some(extractor) = router.find(url) else {
+        return Err(NO_SPECIALIST_MATCH.to_string());
+    };
+    match extractor.fetch_render(client, url, caps).await {
+        Ok(content) if !content.trim().is_empty() => Ok((content, extractor.kind())),
+        Ok(_) => Err(format!("{} empty render", extractor.kind().as_str())),
+        Err(e) => Err(format!("{} {}", extractor.kind().as_str(), e)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
+    use crate::error::{GrokSearchError, Result};
     use reqwest::Client;
     use url::Url;
 
@@ -134,6 +159,52 @@ mod tests {
         async fn fetch_render(&self, _c: &Client, _u: &Url, _caps: &SourceCaps) -> Result<String> {
             Ok("never".to_string())
         }
+    }
+
+    struct AlwaysErr;
+    #[async_trait::async_trait]
+    impl SourceExtractor for AlwaysErr {
+        fn matches(&self, _url: &Url) -> bool {
+            true
+        }
+        fn kind(&self) -> SourceType {
+            SourceType::GithubIssue
+        }
+        async fn fetch_render(&self, _c: &Client, _u: &Url, _caps: &SourceCaps) -> Result<String> {
+            Err(GrokSearchError::Provider("boom".to_string()))
+        }
+    }
+
+    struct AlwaysEmpty;
+    #[async_trait::async_trait]
+    impl SourceExtractor for AlwaysEmpty {
+        fn matches(&self, _url: &Url) -> bool {
+            true
+        }
+        fn kind(&self) -> SourceType {
+            SourceType::GithubIssue
+        }
+        async fn fetch_render(&self, _c: &Client, _u: &Url, _caps: &SourceCaps) -> Result<String> {
+            Ok("   \n  ".to_string()) // whitespace only → empty per D-04
+        }
+    }
+
+    struct AlwaysOk;
+    #[async_trait::async_trait]
+    impl SourceExtractor for AlwaysOk {
+        fn matches(&self, _url: &Url) -> bool {
+            true
+        }
+        fn kind(&self) -> SourceType {
+            SourceType::Wikipedia
+        }
+        async fn fetch_render(&self, _c: &Client, _u: &Url, _caps: &SourceCaps) -> Result<String> {
+            Ok("hello world".to_string())
+        }
+    }
+
+    fn test_url() -> Url {
+        Url::parse("https://example.com/x").unwrap()
     }
 
     #[test]
@@ -203,5 +274,47 @@ mod tests {
             serde_json::to_string(&SourceType::Generic).unwrap(),
             "\"generic\""
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_content_no_match_returns_sentinel() {
+        let client = Client::new();
+        let router = SourceRouter::default();
+        let err = resolve_content(&client, &test_url(), &router, &SourceCaps::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err, NO_SPECIALIST_MATCH);
+    }
+
+    #[tokio::test]
+    async fn resolve_content_err_returns_labeled_reason() {
+        let client = Client::new();
+        let router = SourceRouter::with_extractors(vec![Box::new(AlwaysErr)]);
+        let err = resolve_content(&client, &test_url(), &router, &SourceCaps::default())
+            .await
+            .unwrap_err();
+        assert!(err.starts_with("github_issue"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn resolve_content_empty_render_falls_back() {
+        let client = Client::new();
+        let router = SourceRouter::with_extractors(vec![Box::new(AlwaysEmpty)]);
+        let err = resolve_content(&client, &test_url(), &router, &SourceCaps::default())
+            .await
+            .unwrap_err();
+        assert!(err.contains("empty render"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn resolve_content_ok_returns_content_and_kind() {
+        let client = Client::new();
+        let router = SourceRouter::with_extractors(vec![Box::new(AlwaysOk)]);
+        let (content, kind) =
+            resolve_content(&client, &test_url(), &router, &SourceCaps::default())
+                .await
+                .unwrap();
+        assert_eq!(content, "hello world");
+        assert_eq!(kind, SourceType::Wikipedia);
     }
 }
