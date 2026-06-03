@@ -44,7 +44,12 @@ pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<WikiRaw> {
     );
     let headers = [(USER_AGENT, UA)];
     let json = get_json(client, &api_url, &headers, "wikipedia").await?;
+    parse_page(&json, &lang)
+}
 
+/// Parse the Wikipedia action-API `query.pages` response into a WikiRaw.
+/// Pure (no I/O) so it can be unit-tested offline against a fixture.
+pub fn parse_page(json: &serde_json::Value, lang: &str) -> Result<WikiRaw> {
     let pages = json
         .get("query")
         .and_then(|q| q.get("pages"))
@@ -54,7 +59,6 @@ pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<WikiRaw> {
         .values()
         .next()
         .ok_or_else(|| GrokSearchError::Provider("wikipedia: empty pages".into()))?;
-
     let title = page
         .get("title")
         .and_then(|v| v.as_str())
@@ -71,7 +75,7 @@ pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<WikiRaw> {
     Ok(WikiRaw {
         title,
         extract,
-        lang,
+        lang: lang.to_string(),
     })
 }
 

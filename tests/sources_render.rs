@@ -3,7 +3,9 @@ use grok_search_rs::sources::github::{
     render as gh_render, GithubIssueExtractor, GithubPrExtractor, GithubRaw,
 };
 use grok_search_rs::sources::stackexchange::{render as se_render, SeRaw, StackExchangeExtractor};
-use grok_search_rs::sources::wikipedia::{render as wiki_render, WikiRaw, WikipediaExtractor};
+use grok_search_rs::sources::wikipedia::{
+    parse_page as wiki_parse_page, render as wiki_render, WikiRaw, WikipediaExtractor,
+};
 use grok_search_rs::sources::{SourceCaps, SourceExtractor};
 use url::Url;
 
@@ -243,4 +245,14 @@ fn wiki_matcher_excludes_all_non_article_namespaces() {
     ] {
         assert!(!w.matches(&m(neg)), "should exclude {neg}");
     }
+}
+
+#[test]
+fn wiki_parse_page_extracts_title_body_and_lang() {
+    let json: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/sources/wikipedia_extract.json")).unwrap();
+    let raw = wiki_parse_page(&json, "en").expect("parse");
+    assert_eq!(raw.title, "Rust (programming language)");
+    assert!(raw.extract.contains("memory safety"));
+    assert_eq!(raw.lang, "en");
 }
