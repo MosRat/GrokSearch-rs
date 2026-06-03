@@ -1,10 +1,13 @@
 use async_trait::async_trait;
-use grok_search_rs::error::Result;
+use grok_search_rs::error::{GrokSearchError, Result};
 use grok_search_rs::model::search::{SearchFilters, SearchRequest, SearchResponse};
 use grok_search_rs::model::source::Source;
 use grok_search_rs::model::tool::WebSearchInput;
 use grok_search_rs::service::{AiProvider, SearchService, SourceProvider};
+use grok_search_rs::sources::{SourceCaps, SourceExtractor, SourceRouter, SourceType};
+use reqwest::Client;
 use std::sync::{Arc, Mutex};
+use url::Url;
 
 #[test]
 fn service_requires_grok_search_api_key() {
@@ -252,6 +255,109 @@ impl SourceProvider for FirecrawlLikeSourceProvider {
     async fn map(&self, _url: &str, _max_results: usize) -> Result<Vec<Source>> {
         Ok(Vec::new())
     }
+}
+
+struct AlwaysErrExtractor;
+
+#[async_trait]
+impl SourceExtractor for AlwaysErrExtractor {
+    fn matches(&self, _url: &Url) -> bool {
+        true
+    }
+    fn kind(&self) -> SourceType {
+        SourceType::GithubIssue
+    }
+    async fn fetch_render(&self, _c: &Client, _u: &Url, _caps: &SourceCaps) -> Result<String> {
+        Err(GrokSearchError::Provider("injected boom".to_string()))
+    }
+}
+
+struct AlwaysEmptyExtractor;
+
+#[async_trait]
+impl SourceExtractor for AlwaysEmptyExtractor {
+    fn matches(&self, _url: &Url) -> bool {
+        true
+    }
+    fn kind(&self) -> SourceType {
+        SourceType::GithubIssue
+    }
+    async fn fetch_render(&self, _c: &Client, _u: &Url, _caps: &SourceCaps) -> Result<String> {
+        Ok(String::new())
+    }
+}
+
+// Success criterion 2: always-Err specialist → graceful generic fallback.
+#[tokio::test]
+async fn web_fetch_specialist_err_falls_back_to_generic() {
+    let service = SearchService::fake_with_router(
+        Arc::new(FailingSourceProvider),
+        Some(Arc::new(FirecrawlLikeSourceProvider)),
+        SourceRouter::with_extractors(vec![Box::new(AlwaysErrExtractor)]),
+    );
+
+    let output = service
+        .web_fetch("https://github.com/owner/repo/issues/1", None)
+        .await
+        .expect("fetch must succeed via generic fallback");
+
+    assert!(output.content.contains("firecrawl fallback content"));
+    assert_eq!(output.source_type, SourceType::Generic); // D-02
+    assert!(output.fallback_reason.is_some()); // D-01: specialist matched then failed
+}
+
+// Success criterion 3: empty render → treated as failure → generic fallback.
+#[tokio::test]
+async fn web_fetch_specialist_empty_render_falls_back_to_generic() {
+    let service = SearchService::fake_with_router(
+        Arc::new(FailingSourceProvider),
+        Some(Arc::new(FirecrawlLikeSourceProvider)),
+        SourceRouter::with_extractors(vec![Box::new(AlwaysEmptyExtractor)]),
+    );
+
+    let output = service
+        .web_fetch("https://github.com/owner/repo/issues/2", None)
+        .await
+        .expect("fetch must succeed via generic fallback");
+
+    assert!(output.content.contains("firecrawl fallback content"));
+    assert_eq!(output.source_type, SourceType::Generic);
+    let reason = output
+        .fallback_reason
+        .expect("empty render must surface a reason");
+    assert!(reason.contains("empty render"), "got: {reason}");
+}
+
+// D-01: a no-match URL goes generic silently — no fallback_reason.
+#[tokio::test]
+async fn web_fetch_no_specialist_match_has_no_fallback_reason() {
+    let service = SearchService::fake_with_router(
+        Arc::new(FailingSourceProvider),
+        Some(Arc::new(FirecrawlLikeSourceProvider)),
+        SourceRouter::default(), // empty router → never matches
+    );
+
+    let output = service
+        .web_fetch("https://example.com/article", None)
+        .await
+        .expect("fetch output");
+
+    assert_eq!(output.source_type, SourceType::Generic);
+    assert!(output.fallback_reason.is_none());
+}
+
+// Success criterion 1: source_type is always present (generic in Phase 1).
+#[tokio::test]
+async fn web_fetch_source_type_present_on_normal_fetch() {
+    let service = SearchService::fake_with_sources();
+
+    let output = service
+        .web_fetch("https://example.com/page", None)
+        .await
+        .expect("fetch output");
+
+    assert_eq!(output.source_type, SourceType::Generic);
+    assert!(output.fallback_reason.is_none());
 }
 
 #[tokio::test]

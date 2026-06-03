@@ -105,13 +105,9 @@ pub struct SearchService {
     cache: Arc<Mutex<SourceCache>>,
     /// Shared reqwest client for the sources pipeline (same instance handed to
     /// providers). Stored here because resolve_content needs direct GET access.
-    // Read by web_fetch once it is rewired through resolve_content (Task 7).
-    #[allow(dead_code)]
     http_client: reqwest::Client,
     /// Specialist extractor router. Empty in Phase 1. Behind `Arc` so
     /// `SearchService: Clone` still holds (the router is not `Clone`).
-    // Read by web_fetch once it is rewired through resolve_content (Task 7).
-    #[allow(dead_code)]
     source_router: Arc<crate::sources::SourceRouter>,
 }
 
@@ -474,14 +470,49 @@ impl SearchService {
     }
 
     pub async fn web_fetch(&self, url: &str, max_chars: Option<usize>) -> Result<WebFetchOutput> {
-        let raw = self.web_fetch_raw(url).await?;
         let effective_limit = max_chars.or(self.config.fetch_max_chars);
+
+        let (content, source_type, fallback_reason) = match url::Url::parse(url) {
+            Ok(parsed) => {
+                match crate::sources::resolve_content(
+                    &self.http_client,
+                    &parsed,
+                    self.source_router.as_ref(),
+                    &crate::sources::SourceCaps::default(),
+                )
+                .await
+                {
+                    // Specialist succeeded — keep its content and source type.
+                    Ok((content, kind)) => (content, kind, None),
+                    // No specialist matched: go generic silently (D-01).
+                    Err(reason) if reason == crate::sources::NO_SPECIALIST_MATCH => {
+                        let generic = self.web_fetch_raw(url).await?;
+                        (generic, crate::sources::SourceType::Generic, None)
+                    }
+                    // Specialist matched but failed/empty: surface the reason (D-01).
+                    Err(reason) => {
+                        let generic = self.web_fetch_raw(url).await?;
+                        (
+                            generic,
+                            crate::sources::SourceType::Generic,
+                            Some(reason),
+                        )
+                    }
+                }
+            }
+            // Malformed URL is not a specialist failure — go generic, no reason.
+            Err(_) => {
+                let generic = self.web_fetch_raw(url).await?;
+                (generic, crate::sources::SourceType::Generic, None)
+            }
+        };
+
         Ok(apply_fetch_limit(
             url,
-            raw,
+            content,
             effective_limit,
-            crate::sources::SourceType::Generic,
-            None,
+            source_type,
+            fallback_reason,
         ))
     }
 
