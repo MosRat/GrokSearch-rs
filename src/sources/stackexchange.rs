@@ -67,6 +67,11 @@ pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<SeRaw> {
         .unwrap_or_default();
     let id = segs.get(1).copied().unwrap_or_default();
 
+    // NOTE: `filter=withbody` guarantees the QUESTION body only. Answer bodies
+    // (body_markdown) and per-answer comments require a custom SE filter created
+    // via /filters/create — to be tuned against the live API (out of offline-test
+    // scope; render() is the tested surface). Anonymous calls are rate-limited
+    // (~300/day); a future key could lift that.
     let api_url = format!(
         "https://api.stackexchange.com/2.3/questions/{id}?site={site}&filter=withbody&order=desc&sort=votes"
     );
@@ -125,7 +130,11 @@ pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<SeRaw> {
         .unwrap_or_default();
 
     Ok(SeRaw {
-        title: text(item, "title", "title"),
+        title: item
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
         body: text(item, "body_markdown", "body"),
         site,
         answers,
