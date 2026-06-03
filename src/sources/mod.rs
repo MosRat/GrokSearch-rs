@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::error::Result;
+use crate::error::{GrokSearchError, Result};
 
 /// Sentinel `Err` value returned by [`resolve_content`] when no specialist
 /// extractor matched the URL. The service layer treats this as "go generic
@@ -124,6 +124,66 @@ pub async fn resolve_content(
         Ok(_) => Err(format!("{} empty render", extractor.kind().as_str())),
         Err(e) => Err(format!("{} {}", extractor.kind().as_str(), e)),
     }
+}
+
+/// Issue a JSON `GET` and normalize transport/status/parse errors into
+/// `GrokSearchError`, mirroring `crate::providers::http::post_json`. `headers`
+/// carries extractor-specific headers such as `User-Agent` (required by GitHub,
+/// Wikipedia, and arXiv in Phase 2). `label` distinguishes the source in error
+/// messages.
+pub async fn get_json(
+    client: &Client,
+    url: &str,
+    headers: &[(reqwest::header::HeaderName, &str)],
+    label: &str,
+) -> Result<serde_json::Value> {
+    let bytes = get_bytes(client, url, headers, label).await?;
+    serde_json::from_slice(&bytes)
+        .map_err(|err| GrokSearchError::Parse(format!("invalid {label} JSON: {err}")))
+}
+
+/// Issue a `GET` and return the body as UTF-8 (lossy). Same error
+/// normalization as [`get_json`].
+pub async fn get_text(
+    client: &Client,
+    url: &str,
+    headers: &[(reqwest::header::HeaderName, &str)],
+    label: &str,
+) -> Result<String> {
+    let bytes = get_bytes(client, url, headers, label).await?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Shared GET: send, classify transport errors, enforce 2xx, return raw bytes.
+async fn get_bytes(
+    client: &Client,
+    url: &str,
+    headers: &[(reqwest::header::HeaderName, &str)],
+    label: &str,
+) -> Result<Vec<u8>> {
+    let mut builder = client.get(url);
+    for (name, value) in headers {
+        builder = builder.header(name.clone(), *value);
+    }
+    let response = builder.send().await.map_err(|err| {
+        if err.is_timeout() {
+            GrokSearchError::Timeout(format!("{label} GET timed out: {err}"))
+        } else {
+            GrokSearchError::Provider(format!("{label} GET failed: {err}"))
+        }
+    })?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| GrokSearchError::Provider(format!("{label} body read failed: {err}")))?;
+    if !status.is_success() {
+        let text = String::from_utf8_lossy(&bytes);
+        return Err(GrokSearchError::Provider(format!(
+            "{label} returned HTTP {status}: {text}"
+        )));
+    }
+    Ok(bytes.to_vec())
 }
 
 #[cfg(test)]
@@ -316,5 +376,20 @@ mod tests {
                 .unwrap();
         assert_eq!(content, "hello world");
         assert_eq!(kind, SourceType::Wikipedia);
+    }
+
+    #[tokio::test]
+    async fn get_text_maps_connection_failure_to_err() {
+        let client = Client::new();
+        // Port 1 is reserved/unbound on the loopback interface → fast refusal.
+        let result = get_text(&client, "http://127.0.0.1:1/", &[], "test").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_json_maps_connection_failure_to_err() {
+        let client = Client::new();
+        let result = get_json(&client, "http://127.0.0.1:1/", &[], "test").await;
+        assert!(result.is_err());
     }
 }
