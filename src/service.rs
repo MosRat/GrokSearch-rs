@@ -103,6 +103,16 @@ pub struct SearchService {
     sources: Option<Arc<dyn SourceProvider>>,
     fallback_sources: Option<Arc<dyn SourceProvider>>,
     cache: Arc<Mutex<SourceCache>>,
+    /// Shared reqwest client for the sources pipeline (same instance handed to
+    /// providers). Stored here because resolve_content needs direct GET access.
+    // Read by web_fetch once it is rewired through resolve_content (Task 7).
+    #[allow(dead_code)]
+    http_client: reqwest::Client,
+    /// Specialist extractor router. Empty in Phase 1. Behind `Arc` so
+    /// `SearchService: Clone` still holds (the router is not `Clone`).
+    // Read by web_fetch once it is rewired through resolve_content (Task 7).
+    #[allow(dead_code)]
+    source_router: Arc<crate::sources::SourceRouter>,
 }
 
 impl SearchService {
@@ -203,6 +213,8 @@ impl SearchService {
             ai,
             sources,
             fallback_sources,
+            http_client: http.clone(),
+            source_router: Arc::new(crate::sources::SourceRouter::default()),
         })
     }
 
@@ -218,6 +230,8 @@ impl SearchService {
             ai: Arc::new(FakeAiProvider),
             sources: Some(Arc::new(FakeSourceProvider)),
             fallback_sources: None,
+            http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
+            source_router: Arc::new(crate::sources::SourceRouter::default()),
         }
     }
 
@@ -258,6 +272,39 @@ impl SearchService {
             ai: ai.unwrap_or_else(|| Arc::new(FakeAiProvider)),
             sources: Some(primary),
             fallback_sources: fallback,
+            http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
+            source_router: Arc::new(crate::sources::SourceRouter::default()),
+        }
+    }
+
+    /// Test factory that injects a populated [`crate::sources::SourceRouter`] so
+    /// fallback behavior can be exercised with fake extractors. Mirrors
+    /// `fake_custom`'s provider wiring.
+    pub fn fake_with_router(
+        primary: Arc<dyn SourceProvider>,
+        fallback: Option<Arc<dyn SourceProvider>>,
+        router: crate::sources::SourceRouter,
+    ) -> Self {
+        let mut vars = vec![
+            ("GROK_SEARCH_API_KEY".to_string(), "fake-grok".to_string()),
+            ("TAVILY_API_KEY".to_string(), "fake-tavily".to_string()),
+        ];
+        if fallback.is_some() {
+            vars.push((
+                "FIRECRAWL_API_KEY".to_string(),
+                "fake-firecrawl".to_string(),
+            ));
+        }
+        let config = Config::from_env_map(vars);
+        Self {
+            cache: Arc::new(Mutex::new(SourceCache::new(256))),
+            default_model: resolve_default_model(&config),
+            config,
+            ai: Arc::new(FakeAiProvider),
+            sources: Some(primary),
+            fallback_sources: fallback,
+            http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
+            source_router: Arc::new(router),
         }
     }
 
@@ -900,6 +947,8 @@ mod transport_dispatch_tests {
             sources: None,
             fallback_sources: None,
             cache: Arc::new(Mutex::new(SourceCache::new(16))),
+            http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
+            source_router: Arc::new(crate::sources::SourceRouter::default()),
         };
 
         let report = svc.doctor().await;
@@ -925,10 +974,23 @@ mod transport_dispatch_tests {
             sources: None,
             fallback_sources: None,
             cache: Arc::new(Mutex::new(SourceCache::new(16))),
+            http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
+            source_router: Arc::new(crate::sources::SourceRouter::default()),
         };
 
         let report = svc.doctor().await;
         assert_eq!(report["provider"], "grok_responses");
         assert_eq!(report["grok"]["model"], "grok-4-1-fast-reasoning");
+    }
+
+    #[tokio::test]
+    async fn fake_with_router_constructs_and_clones() {
+        let svc = SearchService::fake_with_router(
+            Arc::new(FakeSourceProvider),
+            None,
+            crate::sources::SourceRouter::default(),
+        );
+        // SearchService derives Clone; storing Arc<SourceRouter> must preserve it.
+        let _clone = svc.clone();
     }
 }
