@@ -76,9 +76,8 @@ pub struct SourceRouter {
 }
 
 impl Default for SourceRouter {
-    /// Production constructor. Phase 1 has no concrete extractors, so this is
-    /// empty — every `find` returns `None` and `web_fetch` always falls back to
-    /// the generic chain. Phase 2 populates it.
+    /// Empty router for tests and injection. Production code uses `from_config`.
+    /// Every `find` returns `None`, so `web_fetch` falls back to the generic chain.
     fn default() -> Self {
         Self {
             extractors: Vec::new(),

@@ -555,6 +555,12 @@ mod source_config_tests {
     }
 
     #[test]
+    fn source_max_comments_reads_env() {
+        let cfg = Config::from_env_map([("GROK_SEARCH_SOURCE_MAX_COMMENTS", "10")]);
+        assert_eq!(cfg.source_max_comments, 10);
+    }
+
+    #[test]
     fn github_token_present_and_filtered() {
         let cfg = Config::from_env_map([("GITHUB_TOKEN", "ghp_test")]);
         assert_eq!(cfg.github_token.as_deref(), Some("ghp_test"));
