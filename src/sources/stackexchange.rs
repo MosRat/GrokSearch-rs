@@ -99,6 +99,21 @@ fn answers_pagesize(max_answers: usize) -> usize {
     max_answers.saturating_add(1).min(100)
 }
 
+/// Question endpoint URL. Carries [`SE_FILTER`] so the response includes
+/// `body_markdown` (not just the HTML `body`). Pure (no I/O) so it is unit-tested.
+fn question_url(id: &str, site: &str) -> String {
+    format!("https://api.stackexchange.com/2.3/questions/{id}?site={site}&filter={SE_FILTER}")
+}
+
+/// Answers endpoint URL: vote-sorted, [`SE_FILTER`] for `body_markdown`, paged to
+/// `answers_pagesize`. Pure (no I/O) so it is unit-tested.
+fn answers_url(id: &str, site: &str, max_answers: usize) -> String {
+    format!(
+        "https://api.stackexchange.com/2.3/questions/{id}/answers?site={site}&filter={SE_FILTER}&order=desc&sort=votes&pagesize={}",
+        answers_pagesize(max_answers)
+    )
+}
+
 fn field_str(v: &serde_json::Value, primary: &str, fallback: &str) -> String {
     v.get(primary)
         .or_else(|| v.get(fallback))
@@ -158,11 +173,9 @@ pub(crate) async fn fetch(client: &Client, url: &Url, max_answers: usize) -> Res
     let id = segs.get(1).copied().unwrap_or_default();
     let headers = [(USER_AGENT, UA)];
 
-    // `/questions/{id}` with `filter=withbody` returns the QUESTION body but
-    // never the answers array, so the question call alone yields zero answers.
-    let q_url = format!(
-        "https://api.stackexchange.com/2.3/questions/{id}?site={site}&filter={SE_FILTER}"
-    );
+    // `/questions/{id}` returns the QUESTION body but never the answers array,
+    // so the question call alone yields zero answers.
+    let q_url = question_url(id, &site);
     let q_json = get_json(client, &q_url, &headers, "stackexchange").await?;
     let item = q_json
         .get("items")
@@ -176,10 +189,7 @@ pub(crate) async fn fetch(client: &Client, url: &Url, max_answers: usize) -> Res
     // need a custom SE filter (via /filters/create) and remain out of scope; the
     // renderer degrades gracefully when comment lists are empty. Anonymous calls
     // are rate-limited (~300/day); a future key could lift that.
-    let a_url = format!(
-        "https://api.stackexchange.com/2.3/questions/{id}/answers?site={site}&filter={SE_FILTER}&order=desc&sort=votes&pagesize={}",
-        answers_pagesize(max_answers)
-    );
+    let a_url = answers_url(id, &site, max_answers);
     let answers = match get_json(client, &a_url, &headers, "stackexchange").await {
         Ok(a_json) => parse_answers(&a_json),
         Err(_) => Vec::new(),
@@ -315,5 +325,35 @@ mod tests {
     fn answers_pagesize_requests_one_more_than_cap_capped_at_100() {
         assert_eq!(answers_pagesize(5), 6);
         assert_eq!(answers_pagesize(250), 100);
+    }
+
+    // Regression: SE web_fetch rendered raw HTML instead of Markdown
+    // Found by /qa on 2026-06-04
+    // Report: .gstack/qa-reports/qa-report-stackexchange-2026-06-04.md
+    //
+    // Root cause was `filter=withbody`, which only returns the HTML `body`
+    // field, so the `body_markdown`-preferring parser always fell through to
+    // HTML. Both endpoint URLs must carry SE_FILTER (which adds body_markdown)
+    // and must NOT request the bare `withbody` filter.
+    #[test]
+    fn question_url_requests_markdown_filter_not_withbody() {
+        let u = question_url("11227809", "stackoverflow");
+        assert!(u.contains(&format!("filter={SE_FILTER}")), "got: {u}");
+        assert!(!u.contains("filter=withbody"), "still HTML-only: {u}");
+    }
+
+    #[test]
+    fn answers_url_requests_markdown_filter_and_vote_sort() {
+        let u = answers_url("11227809", "stackoverflow", 5);
+        assert!(u.contains(&format!("filter={SE_FILTER}")), "got: {u}");
+        assert!(!u.contains("filter=withbody"), "still HTML-only: {u}");
+        assert!(u.contains("sort=votes"), "got: {u}");
+        assert!(u.ends_with("pagesize=6"), "got: {u}");
+    }
+
+    #[test]
+    fn field_str_prefers_body_markdown_over_html_body() {
+        let v = serde_json::json!({ "body_markdown": "*md*", "body": "<p>html</p>" });
+        assert_eq!(field_str(&v, "body_markdown", "body"), "*md*");
     }
 }
