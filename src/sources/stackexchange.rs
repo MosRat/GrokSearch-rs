@@ -8,6 +8,17 @@ use crate::sources::{get_json, SourceCaps, SourceExtractor, SourceType};
 
 const UA: &str = "grok-search-rs/0.1 (https://github.com/Episkey-G/GrokSearch-rs)";
 
+/// StackExchange API filter that adds `question.body_markdown` /
+/// `answer.body_markdown` on top of the `withbody` base. Without it the API only
+/// returns the rendered HTML `body` field, so `field_str(.., "body_markdown",
+/// "body")` always fell through to HTML — defeating the Markdown extraction.
+///
+/// Filter strings are deterministic (same `base` + `include` set always yields
+/// this exact value) and do not expire. Regenerate with:
+///   GET https://api.stackexchange.com/2.3/filters/create
+///       ?base=withbody&include=question.body_markdown;answer.body_markdown&unsafe=false
+const SE_FILTER: &str = "!X-cWn5YrCQCchzB5B4*yqi6eO0BYWbSmsTE.VZm";
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct SeComment {
     pub author: String,
@@ -149,8 +160,9 @@ pub(crate) async fn fetch(client: &Client, url: &Url, max_answers: usize) -> Res
 
     // `/questions/{id}` with `filter=withbody` returns the QUESTION body but
     // never the answers array, so the question call alone yields zero answers.
-    let q_url =
-        format!("https://api.stackexchange.com/2.3/questions/{id}?site={site}&filter=withbody");
+    let q_url = format!(
+        "https://api.stackexchange.com/2.3/questions/{id}?site={site}&filter={SE_FILTER}"
+    );
     let q_json = get_json(client, &q_url, &headers, "stackexchange").await?;
     let item = q_json
         .get("items")
@@ -165,7 +177,7 @@ pub(crate) async fn fetch(client: &Client, url: &Url, max_answers: usize) -> Res
     // renderer degrades gracefully when comment lists are empty. Anonymous calls
     // are rate-limited (~300/day); a future key could lift that.
     let a_url = format!(
-        "https://api.stackexchange.com/2.3/questions/{id}/answers?site={site}&filter=withbody&order=desc&sort=votes&pagesize={}",
+        "https://api.stackexchange.com/2.3/questions/{id}/answers?site={site}&filter={SE_FILTER}&order=desc&sort=votes&pagesize={}",
         answers_pagesize(max_answers)
     );
     let answers = match get_json(client, &a_url, &headers, "stackexchange").await {
