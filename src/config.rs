@@ -43,6 +43,8 @@ pub struct Config {
     pub github_token: Option<String>,
     pub source_max_answers: usize,
     pub source_max_comments: usize,
+    pub enrich_concurrency: usize,
+    pub enrich_max_chars: usize,
 }
 
 /// Mirror of `Config` for TOML deserialization. All fields optional so users
@@ -74,6 +76,8 @@ struct ConfigFile {
     github_token: Option<String>,
     source_max_answers: Option<usize>,
     source_max_comments: Option<usize>,
+    enrich_concurrency: Option<usize>,
+    enrich_max_chars: Option<usize>,
 }
 
 impl ConfigFile {
@@ -139,6 +143,14 @@ impl ConfigFile {
         insert(
             "GROK_SEARCH_SOURCE_MAX_COMMENTS",
             self.source_max_comments.map(|n| n.to_string()),
+        );
+        insert(
+            "GROK_SEARCH_ENRICH_CONCURRENCY",
+            self.enrich_concurrency.map(|n| n.to_string()),
+        );
+        insert(
+            "GROK_SEARCH_ENRICH_MAX_CHARS",
+            self.enrich_max_chars.map(|n| n.to_string()),
         );
         out
     }
@@ -235,6 +247,8 @@ impl Config {
             github_token: map.get("GITHUB_TOKEN").cloned().filter(|v| !v.is_empty()),
             source_max_answers: usize_value(&map, "GROK_SEARCH_SOURCE_MAX_ANSWERS", 5),
             source_max_comments: usize_value(&map, "GROK_SEARCH_SOURCE_MAX_COMMENTS", 30),
+            enrich_concurrency: usize_value(&map, "GROK_SEARCH_ENRICH_CONCURRENCY", 3).clamp(1, 5),
+            enrich_max_chars: usize_value(&map, "GROK_SEARCH_ENRICH_MAX_CHARS", 15000),
         }
     }
 
@@ -406,6 +420,8 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 # source_max_answers    = 5          # max answers rendered per StackExchange question
 # source_max_comments   = 30         # max comments per accepted answer
 # github_token          = "ghp_..."  # GitHub token (optional; anon = 60 req/hr)
+# enrich_concurrency    = 3          # concurrent resolve_content calls per web_search (1..5)
+# enrich_max_chars      = 15000      # per-source inline content char cap
 "#;
 
 fn load_file_map(path: &Path) -> Option<HashMap<String, String>> {
@@ -570,6 +586,19 @@ mod source_config_tests {
 
         let unset = Config::from_env_map(Vec::<(String, String)>::new());
         assert_eq!(unset.github_token, None);
+    }
+
+    #[test]
+    fn enrich_config_defaults_hold() {
+        let cfg = Config::from_env_map(Vec::<(String, String)>::new());
+        assert_eq!(cfg.enrich_concurrency, 3);
+        assert_eq!(cfg.enrich_max_chars, 15000);
+    }
+
+    #[test]
+    fn enrich_concurrency_reads_env_and_clamps() {
+        let cfg = Config::from_env_map([("GROK_SEARCH_ENRICH_CONCURRENCY", "7")]);
+        assert_eq!(cfg.enrich_concurrency, 5); // clamped to 1..=5
     }
 }
 
