@@ -210,6 +210,11 @@ fn tools_list() -> Value {
                             "type": "array",
                             "items": { "type": "string" },
                             "description": "Suppress supplemental results from these domains. Tavily honors strictly; Grok receives as soft instruction."
+                        },
+                        "include_content": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Inline source content via the resolve_content pipeline. Default true. Pass false to get summary + source-list only (legacy behavior, no content field in sources)."
                         }
                     }
                 }
