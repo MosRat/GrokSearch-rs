@@ -34,7 +34,10 @@ fn extract_id(url: &Url) -> Option<String> {
     for prefix in ["/abs/", "/pdf/"] {
         if let Some(rest) = path.strip_prefix(prefix) {
             if !rest.is_empty() {
-                return Some(rest.to_string());
+                // PDF links carry a `.pdf` extension the arXiv API rejects in
+                // `id_list`; strip it so `/pdf/<id>.pdf` resolves the same paper
+                // as `/abs/<id>`.
+                return Some(rest.strip_suffix(".pdf").unwrap_or(rest).to_string());
             }
         }
     }
@@ -192,5 +195,25 @@ impl SourceExtractor for ArxivExtractor {
     async fn fetch_render(&self, client: &Client, url: &Url, caps: &SourceCaps) -> Result<String> {
         let raw = fetch(client, url).await?;
         Ok(render(&raw, caps))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_id_strips_pdf_suffix() {
+        // arXiv PDF links carry a .pdf extension the API rejects in id_list.
+        let url = Url::parse("https://arxiv.org/pdf/1706.03762.pdf").unwrap();
+        assert_eq!(extract_id(&url).as_deref(), Some("1706.03762"));
+    }
+
+    #[test]
+    fn extract_id_handles_abs_and_extensionless_pdf() {
+        let abs = Url::parse("https://arxiv.org/abs/1706.03762").unwrap();
+        assert_eq!(extract_id(&abs).as_deref(), Some("1706.03762"));
+        let pdf = Url::parse("https://arxiv.org/pdf/2310.06825").unwrap();
+        assert_eq!(extract_id(&pdf).as_deref(), Some("2310.06825"));
     }
 }

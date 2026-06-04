@@ -80,7 +80,10 @@ impl std::fmt::Debug for Config {
             .field("cache_size", &self.cache_size)
             .field("timeout", &self.timeout)
             .field("openai_compatible_api_url", &self.openai_compatible_api_url)
-            .field("openai_compatible_api_key", &mask(&self.openai_compatible_api_key))
+            .field(
+                "openai_compatible_api_key",
+                &mask(&self.openai_compatible_api_key),
+            )
             .field("openai_compatible_model", &self.openai_compatible_model)
             .field("transport", &self.transport)
             .field("github_token", &mask(&self.github_token))
@@ -673,14 +676,23 @@ mod source_config_tests {
             ("OPENAI_COMPATIBLE_API_KEY", "sk-secret"),
         ]);
         let dbg = format!("{cfg:?}");
-        for leaked in ["ghp_test", "xai-secret", "tvly-secret", "fc-secret", "sk-secret"] {
+        for leaked in [
+            "ghp_test",
+            "xai-secret",
+            "tvly-secret",
+            "fc-secret",
+            "sk-secret",
+        ] {
             assert!(
                 !dbg.contains(leaked),
                 "secret value {leaked} leaked into Debug output: {dbg}"
             );
         }
         // Non-secret fields stay readable.
-        assert!(dbg.contains("grok_model"), "expected readable field in: {dbg}");
+        assert!(
+            dbg.contains("grok_model"),
+            "expected readable field in: {dbg}"
+        );
         assert!(
             dbg.contains("github_token: \"set\""),
             "expected masked set marker in: {dbg}"

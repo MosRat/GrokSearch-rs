@@ -58,49 +58,26 @@ fn is_se_host(host: &str) -> bool {
     ) || host.ends_with(".stackexchange.com")
 }
 
-pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<SeRaw> {
-    let host = url.host_str().unwrap_or("");
-    let site = site_from_host(host);
-    let segs: Vec<&str> = url
-        .path_segments()
-        .map(|it| it.filter(|s| !s.is_empty()).collect())
-        .unwrap_or_default();
-    let id = segs.get(1).copied().unwrap_or_default();
+fn field_str(v: &serde_json::Value, primary: &str, fallback: &str) -> String {
+    v.get(primary)
+        .or_else(|| v.get(fallback))
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string()
+}
 
-    // NOTE: `filter=withbody` guarantees the QUESTION body only. Answer bodies
-    // (body_markdown) and per-answer comments require a custom SE filter created
-    // via /filters/create — to be tuned against the live API (out of offline-test
-    // scope; render() is the tested surface). Anonymous calls are rate-limited
-    // (~300/day); a future key could lift that.
-    let api_url = format!(
-        "https://api.stackexchange.com/2.3/questions/{id}?site={site}&filter=withbody&order=desc&sort=votes"
-    );
-    let headers = [(USER_AGENT, UA)];
-    let json = get_json(client, &api_url, &headers, "stackexchange").await?;
+fn owner_name(v: &serde_json::Value) -> String {
+    v.get("owner")
+        .and_then(|o| o.get("display_name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("")
+        .to_string()
+}
 
-    let item = json
-        .get("items")
-        .and_then(|i| i.as_array())
-        .and_then(|a| a.first())
-        .ok_or_else(|| GrokSearchError::Provider("stackexchange: empty items".into()))?;
-
-    let text = |v: &serde_json::Value, primary: &str, fallback: &str| {
-        v.get(primary)
-            .or_else(|| v.get(fallback))
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
-    let owner_name = |v: &serde_json::Value| {
-        v.get("owner")
-            .and_then(|o| o.get("display_name"))
-            .and_then(|n| n.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
-
-    let answers = item
-        .get("answers")
+/// Map an `/answers` (or embedded `answers`) JSON payload into `SeAnswer`s.
+/// Tolerant of missing fields so a partial response still yields usable bodies.
+fn parse_answers(json: &serde_json::Value) -> Vec<SeAnswer> {
+    json.get("items")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
@@ -111,7 +88,7 @@ pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<SeRaw> {
                         .unwrap_or(false),
                     score: a.get("score").and_then(|v| v.as_i64()).unwrap_or(0),
                     author: owner_name(a),
-                    body: text(a, "body_markdown", "body"),
+                    body: field_str(a, "body_markdown", "body"),
                     comments: a
                         .get("comments")
                         .and_then(|v| v.as_array())
@@ -119,7 +96,7 @@ pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<SeRaw> {
                             carr.iter()
                                 .map(|c| SeComment {
                                     author: owner_name(c),
-                                    body: text(c, "body_markdown", "body"),
+                                    body: field_str(c, "body_markdown", "body"),
                                 })
                                 .collect()
                         })
@@ -127,7 +104,43 @@ pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<SeRaw> {
                 })
                 .collect()
         })
+        .unwrap_or_default()
+}
+
+pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<SeRaw> {
+    let host = url.host_str().unwrap_or("");
+    let site = site_from_host(host);
+    let segs: Vec<&str> = url
+        .path_segments()
+        .map(|it| it.filter(|s| !s.is_empty()).collect())
         .unwrap_or_default();
+    let id = segs.get(1).copied().unwrap_or_default();
+    let headers = [(USER_AGENT, UA)];
+
+    // `/questions/{id}` with `filter=withbody` returns the QUESTION body but
+    // never the answers array, so the question call alone yields zero answers.
+    let q_url =
+        format!("https://api.stackexchange.com/2.3/questions/{id}?site={site}&filter=withbody");
+    let q_json = get_json(client, &q_url, &headers, "stackexchange").await?;
+    let item = q_json
+        .get("items")
+        .and_then(|i| i.as_array())
+        .and_then(|a| a.first())
+        .ok_or_else(|| GrokSearchError::Provider("stackexchange: empty items".into()))?;
+
+    // Answers come from the dedicated endpoint, vote-sorted with bodies. This is
+    // best-effort: a failed/rate-limited answers call still returns the question
+    // rather than the whole specialist failing. NOTE: per-answer comments still
+    // need a custom SE filter (via /filters/create) and remain out of scope; the
+    // renderer degrades gracefully when comment lists are empty. Anonymous calls
+    // are rate-limited (~300/day); a future key could lift that.
+    let a_url = format!(
+        "https://api.stackexchange.com/2.3/questions/{id}/answers?site={site}&filter=withbody&order=desc&sort=votes"
+    );
+    let answers = match get_json(client, &a_url, &headers, "stackexchange").await {
+        Ok(a_json) => parse_answers(&a_json),
+        Err(_) => Vec::new(),
+    };
 
     Ok(SeRaw {
         title: item
@@ -135,7 +148,7 @@ pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<SeRaw> {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        body: text(item, "body_markdown", "body"),
+        body: field_str(item, "body_markdown", "body"),
         site,
         answers,
     })

@@ -186,6 +186,39 @@ async fn web_search_falls_back_to_tavily_when_grok_has_no_sources() {
 }
 
 #[tokio::test]
+async fn fallback_honors_include_content_false() {
+    // include_content=false is an explicit opt-out and must suppress inline
+    // enrichment even on the degraded source-fallback path (P2), so the extra
+    // fetch budget is not spent for callers who disabled inline content.
+    let service = SearchService::fake_custom(
+        Some(Arc::new(EmptySourcesAiProvider)),
+        Arc::new(CountingSourceProvider::default()),
+        None,
+        [("GROK_SEARCH_FALLBACK_SOURCES", "3")],
+    );
+
+    let output = service
+        .web_search(WebSearchInput {
+            query: "q".to_string(),
+            include_content: Some(false),
+            ..Default::default()
+        })
+        .await
+        .expect("fallback output");
+
+    assert_eq!(output.search_provider, "source_fallback");
+    assert!(output.fallback_used);
+    assert!(!output.sources.is_empty());
+    for s in &output.sources {
+        assert!(
+            s.content.is_none(),
+            "include_content=false must leave fallback content empty, got: {:?}",
+            s.content
+        );
+    }
+}
+
+#[tokio::test]
 async fn web_search_success_path_returns_inline_sources() {
     let service = SearchService::fake_with_sources();
 

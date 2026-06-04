@@ -355,6 +355,7 @@ impl SearchService {
                         raw_sources,
                         raw_origin,
                         "grok_provider_error",
+                        include_content,
                     )
                     .await;
             }
@@ -369,6 +370,7 @@ impl SearchService {
                     raw_sources,
                     raw_origin,
                     reason,
+                    include_content,
                 )
                 .await;
         }
@@ -393,6 +395,8 @@ impl SearchService {
                 },
                 self.config.enrich_concurrency,
                 self.config.enrich_max_chars,
+                self.sources.clone(),
+                self.fallback_sources.clone(),
             )
             .await
         } else {
@@ -448,6 +452,7 @@ impl SearchService {
         (Vec::new(), RawSourceOrigin::None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn finalize_fallback(
         &self,
         deadline: tokio::time::Instant,
@@ -456,27 +461,37 @@ impl SearchService {
         raw_sources: Vec<Source>,
         raw_origin: RawSourceOrigin,
         reason: &str,
+        include_content: bool,
     ) -> Result<WebSearchOutput> {
         let mut fallback = raw_sources;
         fallback.truncate(self.config.fallback_sources);
         let fallback = with_provider(fallback, fallback_label(raw_origin));
 
-        // D-03: the degraded path enriches unconditionally — one-hand evidence
-        // is most valuable when there is no verifiable summary. No extra_sources
-        // gate here (that gate is the normal web_search path's concern, SRCH-04).
-        let fallback = enrich_sources(
-            fallback,
-            deadline,
-            &self.http_client,
-            &self.source_router,
-            crate::sources::SourceCaps {
-                max_answers: self.config.source_max_answers,
-                max_comments: self.config.source_max_comments,
-            },
-            self.config.enrich_concurrency,
-            self.config.enrich_max_chars,
-        )
-        .await;
+        // D-03: the degraded path enriches eagerly — one-hand evidence is most
+        // valuable when there is no verifiable summary, so there is no
+        // extra_sources gate here (that gate is the normal web_search path's
+        // concern, SRCH-04). The one exception is an explicit include_content=false
+        // opt-out, which must be honored everywhere so callers who disabled inline
+        // content never pay the extra fetch budget.
+        let fallback = if include_content {
+            enrich_sources(
+                fallback,
+                deadline,
+                &self.http_client,
+                &self.source_router,
+                crate::sources::SourceCaps {
+                    max_answers: self.config.source_max_answers,
+                    max_comments: self.config.source_max_comments,
+                },
+                self.config.enrich_concurrency,
+                self.config.enrich_max_chars,
+                self.sources.clone(),
+                self.fallback_sources.clone(),
+            )
+            .await
+        } else {
+            fallback
+        };
 
         let fallback_arc = Arc::new(fallback);
         let sources_count = fallback_arc.len();
@@ -568,21 +583,7 @@ impl SearchService {
     }
 
     async fn web_fetch_raw(&self, url: &str) -> Result<String> {
-        if let Some(provider) = &self.sources {
-            if let Ok(content) = provider.fetch(url).await {
-                if !content.trim().is_empty() {
-                    return Ok(content);
-                }
-            }
-        }
-
-        if let Some(provider) = &self.fallback_sources {
-            return provider.fetch(url).await;
-        }
-
-        Err(GrokSearchError::MissingConfig(
-            "TAVILY_API_KEY or FIRECRAWL_API_KEY",
-        ))
+        generic_source_fetch(&self.sources, &self.fallback_sources, url).await
     }
 
     pub async fn web_map(&self, url: &str, max_results: usize) -> Result<Vec<Source>> {
@@ -850,6 +851,31 @@ fn apply_fetch_limit(
     }
 }
 
+/// Generic (non-specialist) content fetch via the configured source providers:
+/// primary (Tavily) first, then fallback (Firecrawl). Shared by `web_fetch` and
+/// inline enrichment so both agree on how an ordinary URL is retrieved once no
+/// specialist extractor matches. Returns `MissingConfig` when neither provider
+/// is configured.
+async fn generic_source_fetch(
+    primary: &Option<Arc<dyn SourceProvider>>,
+    fallback: &Option<Arc<dyn SourceProvider>>,
+    url: &str,
+) -> Result<String> {
+    if let Some(provider) = primary {
+        if let Ok(content) = provider.fetch(url).await {
+            if !content.trim().is_empty() {
+                return Ok(content);
+            }
+        }
+    }
+    if let Some(provider) = fallback {
+        return provider.fetch(url).await;
+    }
+    Err(GrokSearchError::MissingConfig(
+        "TAVILY_API_KEY or FIRECRAWL_API_KEY",
+    ))
+}
+
 /// Concurrently back-fill `Source.content` for every source via the Phase 1
 /// `resolve_content` pipeline. Bounded by `concurrency` (Semaphore) and the
 /// shared `deadline` (D-02: per-source `timeout_at`, not an independent budget).
@@ -857,6 +883,7 @@ fn apply_fetch_limit(
 /// `max_chars`) on success, or a deterministic `_Failed to retrieve: ..._` note
 /// on any failure/timeout/invalid-url (D-05: never None, never empty). Source
 /// order is preserved.
+#[allow(clippy::too_many_arguments)]
 async fn enrich_sources(
     sources: Vec<Source>,
     deadline: tokio::time::Instant,
@@ -865,6 +892,8 @@ async fn enrich_sources(
     caps: crate::sources::SourceCaps,
     concurrency: usize,
     max_chars: usize,
+    primary: Option<Arc<dyn SourceProvider>>,
+    fallback: Option<Arc<dyn SourceProvider>>,
 ) -> Vec<Source> {
     let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut set: tokio::task::JoinSet<(usize, Option<String>)> = tokio::task::JoinSet::new();
@@ -875,6 +904,8 @@ async fn enrich_sources(
         let client = client.clone();
         let router = Arc::clone(router);
         let caps = caps.clone();
+        let primary = primary.clone();
+        let fallback = fallback.clone();
 
         set.spawn(async move {
             // acquire is micro-second scale for concurrency<=5; deadline
@@ -890,6 +921,25 @@ async fn enrich_sources(
                         Ok(Ok((md, _kind))) => {
                             let truncated: String = md.chars().take(max_chars).collect();
                             Some(truncated)
+                        }
+                        // Generic URL (no specialist matched): mirror web_fetch
+                        // and use the configured Tavily/Firecrawl generic fetch
+                        // instead of a failure note, so ordinary search results
+                        // still carry inline content (P1).
+                        Ok(Err(reason)) if reason == crate::sources::NO_SPECIALIST_MATCH => {
+                            let generic = generic_source_fetch(&primary, &fallback, &url_str);
+                            match tokio::time::timeout_at(deadline, generic).await {
+                                Ok(Ok(md)) => {
+                                    let truncated: String = md.chars().take(max_chars).collect();
+                                    Some(truncated)
+                                }
+                                Ok(Err(e)) => {
+                                    Some(format!("_Failed to retrieve: {e}_\n\nSource: {url_str}"))
+                                }
+                                Err(_elapsed) => Some(format!(
+                                    "_Failed to retrieve: timeout_\n\nSource: {url_str}"
+                                )),
+                            }
                         }
                         Ok(Err(reason)) => Some(format!(
                             "_Failed to retrieve: {reason}_\n\nSource: {url_str}"
@@ -1354,6 +1404,29 @@ mod enrich_tests {
         for s in &out.sources {
             let c = s.content.as_deref().unwrap_or("");
             assert!(!c.is_empty(), "every source must have non-empty content");
+        }
+    }
+
+    #[tokio::test]
+    async fn enrich_generic_url_uses_provider_fetch_fallback() {
+        // No specialist matches the supplemental URLs → inline enrichment must
+        // fall back to the configured source provider's generic fetch (mirroring
+        // web_fetch), not emit a `_Failed to retrieve: no_specialist_match_`
+        // note for ordinary search results (P1).
+        let svc = service_with(enrich_config(), SourceRouter::default());
+        let out = svc.web_search(base_input()).await.expect("web_search");
+
+        assert!(!out.sources.is_empty());
+        for s in &out.sources {
+            let c = s.content.as_deref().unwrap_or("");
+            assert!(
+                c.starts_with("Fetched content from"),
+                "generic source must use the provider fetch fallback, got: {c:?}"
+            );
+            assert!(
+                !c.contains("no_specialist_match"),
+                "must not leak the no_specialist_match note: {c:?}"
+            );
         }
     }
 
