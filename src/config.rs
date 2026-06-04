@@ -16,7 +16,7 @@ pub enum AuthMode {
     OAuth,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     pub grok_api_url: String,
     pub grok_api_key: Option<String>,
@@ -45,6 +45,51 @@ pub struct Config {
     pub source_max_comments: usize,
     pub enrich_concurrency: usize,
     pub enrich_max_chars: usize,
+}
+
+/// Hand-written `Debug` that masks secret-bearing fields so a stray
+/// `{:?}`/`{:#?}` of a `Config` can never leak credentials. Secret `Option`
+/// fields render as a two-state `"set"`/`"unset"` marker (mirroring
+/// [`Config::github_token_status`]); every non-secret field stays readable.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn mask<T>(value: &Option<T>) -> &'static str {
+            if value.is_some() {
+                "set"
+            } else {
+                "unset"
+            }
+        }
+        f.debug_struct("Config")
+            .field("grok_api_url", &self.grok_api_url)
+            .field("grok_api_key", &mask(&self.grok_api_key))
+            .field("grok_auth_mode", &self.grok_auth_mode)
+            .field("grok_auth_file", &self.grok_auth_file)
+            .field("grok_model", &self.grok_model)
+            .field("web_search_enabled", &self.web_search_enabled)
+            .field("x_search_enabled", &self.x_search_enabled)
+            .field("tavily_api_url", &self.tavily_api_url)
+            .field("tavily_api_key", &mask(&self.tavily_api_key))
+            .field("tavily_enabled", &self.tavily_enabled)
+            .field("firecrawl_api_url", &self.firecrawl_api_url)
+            .field("firecrawl_api_key", &mask(&self.firecrawl_api_key))
+            .field("firecrawl_enabled", &self.firecrawl_enabled)
+            .field("default_extra_sources", &self.default_extra_sources)
+            .field("fallback_sources", &self.fallback_sources)
+            .field("fetch_max_chars", &self.fetch_max_chars)
+            .field("cache_size", &self.cache_size)
+            .field("timeout", &self.timeout)
+            .field("openai_compatible_api_url", &self.openai_compatible_api_url)
+            .field("openai_compatible_api_key", &mask(&self.openai_compatible_api_key))
+            .field("openai_compatible_model", &self.openai_compatible_model)
+            .field("transport", &self.transport)
+            .field("github_token", &mask(&self.github_token))
+            .field("source_max_answers", &self.source_max_answers)
+            .field("source_max_comments", &self.source_max_comments)
+            .field("enrich_concurrency", &self.enrich_concurrency)
+            .field("enrich_max_chars", &self.enrich_max_chars)
+            .finish()
+    }
 }
 
 /// Mirror of `Config` for TOML deserialization. All fields optional so users
@@ -614,6 +659,31 @@ mod source_config_tests {
         assert!(
             diag_unset.contains("github_token=unset"),
             "expected github_token=unset in: {diag_unset}"
+        );
+    }
+
+    #[test]
+    fn debug_does_not_leak_secret_values() {
+        let cfg = Config::from_env_map([
+            ("GITHUB_TOKEN", "ghp_test"),
+            ("GROK_SEARCH_API_KEY", "xai-secret"),
+            ("TAVILY_API_KEY", "tvly-secret"),
+            ("FIRECRAWL_API_KEY", "fc-secret"),
+            ("OPENAI_COMPATIBLE_API_URL", "https://example.com/v1"),
+            ("OPENAI_COMPATIBLE_API_KEY", "sk-secret"),
+        ]);
+        let dbg = format!("{cfg:?}");
+        for leaked in ["ghp_test", "xai-secret", "tvly-secret", "fc-secret", "sk-secret"] {
+            assert!(
+                !dbg.contains(leaked),
+                "secret value {leaked} leaked into Debug output: {dbg}"
+            );
+        }
+        // Non-secret fields stay readable.
+        assert!(dbg.contains("grok_model"), "expected readable field in: {dbg}");
+        assert!(
+            dbg.contains("github_token: \"set\""),
+            "expected masked set marker in: {dbg}"
         );
     }
 
