@@ -254,7 +254,7 @@ impl Config {
 
     pub fn redacted_diagnostics(&self) -> String {
         format!(
-            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={}",
+            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} github_token={}",
             self.grok_api_url,
             redact(self.grok_api_key.as_deref()),
             self.grok_auth_mode,
@@ -269,7 +269,8 @@ impl Config {
             redact(self.firecrawl_api_key.as_deref()),
             self.default_extra_sources,
             self.fallback_sources,
-            self.timeout.as_secs()
+            self.timeout.as_secs(),
+            if self.github_token.is_some() { "set" } else { "unset" }
         )
     }
 }
@@ -586,6 +587,24 @@ mod source_config_tests {
 
         let unset = Config::from_env_map(Vec::<(String, String)>::new());
         assert_eq!(unset.github_token, None);
+
+        // redacted_diagnostics() reports a two-state set|unset signal and
+        // NEVER the token value (no redact() masking either).
+        let diag_set = cfg.redacted_diagnostics();
+        assert!(
+            diag_set.contains("github_token=set"),
+            "expected github_token=set in: {diag_set}"
+        );
+        assert!(
+            !diag_set.contains("ghp_test"),
+            "token value leaked into diagnostics: {diag_set}"
+        );
+
+        let diag_unset = unset.redacted_diagnostics();
+        assert!(
+            diag_unset.contains("github_token=unset"),
+            "expected github_token=unset in: {diag_unset}"
+        );
     }
 
     #[test]

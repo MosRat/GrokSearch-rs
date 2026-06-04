@@ -669,6 +669,7 @@ impl SearchService {
             "fallback_sources": self.config.fallback_sources,
             "cache_size": self.config.cache_size,
             "timeout_seconds": self.config.timeout.as_secs(),
+            "github_token": if self.config.github_token.is_some() { "set" } else { "unset" },
             "redacted": self.config.redacted_diagnostics()
         })
     }
@@ -1132,6 +1133,47 @@ mod transport_dispatch_tests {
         let report = svc.doctor().await;
         assert_eq!(report["provider"], "grok_responses");
         assert_eq!(report["grok"]["model"], "grok-4-1-fast-reasoning");
+    }
+
+    #[tokio::test]
+    async fn doctor_reports_github_token_status() {
+        // With GITHUB_TOKEN set -> "set", and the raw value never leaks.
+        let config = Config::from_env_map([
+            ("GROK_SEARCH_API_KEY", "xai-fake"),
+            ("GITHUB_TOKEN", "ghp_test"),
+        ]);
+        let svc = SearchService {
+            default_model: resolve_default_model(&config),
+            config,
+            ai: Arc::new(FakeAiProvider),
+            sources: None,
+            fallback_sources: None,
+            cache: Arc::new(Mutex::new(SourceCache::new(16))),
+            http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
+            source_router: Arc::new(crate::sources::SourceRouter::default()),
+        };
+        let report = svc.doctor().await;
+        assert_eq!(report["github_token"], "set");
+        // No-leak: the full report must not contain the token value anywhere.
+        assert!(
+            !report.to_string().contains("ghp_test"),
+            "token value leaked into doctor report: {report}"
+        );
+
+        // Without GITHUB_TOKEN -> "unset".
+        let config_unset = Config::from_env_map([("GROK_SEARCH_API_KEY", "xai-fake")]);
+        let svc_unset = SearchService {
+            default_model: resolve_default_model(&config_unset),
+            config: config_unset,
+            ai: Arc::new(FakeAiProvider),
+            sources: None,
+            fallback_sources: None,
+            cache: Arc::new(Mutex::new(SourceCache::new(16))),
+            http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
+            source_router: Arc::new(crate::sources::SourceRouter::default()),
+        };
+        let report_unset = svc_unset.doctor().await;
+        assert_eq!(report_unset["github_token"], "unset");
     }
 
     #[tokio::test]
