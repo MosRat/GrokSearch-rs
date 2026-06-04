@@ -1136,3 +1136,154 @@ mod transport_dispatch_tests {
         let _clone = svc.clone();
     }
 }
+
+#[cfg(test)]
+mod enrich_tests {
+    use super::*;
+    use crate::sources::{SourceCaps, SourceExtractor, SourceRouter, SourceType};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use url::Url;
+
+    /// Always-matching extractor that records peak concurrency and returns a
+    /// fixed body after a visibility sleep.
+    struct CountingExtractor {
+        peak: Arc<AtomicUsize>,
+        current: Arc<AtomicUsize>,
+        sleep_ms: u64,
+    }
+    #[async_trait]
+    impl SourceExtractor for CountingExtractor {
+        fn matches(&self, _url: &Url) -> bool {
+            true
+        }
+        fn kind(&self) -> SourceType {
+            SourceType::Wikipedia
+        }
+        async fn fetch_render(
+            &self,
+            _c: &reqwest::Client,
+            _u: &Url,
+            _caps: &SourceCaps,
+        ) -> Result<String> {
+            let n = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(n, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(self.sleep_ms)).await;
+            self.current.fetch_sub(1, Ordering::SeqCst);
+            Ok("content".to_string())
+        }
+    }
+
+    /// URL-discriminating failure extractor: matches ONLY urls containing
+    /// `fail_url_marker`, so a router can route one source here and the rest to
+    /// CountingExtractor (true fault isolation).
+    struct MarkerErrExtractor {
+        fail_url_marker: String,
+    }
+    #[async_trait]
+    impl SourceExtractor for MarkerErrExtractor {
+        fn matches(&self, url: &Url) -> bool {
+            url.as_str().contains(&self.fail_url_marker)
+        }
+        fn kind(&self) -> SourceType {
+            SourceType::GithubIssue
+        }
+        async fn fetch_render(
+            &self,
+            _c: &reqwest::Client,
+            _u: &Url,
+            _caps: &SourceCaps,
+        ) -> Result<String> {
+            Err(crate::error::GrokSearchError::Provider(
+                "always_fails".to_string(),
+            ))
+        }
+    }
+
+    /// Returns an oversized body to exercise the per-source char cap.
+    struct OversizeExtractor {
+        len: usize,
+    }
+    #[async_trait]
+    impl SourceExtractor for OversizeExtractor {
+        fn matches(&self, _url: &Url) -> bool {
+            true
+        }
+        fn kind(&self) -> SourceType {
+            SourceType::Wikipedia
+        }
+        async fn fetch_render(
+            &self,
+            _c: &reqwest::Client,
+            _u: &Url,
+            _caps: &SourceCaps,
+        ) -> Result<String> {
+            Ok("x".repeat(self.len))
+        }
+    }
+
+    /// Hangs far past any test deadline — used to trigger the timeout note.
+    struct HangingExtractor;
+    #[async_trait]
+    impl SourceExtractor for HangingExtractor {
+        fn matches(&self, _url: &Url) -> bool {
+            true
+        }
+        fn kind(&self) -> SourceType {
+            SourceType::Wikipedia
+        }
+        async fn fetch_render(
+            &self,
+            _c: &reqwest::Client,
+            _u: &Url,
+            _caps: &SourceCaps,
+        ) -> Result<String> {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            Ok("never".to_string())
+        }
+    }
+
+    /// Build a SearchService with fake AI + fake supplemental provider and a
+    /// caller-supplied router/config. Mirrors the doctor_* struct-literal tests.
+    fn service_with(config: Config, router: SourceRouter) -> SearchService {
+        SearchService {
+            default_model: resolve_default_model(&config),
+            config,
+            ai: Arc::new(FakeAiProvider),
+            sources: Some(Arc::new(FakeSourceProvider)),
+            fallback_sources: None,
+            cache: Arc::new(Mutex::new(SourceCache::new(64))),
+            http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
+            source_router: Arc::new(router),
+        }
+    }
+
+    fn enrich_config() -> Config {
+        Config::from_env_map([
+            ("GROK_SEARCH_API_KEY", "fake-grok"),
+            ("TAVILY_API_KEY", "fake-tavily"),
+        ])
+    }
+
+    fn base_input() -> WebSearchInput {
+        WebSearchInput {
+            query: "q".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn counting_extractor_self_test() {
+        // Sanity: the helper itself records concurrency.
+        let peak = Arc::new(AtomicUsize::new(0));
+        let current = Arc::new(AtomicUsize::new(0));
+        let router = SourceRouter::with_extractors(vec![Box::new(CountingExtractor {
+            peak: Arc::clone(&peak),
+            current: Arc::clone(&current),
+            sleep_ms: 5,
+        })]);
+        let svc = service_with(enrich_config(), router);
+        let _ = svc.web_search(base_input()).await.expect("web_search");
+        assert!(peak.load(Ordering::SeqCst) >= 1);
+    }
+}
