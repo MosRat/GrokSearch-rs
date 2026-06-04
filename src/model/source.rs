@@ -9,6 +9,11 @@ pub struct Source {
     pub title: Option<String>,
     pub description: Option<String>,
     pub published_date: Option<String>,
+    /// Inline source content from the `resolve_content` pipeline.
+    /// `None` → field absent from JSON (`include_content=false` path, backward-compat).
+    /// `Some` → non-empty string: structured markdown or a deterministic failure note.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
 }
 
 impl Source {
@@ -19,6 +24,7 @@ impl Source {
             title: None,
             description: None,
             published_date: None,
+            content: None,
         }
     }
 
@@ -50,4 +56,26 @@ pub fn merge_sources(primary: Vec<Source>, secondary: Vec<Source>) -> Vec<Source
         }
     }
     merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_content_none_omitted_from_json() {
+        let source = Source::new("https://example.com", "tavily");
+        let value = serde_json::to_value(&source).unwrap();
+        // D-05: None must produce NO key, not "content": null.
+        assert!(value.get("content").is_none());
+    }
+
+    #[test]
+    fn source_content_some_appears_in_json() {
+        let mut source = Source::new("https://example.com", "tavily");
+        source.content = Some("hello".to_string());
+        let value = serde_json::to_value(&source).unwrap();
+        assert_eq!(value["content"], "hello");
+        assert!(!value["content"].as_str().unwrap().is_empty());
+    }
 }
