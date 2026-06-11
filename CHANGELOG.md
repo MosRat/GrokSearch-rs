@@ -4,6 +4,32 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.1.16 - 2026-06-11
+
+### Added
+
+- **`web_search` 响应预算,杜绝超大返回打爆 MCP 客户端 25k token 上限。**
+  对齐 Tavily/Exa/官方 fetch server 的"默认小响应 + 显式截断提示 + drill-down
+  通道"模式:
+  - 内联正文只填充前 `max_inline_sources` 个 source(默认 5,env
+    `GROK_SEARCH_MAX_INLINE_SOURCES`);其余 source 仅返回元数据,需要原文时用
+    `web_fetch(url)` 跟进。此前 Grok 返回 20+ 引用时会全部内联(每条最多
+    15k 字符),单次响应可超 300k 字符。
+  - 整响应字符预算 `response_max_chars`(默认 60000,env
+    `GROK_SEARCH_RESPONSE_MAX_CHARS`),按真实载荷计权(答案 + 各 source 的
+    元数据与内联正文):超预算时先从尾部 source 截断/省略正文,被截断的
+    source 携带指引注记(`web_fetch(...)` / `get_sources(...)`);元数据本身
+    溢出时(宽调研 query 下 Grok 可返回 50+ 引用)继续从尾部丢弃整条
+    source(至少保留 1 条),输出新增 `truncated` 字段。会话缓存始终保留
+    全量内容,按需取回不丢失。实测原 317k 字符的响应降至 ~62k。
+  - `get_sources` 支持 `offset`/`limit` 分页(借鉴官方 fetch server 的
+    `start_index` 续读模式),输出新增 `total_sources`、`offset`、
+    `next_offset`、`truncated` 字段。
+  - `web_search` 新增 `response_format`(`"concise"` | `"detailed"`,
+    Anthropic 工具设计指南推荐的枚举):`concise` 只返回综合答案 + source
+    元数据;显式传入时优先于遗留的 `include_content`。非法取值报
+    `invalid_params`。
+
 ## 0.1.15 - 2026-06-08
 
 ### Changed
