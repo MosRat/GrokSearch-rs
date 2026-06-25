@@ -6,20 +6,41 @@ Run the full local verification suite:
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+For a release-style local pass, use:
+
+```bash
+scripts/check-workspace.sh
 ```
 
 ## Targeted Tests
 
-| Area | Command |
+Each crate owns the tests for its boundary. Prefer the narrowest command while
+iterating, then run the workspace suite before committing.
+
+| Layer | Command | Covers |
 |---|---|
-| Config parsing | `cargo test --test config` |
-| Grok Responses payload and response adapters | `cargo test --test adapter_grok_responses` |
-| Search orchestration | `cargo test --test service_contract` |
-| Tavily parsing | `cargo test --test tavily_parse` |
-| Source merge behavior | `cargo test --test source_merge` |
-| Logging | `cargo test --test logging` |
+| Shared types | `cargo test -p grok-search-types` | `Source` merge behavior, tool output serialization |
+| Config | `cargo test -p grok-search-config` | env/TOML precedence, paths, redacted diagnostics |
+| Auth | `cargo test -p grok-search-auth` | OAuth token store and credential provider behavior |
+| Net | `cargo test -p grok-search-net` | proxy discovery/bootstrap helpers and key rotation |
+| Providers | `cargo test -p grok-search-providers` | Grok/OpenAI-compatible adapters, Tavily/Firecrawl parsing and key failover |
+| Sources | `cargo test -p grok-search-sources` | GitHub, StackExchange, arXiv, Wikipedia rendering |
+| Service | `cargo test -p grok-search-service` | orchestration, fallback, enrichment, budgets, doctor |
+| MCP | `cargo test -p grok-search-mcp` | tool list/schema compatibility and typed argument parsing |
+| Binary | `cargo test -p grok-search-rs` | CLI crate compilation and binary test harness |
+
+Useful single-test shortcuts:
+
+```bash
+cargo test -p grok-search-config --test config
+cargo test -p grok-search-providers --test adapter_grok_responses
+cargo test -p grok-search-service --test service_contract
+cargo test -p grok-search-sources --test sources_render
+```
 
 ## Live Smoke Testing
 

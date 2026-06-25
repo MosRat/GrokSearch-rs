@@ -228,8 +228,8 @@ The binary lands at `target/release/grok-search-rs`. Point your MCP client's `co
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 More docs:

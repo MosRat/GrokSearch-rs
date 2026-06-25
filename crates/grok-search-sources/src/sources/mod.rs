@@ -123,7 +123,7 @@ pub async fn resolve_content(
 }
 
 /// Issue a JSON `GET` and normalize transport/status/parse errors into
-/// `GrokSearchError`, mirroring `crate::providers::http::post_json`. `headers`
+/// `GrokSearchError`, mirroring `grok_search_net::http::post_json`. `headers`
 /// carries extractor-specific headers such as `User-Agent` (required by GitHub,
 /// Wikipedia, and arXiv in Phase 2). `label` distinguishes the source in error
 /// messages.

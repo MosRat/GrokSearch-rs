@@ -4,13 +4,19 @@ GrokSearch-rs is a Rust MCP server that keeps the original GrokSearch product bo
 
 ```text
 MCP client
-  -> src/mcp.rs
-      -> src/service.rs
-      -> credential provider: static API key or xAI OAuth token
-      -> Grok Responses provider: /v1/responses with web_search and optional x_search
-      -> Tavily provider: search / extract / map
-      -> Firecrawl provider: search / scrape fallback
-      -> source cache
+  -> crates/grok-search-rs       CLI and stdio entrypoint
+      -> crates/grok-search-mcp  rmcp server adapter and tool schemas
+      -> crates/grok-search-service
+          -> crates/grok-search-auth     static API key or xAI OAuth token
+          -> crates/grok-search-net      reqwest clients, proxy bootstrap, key rotation
+          -> crates/grok-search-providers
+              -> Grok Responses provider: /v1/responses with web_search and optional x_search
+              -> OpenAI-compatible chat-completions provider
+              -> Tavily provider: search / extract / map
+              -> Firecrawl provider: search / scrape fallback
+          -> crates/grok-search-sources  specialist fetch/render extractors
+          -> crates/grok-search-types    shared request/response/source/error models
+          -> source cache
 ```
 
 ## Product Boundary
