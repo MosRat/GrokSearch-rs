@@ -1,0 +1,21 @@
+[package]
+name = "grok-search-providers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Upstream provider adapters for GrokSearch-rs"
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+grok-search-auth = { path = "../grok-search-auth" }
+grok-search-config = { path = "../grok-search-config" }
+grok-search-net = { path = "../grok-search-net" }
+grok-search-types = { path = "../grok-search-types" }
+
+[dev-dependencies]
+tokio.workspace = true

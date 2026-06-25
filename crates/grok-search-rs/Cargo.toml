@@ -1,0 +1,25 @@
+[package]
+name = "grok-search-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Rust MCP server for Grok web search and Tavily-backed source retrieval"
+readme = "../../README.md"
+keywords = ["mcp", "grok", "tavily", "firecrawl", "search"]
+categories = ["command-line-utilities", "web-programming"]
+
+[[bin]]
+name = "grok-search-rs"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+grok-search-auth = { path = "../grok-search-auth" }
+grok-search-config = { path = "../grok-search-config" }
+grok-search-mcp = { path = "../grok-search-mcp" }
+grok-search-net = { path = "../grok-search-net" }
+grok-search-service = { path = "../grok-search-service" }

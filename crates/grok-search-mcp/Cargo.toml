@@ -1,0 +1,19 @@
+[package]
+name = "grok-search-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "MCP server adapter for GrokSearch-rs"
+
+[dependencies]
+anyhow.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+grok-search-service = { path = "../grok-search-service" }
+grok-search-types = { path = "../grok-search-types" }

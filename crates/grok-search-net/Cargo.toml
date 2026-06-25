@@ -1,0 +1,17 @@
+[package]
+name = "grok-search-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "HTTP, proxy, and key rotation helpers for GrokSearch-rs"
+
+[dependencies]
+reqwest.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true
+grok-search-config = { path = "../grok-search-config" }
+grok-search-types = { path = "../grok-search-types" }
