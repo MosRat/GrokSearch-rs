@@ -2,6 +2,7 @@ use crate::adapters::grok_responses_request::to_grok_responses_payload;
 use crate::adapters::grok_responses_response::parse_grok_responses;
 use grok_search_auth::{CredentialProvider, StaticApiKeyCredential};
 use grok_search_net::http::{build_client, post_json};
+use grok_search_provider_core::AiProvider;
 use grok_search_types::model::search::{SearchRequest, SearchResponse};
 use grok_search_types::Result;
 use reqwest::Client;
@@ -87,5 +88,12 @@ impl GrokResponsesProvider {
         )
         .await?;
         parse_grok_responses(&raw)
+    }
+}
+
+#[async_trait::async_trait]
+impl AiProvider for GrokResponsesProvider {
+    async fn search(&self, request: &SearchRequest) -> Result<SearchResponse> {
+        GrokResponsesProvider::search(self, request).await
     }
 }

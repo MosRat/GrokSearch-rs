@@ -1,0 +1,15 @@
+[package]
+name = "grok-search-parse"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Shared parsing and ranking helpers for GrokSearch-rs"
+
+[dependencies]
+grok-search-provider-core = { path = "../grok-search-provider-core" }
+grok-search-types = { path = "../grok-search-types" }
+serde_json.workspace = true
+url.workspace = true

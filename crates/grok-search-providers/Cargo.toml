@@ -9,12 +9,14 @@ homepage.workspace = true
 description = "Upstream provider adapters for GrokSearch-rs"
 
 [dependencies]
+async-trait.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 grok-search-auth = { path = "../grok-search-auth" }
 grok-search-config = { path = "../grok-search-config" }
 grok-search-net = { path = "../grok-search-net" }
+grok-search-provider-core = { path = "../grok-search-provider-core" }
 grok-search-types = { path = "../grok-search-types" }
 
 [dev-dependencies]

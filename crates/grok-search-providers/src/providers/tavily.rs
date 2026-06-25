@@ -1,5 +1,6 @@
 use grok_search_net::http::{build_client, post_json_with_status};
 use grok_search_net::key_pool::{is_key_scoped_status, KeyPool};
+use grok_search_provider_core::SourceProvider;
 use grok_search_types::model::search::SearchFilters;
 use grok_search_types::model::source::Source;
 use grok_search_types::{GrokSearchError, Result};
@@ -113,6 +114,26 @@ impl TavilyProvider {
         Err(last_error.unwrap_or_else(|| {
             GrokSearchError::Provider("Tavily request failed with no attempts".to_string())
         }))
+    }
+}
+
+#[async_trait::async_trait]
+impl SourceProvider for TavilyProvider {
+    async fn search_sources(
+        &self,
+        query: &str,
+        max_results: usize,
+        filters: &SearchFilters,
+    ) -> Result<Vec<Source>> {
+        self.search(query, max_results, filters).await
+    }
+
+    async fn fetch(&self, url: &str) -> Result<String> {
+        self.extract(url).await
+    }
+
+    async fn map(&self, url: &str, max_results: usize) -> Result<Vec<Source>> {
+        self.map(url, max_results).await
     }
 }
 

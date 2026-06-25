@@ -27,8 +27,13 @@ iterating, then run the workspace suite before committing.
 | Config | `cargo test -p grok-search-config` | env/TOML precedence, paths, redacted diagnostics |
 | Auth | `cargo test -p grok-search-auth` | OAuth token store and credential provider behavior |
 | Net | `cargo test -p grok-search-net` | proxy discovery/bootstrap helpers and key rotation |
+| Provider core | `cargo test -p grok-search-provider-core` | provider trait object wiring and default capability errors |
+| Source core | `cargo test -p grok-search-source-core` | router order, no-match sentinel, failed extractor reasons |
+| Parse | `cargo test -p grok-search-parse` | identifier normalization, RRF/dedupe, OpenAlex abstracts, title normalization |
+| Content | `cargo test -p grok-search-content` | PDF validation, max byte guard, truncation |
 | Providers | `cargo test -p grok-search-providers` | Grok/OpenAI-compatible adapters, Tavily/Firecrawl parsing and key failover |
 | Sources | `cargo test -p grok-search-sources` | GitHub, StackExchange, arXiv, Wikipedia rendering |
+| Academic | `cargo test -p grok-search-academic` | academic provider parsing, merge behavior, identifier handling |
 | Service | `cargo test -p grok-search-service` | orchestration, fallback, enrichment, budgets, doctor |
 | MCP | `cargo test -p grok-search-mcp` | tool list/schema compatibility and typed argument parsing |
 | Binary | `cargo test -p grok-search-rs` | CLI crate compilation and binary test harness |
@@ -38,6 +43,8 @@ Useful single-test shortcuts:
 ```bash
 cargo test -p grok-search-config --test config
 cargo test -p grok-search-providers --test adapter_grok_responses
+cargo test -p grok-search-parse
+cargo test -p grok-search-source-core
 cargo test -p grok-search-service --test service_contract
 cargo test -p grok-search-sources --test sources_render
 ```

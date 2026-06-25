@@ -1,0 +1,16 @@
+[package]
+name = "grok-search-content"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Shared content download and parsing helpers for GrokSearch-rs"
+
+[dependencies]
+pdf_oxide.workspace = true
+reqwest.workspace = true
+tempfile.workspace = true
+grok-search-net = { path = "../grok-search-net" }
+grok-search-types = { path = "../grok-search-types" }

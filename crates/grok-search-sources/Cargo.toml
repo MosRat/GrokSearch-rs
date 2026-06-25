@@ -18,4 +18,5 @@ serde_json.workspace = true
 tokio.workspace = true
 url.workspace = true
 grok-search-config = { path = "../grok-search-config" }
+grok-search-source-core = { path = "../grok-search-source-core" }
 grok-search-types = { path = "../grok-search-types" }

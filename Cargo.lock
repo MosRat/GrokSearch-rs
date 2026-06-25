@@ -800,14 +800,15 @@ version = "0.1.21"
 dependencies = [
  "async-trait",
  "grok-search-config",
+ "grok-search-content",
  "grok-search-net",
+ "grok-search-parse",
+ "grok-search-provider-core",
  "grok-search-types",
- "pdf_oxide",
  "quick-xml 0.37.5",
  "reqwest",
  "serde",
  "serde_json",
- "tempfile",
  "tokio",
  "url",
  "uuid",
@@ -844,6 +845,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "grok-search-content"
+version = "0.1.21"
+dependencies = [
+ "grok-search-net",
+ "grok-search-types",
+ "pdf_oxide",
+ "reqwest",
+ "tempfile",
+]
+
+[[package]]
 name = "grok-search-mcp"
 version = "0.1.21"
 dependencies = [
@@ -870,12 +882,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "grok-search-parse"
+version = "0.1.21"
+dependencies = [
+ "grok-search-provider-core",
+ "grok-search-types",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "grok-search-provider-core"
+version = "0.1.21"
+dependencies = [
+ "async-trait",
+ "grok-search-types",
+ "tokio",
+]
+
+[[package]]
 name = "grok-search-providers"
 version = "0.1.21"
 dependencies = [
+ "async-trait",
  "grok-search-auth",
  "grok-search-config",
  "grok-search-net",
+ "grok-search-provider-core",
  "grok-search-types",
  "reqwest",
  "serde",
@@ -905,7 +938,9 @@ dependencies = [
  "grok-search-auth",
  "grok-search-config",
  "grok-search-net",
+ "grok-search-provider-core",
  "grok-search-providers",
+ "grok-search-source-core",
  "grok-search-sources",
  "grok-search-types",
  "lru",
@@ -918,11 +953,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "grok-search-source-core"
+version = "0.1.21"
+dependencies = [
+ "async-trait",
+ "grok-search-types",
+ "reqwest",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "grok-search-sources"
 version = "0.1.21"
 dependencies = [
  "async-trait",
  "grok-search-config",
+ "grok-search-source-core",
  "grok-search-types",
  "percent-encoding",
  "quick-xml 0.37.5",

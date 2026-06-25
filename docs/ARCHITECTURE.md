@@ -9,6 +9,14 @@ MCP client
       -> crates/grok-search-service
           -> crates/grok-search-auth     static API key or xAI OAuth token
           -> crates/grok-search-net      reqwest clients, proxy bootstrap, key rotation
+          -> crates/grok-search-provider-core
+              -> shared AI/source/academic provider traits and capability errors
+          -> crates/grok-search-source-core
+              -> shared source extractor/router/caps abstractions
+          -> crates/grok-search-parse
+              -> shared identifiers, title normalization, OpenAlex abstract, RRF/dedupe helpers
+          -> crates/grok-search-content
+              -> shared PDF byte guards, pdf_oxide parsing, truncation helpers
           -> crates/grok-search-providers
               -> Grok Responses provider: /v1/responses with web_search and optional x_search
               -> OpenAI-compatible chat-completions provider
@@ -32,11 +40,13 @@ MCP client
 
 ## Academic Layer
 
-`grok-search-academic` owns scholarly semantics that do not fit the generic `SourceProvider` trait. It still reuses the shared `reqwest::Client`, proxy decision, timeout, error type, redaction conventions, and MCP schema style.
+`grok-search-academic` owns scholarly orchestration and the concrete academic providers. Shared scholarly mechanics that are useful outside the academic service live below it: identifiers, title normalization, OpenAlex abstract reconstruction, and RRF/dedupe are in `grok-search-parse`; PDF byte validation, `pdf_oxide` parsing, and truncation are in `grok-search-content`; the `AcademicProvider` trait and capability defaults are in `grok-search-provider-core`.
 
 Academic providers are capability-based: dblp and Crossref are metadata-first, Semantic Scholar and OpenAlex add citations/references, arXiv and open-access locations provide PDFs, Unpaywall resolves DOI-based OA full text, and Sci-Hub is disabled by default and only used as a final explicitly configured fallback. Results are normalized into `AcademicPaper` while provenance URLs remain regular `Source` values.
 
 ## Provider Layer
+
+Provider traits are defined in `grok-search-provider-core`. `grok-search-providers` implements the web-side providers (Grok/OpenAI-compatible/Tavily/Firecrawl), while `grok-search-academic` implements academic providers. `grok-search-service` depends on the traits and concrete crates only at the orchestration boundary.
 
 The service builds an internal search request and sends one Responses payload:
 
@@ -54,6 +64,8 @@ Authentication is separated from the Responses provider:
 OAuth login is not a service boundary. `grok-search-rs login` temporarily listens on `127.0.0.1:56121` for the browser callback, stores the token file, then exits. Normal MCP operation remains stdio only.
 
 ## Source Provenance
+
+Source extraction has the same split: `grok-search-source-core` owns the router/extractor trait and no-match sentinel, while `grok-search-sources` only implements specialist renderers for GitHub, StackExchange, arXiv, and Wikipedia and provides a config-to-router factory.
 
 Sources retain their origin through the `provider` field:
 

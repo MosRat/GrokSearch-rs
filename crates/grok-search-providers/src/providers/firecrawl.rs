@@ -1,5 +1,7 @@
 use grok_search_net::http::{build_client, post_json_with_status};
 use grok_search_net::key_pool::{is_key_scoped_status, KeyPool};
+use grok_search_provider_core::SourceProvider;
+use grok_search_types::model::search::SearchFilters;
 use grok_search_types::model::source::Source;
 use grok_search_types::{GrokSearchError, Result};
 use reqwest::Client;
@@ -85,6 +87,26 @@ impl FirecrawlProvider {
         Err(last_error.unwrap_or_else(|| {
             GrokSearchError::Provider("Firecrawl request failed with no attempts".to_string())
         }))
+    }
+}
+
+#[async_trait::async_trait]
+impl SourceProvider for FirecrawlProvider {
+    async fn search_sources(
+        &self,
+        query: &str,
+        max_results: usize,
+        _filters: &SearchFilters,
+    ) -> Result<Vec<Source>> {
+        FirecrawlProvider::search(self, query, max_results).await
+    }
+
+    async fn fetch(&self, url: &str) -> Result<String> {
+        FirecrawlProvider::scrape(self, url).await
+    }
+
+    async fn map(&self, url: &str, max_results: usize) -> Result<Vec<Source>> {
+        FirecrawlProvider::search(self, url, max_results).await
     }
 }
 

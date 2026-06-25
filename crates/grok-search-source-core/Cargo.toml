@@ -1,0 +1,18 @@
+[package]
+name = "grok-search-source-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Shared source extraction abstractions for GrokSearch-rs"
+
+[dependencies]
+async-trait.workspace = true
+reqwest.workspace = true
+url.workspace = true
+grok-search-types = { path = "../grok-search-types" }
+
+[dev-dependencies]
+tokio.workspace = true

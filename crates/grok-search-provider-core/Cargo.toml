@@ -1,0 +1,16 @@
+[package]
+name = "grok-search-provider-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Shared provider traits for GrokSearch-rs"
+
+[dependencies]
+async-trait.workspace = true
+grok-search-types = { path = "../grok-search-types" }
+
+[dev-dependencies]
+tokio.workspace = true

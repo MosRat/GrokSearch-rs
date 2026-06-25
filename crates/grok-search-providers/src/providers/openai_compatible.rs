@@ -2,6 +2,7 @@ use crate::adapters::chat_completions_request::to_chat_completions_payload;
 use crate::adapters::chat_completions_response::parse_chat_completions;
 use grok_search_config::normalize_v1_base;
 use grok_search_net::http::{build_client, post_json};
+use grok_search_provider_core::AiProvider;
 use grok_search_types::model::search::{SearchRequest, SearchResponse};
 use grok_search_types::Result;
 use reqwest::Client;
@@ -79,5 +80,12 @@ impl OpenAICompatProvider {
         )
         .await?;
         parse_chat_completions(&raw)
+    }
+}
+
+#[async_trait::async_trait]
+impl AiProvider for OpenAICompatProvider {
+    async fn search(&self, request: &SearchRequest) -> Result<SearchResponse> {
+        OpenAICompatProvider::search(self, request).await
     }
 }
