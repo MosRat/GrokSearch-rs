@@ -32,9 +32,35 @@ async fn spawn_sse_server_with_mode(
                 Err(_) => return,
             };
             tokio::spawn(async move {
+                let mut raw = Vec::new();
                 let mut buf = [0u8; 4096];
-                let n = sock.read(&mut buf).await.unwrap_or(0);
-                let request = String::from_utf8_lossy(&buf[..n]);
+                let header_end = loop {
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        break raw.len();
+                    }
+                    raw.extend_from_slice(&buf[..n]);
+                    if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break pos + 4;
+                    }
+                };
+                let head = String::from_utf8_lossy(&raw[..header_end]).to_string();
+                let content_length = head
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())?
+                    })
+                    .unwrap_or(0);
+                while raw.len() < header_end + content_length {
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    raw.extend_from_slice(&buf[..n]);
+                }
+                let request = String::from_utf8_lossy(&raw);
                 let expected = format!(r#""stream":{}"#, expected_stream);
                 if !request.contains(&expected) {
                     let _ = sock
@@ -45,9 +71,20 @@ async fn spawn_sse_server_with_mode(
                     return;
                 }
 
-                let resp = "HTTP/1.1 200 OK\r\n\
+                let resp = if keep_open {
+                    "HTTP/1.1 200 OK\r\n\
                      Content-Type: text/event-stream\r\n\
-                     Connection: keep-alive\r\n\r\n";
+                     Connection: keep-alive\r\n\r\n"
+                        .to_string()
+                } else {
+                    let content_length: usize = chunks.iter().map(Vec::len).sum();
+                    format!(
+                        "HTTP/1.1 200 OK\r\n\
+                         Content-Type: text/event-stream\r\n\
+                         Content-Length: {content_length}\r\n\
+                         Connection: close\r\n\r\n"
+                    )
+                };
                 let _ = sock.write_all(resp.as_bytes()).await;
                 for chunk in chunks {
                     let _ = sock.write_all(&chunk).await;

@@ -2,74 +2,18 @@ use crate::error::Result;
 use crate::model::search::SearchFilters;
 use crate::model::source::Source;
 use crate::providers::http::{build_client, post_json_with_status};
+use crate::providers::key_pool::{is_key_scoped_status, KeyPool};
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::error::GrokSearchError;
-
-/// Round-robin ring over one or more Tavily API keys. Shared (`Arc`) across
-/// provider clones so the rotation cursor is global: each request starts on
-/// the next key, spreading credit consumption evenly across all keys.
-struct KeyRing {
-    keys: Vec<String>,
-    cursor: AtomicUsize,
-}
-
-impl KeyRing {
-    /// Split a comma-separated key list into the ring. Whitespace around each
-    /// segment is trimmed and empty segments are dropped, so `"a, b,"` yields
-    /// two keys. When no non-empty segment remains (e.g. the raw value is
-    /// empty), the raw value is kept as a single key — preserving the previous
-    /// single-key behavior where a bogus key simply fails upstream with 401.
-    fn parse(raw: &str) -> Self {
-        let mut keys: Vec<String> = raw
-            .split(',')
-            .map(str::trim)
-            .filter(|segment| !segment.is_empty())
-            .map(str::to_string)
-            .collect();
-        if keys.is_empty() {
-            keys.push(raw.to_string());
-        }
-        Self {
-            keys,
-            cursor: AtomicUsize::new(0),
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.keys.len()
-    }
-
-    /// Index the next request should start from. `Relaxed` is enough: the
-    /// cursor only needs even distribution, not cross-request ordering.
-    fn start(&self) -> usize {
-        self.cursor.fetch_add(1, Ordering::Relaxed) % self.keys.len()
-    }
-
-    fn key(&self, index: usize) -> &str {
-        &self.keys[index % self.keys.len()]
-    }
-}
-
-/// HTTP statuses that indict the *key* rather than the request or upstream:
-/// 401/403 (invalid or unauthorized key), 429 (per-key rate limit),
-/// 432 (Tavily plan limit exceeded), 433 (Tavily pay-as-you-go limit
-/// exceeded). Only these trigger rotation to the next key — timeouts and
-/// 5xx are upstream-wide, so retrying with another key would just add
-/// latency.
-fn is_key_scoped_status(status: u16) -> bool {
-    matches!(status, 401 | 403 | 429 | 432 | 433)
-}
 
 #[derive(Clone)]
 pub struct TavilyProvider {
     client: Client,
     api_url: String,
-    keys: Arc<KeyRing>,
+    keys: KeyPool,
 }
 
 impl TavilyProvider {
@@ -91,7 +35,7 @@ impl TavilyProvider {
         Self {
             client,
             api_url: api_url.into().trim_end_matches('/').to_string(),
-            keys: Arc::new(KeyRing::parse(&api_key.into())),
+            keys: KeyPool::parse(&api_key.into()),
         }
     }
 
@@ -247,70 +191,4 @@ pub fn normalize_tavily_results(raw: &Value) -> Vec<Source> {
             Some(source)
         })
         .collect()
-}
-
-#[cfg(test)]
-mod key_ring_tests {
-    use super::*;
-
-    #[test]
-    fn single_key_parses_to_one_entry() {
-        let ring = KeyRing::parse("tvly-only");
-        assert_eq!(ring.len(), 1);
-        assert_eq!(ring.key(0), "tvly-only");
-    }
-
-    #[test]
-    fn comma_separated_keys_split_trim_and_drop_empties() {
-        let ring = KeyRing::parse(" tvly-a, tvly-b ,, tvly-c,");
-        assert_eq!(ring.len(), 3);
-        assert_eq!(ring.key(0), "tvly-a");
-        assert_eq!(ring.key(1), "tvly-b");
-        assert_eq!(ring.key(2), "tvly-c");
-    }
-
-    #[test]
-    fn all_empty_segments_fall_back_to_raw_value() {
-        // Preserves the legacy single-key path: a degenerate value still
-        // produces one key that fails upstream, instead of an empty ring.
-        let ring = KeyRing::parse("");
-        assert_eq!(ring.len(), 1);
-        assert_eq!(ring.key(0), "");
-    }
-
-    #[test]
-    fn start_rotates_round_robin_across_requests() {
-        let ring = KeyRing::parse("a,b,c");
-        assert_eq!(ring.start(), 0);
-        assert_eq!(ring.start(), 1);
-        assert_eq!(ring.start(), 2);
-        assert_eq!(ring.start(), 0);
-    }
-
-    #[test]
-    fn key_indexing_wraps_for_failover_offsets() {
-        let ring = KeyRing::parse("a,b");
-        assert_eq!(ring.key(2), "a");
-        assert_eq!(ring.key(3), "b");
-    }
-
-    #[test]
-    fn rotation_cursor_is_shared_across_provider_clones() {
-        let provider =
-            TavilyProvider::with_client(Client::new(), "https://api.tavily.com", "tvly-a,tvly-b");
-        let clone = provider.clone();
-        assert_eq!(provider.keys.start(), 0);
-        assert_eq!(clone.keys.start(), 1);
-        assert_eq!(provider.keys.start(), 0);
-    }
-
-    #[test]
-    fn key_scoped_statuses_trigger_rotation_only() {
-        for status in [401, 403, 429, 432, 433] {
-            assert!(is_key_scoped_status(status), "expected rotate on {status}");
-        }
-        for status in [400, 404, 408, 500, 502, 503] {
-            assert!(!is_key_scoped_status(status), "must not rotate on {status}");
-        }
-    }
 }

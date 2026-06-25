@@ -1,6 +1,7 @@
 use crate::error::{GrokSearchError, Result};
 use crate::model::source::Source;
-use crate::providers::http::{build_client, post_json};
+use crate::providers::http::{build_client, post_json_with_status};
+use crate::providers::key_pool::{is_key_scoped_status, KeyPool};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -9,7 +10,7 @@ use std::time::Duration;
 pub struct FirecrawlProvider {
     client: Client,
     api_url: String,
-    api_key: String,
+    keys: KeyPool,
 }
 
 impl FirecrawlProvider {
@@ -27,7 +28,7 @@ impl FirecrawlProvider {
         Self {
             client,
             api_url: api_url.into().trim_end_matches('/').to_string(),
-            api_key: api_key.into(),
+            keys: KeyPool::parse(&api_key.into()),
         }
     }
 
@@ -58,7 +59,32 @@ impl FirecrawlProvider {
 
     async fn post(&self, path: &str, body: &Value) -> Result<Value> {
         let endpoint = format!("{}/{}", self.api_url, path.trim_start_matches('/'));
-        post_json(&self.client, &endpoint, &self.api_key, body, "Firecrawl").await
+        let attempts = self.keys.len();
+        let start = self.keys.start();
+        let mut last_error = None;
+        for offset in 0..attempts {
+            let key = self.keys.key(start + offset);
+            match post_json_with_status(&self.client, &endpoint, key, body, "Firecrawl").await {
+                Ok(value) => return Ok(value),
+                Err(failure) => {
+                    let key_scoped = failure.status.is_some_and(is_key_scoped_status);
+                    if key_scoped && offset + 1 < attempts {
+                        eprintln!(
+                            "grok-search-rs: Firecrawl key {}/{} hit HTTP {}; rotating to next key",
+                            (start + offset) % attempts + 1,
+                            attempts,
+                            failure.status.unwrap_or_default(),
+                        );
+                        last_error = Some(failure.error);
+                        continue;
+                    }
+                    return Err(failure.error);
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            GrokSearchError::Provider("Firecrawl request failed with no attempts".to_string())
+        }))
     }
 }
 
