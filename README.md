@@ -26,15 +26,19 @@
 
 ```bash
 npm install -g grok-search-rs
+# or
+uv tool install grok-search-rs
+# or run without installing
+uvx grok-search-rs --version
 ```
 
-The npm package ships a native Rust binary; the `grok-search-rs` command is what your MCP client launches.
+The npm and PyPI packages ship a native Rust binary; the `grok-search-rs` command is what your MCP client launches.
 
 ---
 
 ## Quick Start
 
-1. After `npm install -g grok-search-rs`, add this MCP server entry to your client config:
+1. After `npm install -g grok-search-rs` or `uv tool install grok-search-rs`, add this MCP server entry to your client config:
 
    ```json
    {
@@ -211,7 +215,7 @@ Tired of duplicating `env` blocks across clients? Run `grok-search-rs --init` on
 ## Build from source
 
 ```bash
-git clone https://github.com/Episkey-G/GrokSearch-rs.git
+git clone https://github.com/MosRat/GrokSearch-rs.git
 cd GrokSearch-rs
 cargo build --release
 ```
@@ -238,8 +242,8 @@ More docs:
 
 ## ⭐ Star History
 
-<a href="https://www.star-history.com/?repos=Episkey-G%2FGrokSearch-rs&type=Date">
-  <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Episkey-G/GrokSearch-rs&type=Date" />
+<a href="https://www.star-history.com/?repos=MosRat%2FGrokSearch-rs&type=Date">
+  <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=MosRat/GrokSearch-rs&type=Date" />
 </a>
 
 ---

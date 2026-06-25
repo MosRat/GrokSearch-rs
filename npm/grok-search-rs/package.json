@@ -7,14 +7,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Episkey-G/GrokSearch-rs.git"
+    "url": "git+https://github.com/MosRat/GrokSearch-rs.git"
   },
-  "author": "Episkey-G",
+  "author": "MosRat",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/Episkey-G/GrokSearch-rs/issues"
+    "url": "https://github.com/MosRat/GrokSearch-rs/issues"
   },
-  "homepage": "https://github.com/Episkey-G/GrokSearch-rs#readme",
+  "homepage": "https://github.com/MosRat/GrokSearch-rs#readme",
   "keywords": [
     "mcp",
     "grok",

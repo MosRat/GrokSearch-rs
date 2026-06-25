@@ -6,4 +6,4 @@ Run the GrokSearch-rs MCP server with npx:
 npx grok-search-rs
 ```
 
-See https://github.com/Episkey-G/GrokSearch-rs for configuration and MCP client examples.
+See https://github.com/MosRat/GrokSearch-rs for configuration and MCP client examples.

@@ -8,7 +8,7 @@ use url::Url;
 use crate::error::{GrokSearchError, Result};
 use crate::sources::{get_text, SourceCaps, SourceExtractor, SourceType};
 
-const UA: &str = "grok-search-rs/0.1 (https://github.com/Episkey-G/GrokSearch-rs)";
+const UA: &str = "grok-search-rs/0.1 (https://github.com/MosRat/GrokSearch-rs)";
 
 #[derive(Debug, Clone)]
 pub struct ArxivRaw {

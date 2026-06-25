@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bump grok-search-rs version across Cargo.toml, Cargo.lock,
-# and all npm package.json files (main + platform sub-packages).
+# npm package.json files, and Python package metadata.
 #
 # Usage:
 #   scripts/bump-version.sh 0.1.5            # bump only
@@ -89,6 +89,22 @@ for (const entry of fs.readdirSync(platformsDir)) {
 }
 NODE
 
+echo "==> Updating Python package files"
+python3 - "$VERSION" <<'PY'
+import pathlib, re, sys
+v = sys.argv[1]
+for path in [pathlib.Path("python/pyproject.toml"), pathlib.Path("python/grok_search_rs/__init__.py")]:
+    text = path.read_text()
+    if path.name == "pyproject.toml":
+        text, n = re.subn(r'(?m)^version\s*=\s*"[^"]+"', f'version = "{v}"', text, count=1)
+    else:
+        text, n = re.subn(r'__version__\s*=\s*"[^"]+"', f'__version__ = "{v}"', text, count=1)
+    if n != 1:
+        raise SystemExit(f"failed to update {path}")
+    path.write_text(text)
+    print(f"   {path}")
+PY
+
 if ! grep -qE "^## ${VERSION}( |$)" CHANGELOG.md; then
   echo "WARNING: CHANGELOG.md has no section for ${VERSION}. Add it before publishing." >&2
 fi
@@ -100,7 +116,7 @@ if [[ "$MODE" == "bump" ]]; then
 fi
 
 echo "==> Committing"
-git add Cargo.toml Cargo.lock npm/grok-search-rs/package.json npm/platforms/*/package.json
+git add Cargo.toml Cargo.lock npm/grok-search-rs/package.json npm/platforms/*/package.json python/pyproject.toml python/grok_search_rs/__init__.py
 git commit -m "Release grok-search-rs $VERSION"
 git tag -a "v$VERSION" -m "v$VERSION"
 

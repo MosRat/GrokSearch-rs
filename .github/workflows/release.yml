@@ -22,30 +22,35 @@ jobs:
             os: ubuntu-latest
             artifact_name: grok-search-rs
             asset_name: grok-search-rs_Linux_x86_64.tar.gz
+            python_platform: musllinux_1_2_x86_64
             universal: false
             cross: false
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             artifact_name: grok-search-rs
             asset_name: grok-search-rs_Linux_aarch64.tar.gz
+            python_platform: musllinux_1_2_aarch64
             universal: false
             cross: true
           - target: universal-apple-darwin
             os: macos-latest
             artifact_name: grok-search-rs
             asset_name: grok-search-rs_Darwin_universal.tar.gz
+            python_platform: macosx_11_0_universal2
             universal: true
             cross: false
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact_name: grok-search-rs.exe
             asset_name: grok-search-rs_Windows_x86_64.zip
+            python_platform: win_amd64
             universal: false
             cross: false
           - target: aarch64-pc-windows-msvc
             os: windows-latest
             artifact_name: grok-search-rs.exe
             asset_name: grok-search-rs_Windows_aarch64.zip
+            python_platform: win_arm64
             universal: false
             cross: false
     steps:
@@ -135,6 +140,65 @@ jobs:
         with:
           name: ${{ matrix.asset_name }}
           path: ${{ matrix.asset_name }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Build PyPI wheel
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          PYTHON_PLATFORM: ${{ matrix.python_platform }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${TAG_NAME#v}"
+          else
+            VERSION="$(python3 - <<'PY'
+          import re, pathlib
+          text = pathlib.Path("Cargo.toml").read_text()
+          print(re.search(r'(?m)^version\s*=\s*"([^"]+)"', text).group(1))
+          PY
+          )"
+          fi
+          python3 - "$VERSION" <<'PY'
+          import pathlib, re, sys
+          version = sys.argv[1]
+          pyproject = pathlib.Path("python/pyproject.toml")
+          text = pyproject.read_text()
+          text, n = re.subn(r'(?m)^version\s*=\s*"[^"]+"', f'version = "{version}"', text, count=1)
+          if n != 1:
+              raise SystemExit("could not update python/pyproject.toml version")
+          pyproject.write_text(text)
+          init = pathlib.Path("python/grok_search_rs/__init__.py")
+          text = init.read_text()
+          text, n = re.subn(r'__version__\s*=\s*"[^"]+"', f'__version__ = "{version}"', text, count=1)
+          if n != 1:
+              raise SystemExit("could not update python package version")
+          init.write_text(text)
+          PY
+          rm -rf python/dist python/build python/*.egg-info
+          mkdir -p python/grok_search_rs/bin
+          find python/grok_search_rs/bin -type f ! -name '__init__.py' -delete
+          if [[ "${{ matrix.universal }}" == "true" ]]; then
+            SRC="target/release/${{ matrix.artifact_name }}"
+          else
+            SRC="target/${{ matrix.target }}/release/${{ matrix.artifact_name }}"
+          fi
+          cp "$SRC" "python/grok_search_rs/bin/${{ matrix.artifact_name }}"
+          if [[ "${{ matrix.artifact_name }}" != *.exe ]]; then
+            chmod +x "python/grok_search_rs/bin/${{ matrix.artifact_name }}"
+          fi
+          python3 -m pip install --upgrade build wheel
+          python3 -m build --wheel python
+          python3 -m wheel tags --remove --python-tag py3 --abi-tag none --platform-tag "$PYTHON_PLATFORM" python/dist/*.whl
+
+      - name: Upload PyPI wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-wheel-${{ matrix.python_platform }}
+          path: python/dist/*.whl
 
   create-release:
     name: Create GitHub Release
@@ -287,9 +351,33 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+  publish-pypi:
+    name: Publish PyPI wheels
+    needs: create-release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download PyPI wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pypi-wheel-*
+          merge-multiple: true
+          path: dist
+
+      - name: Check wheels
+        run: |
+          python -m pip install --upgrade twine
+          python -m twine check dist/*.whl
+
+      - name: Publish wheels to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
   sync-main:
     name: Sync version bump back to main
-    needs: [publish-npm, publish-npm-platforms, create-release]
+    needs: [publish-npm, publish-npm-platforms, publish-pypi, create-release]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -343,6 +431,19 @@ jobs:
             fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
           }
           NODE
+          python3 - "$VERSION" <<'PY'
+          import pathlib, re, sys
+          v = sys.argv[1]
+          for path in [pathlib.Path("python/pyproject.toml"), pathlib.Path("python/grok_search_rs/__init__.py")]:
+              text = path.read_text()
+              if path.name == "pyproject.toml":
+                  text, n = re.subn(r'(?m)^version\s*=\s*"[^"]+"', f'version = "{v}"', text, count=1)
+              else:
+                  text, n = re.subn(r'__version__\s*=\s*"[^"]+"', f'__version__ = "{v}"', text, count=1)
+              if n != 1:
+                  raise SystemExit(f"could not update {path}")
+              path.write_text(text)
+          PY
 
       - name: Commit and push to main
         env:
@@ -351,7 +452,7 @@ jobs:
           VERSION="${TAG_NAME#v}"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock npm/grok-search-rs/package.json npm/platforms/*/package.json
+          git add Cargo.toml Cargo.lock npm/grok-search-rs/package.json npm/platforms/*/package.json python/pyproject.toml python/grok_search_rs/__init__.py
           if git diff --cached --quiet; then
             echo "main already at $VERSION, nothing to commit."
             exit 0

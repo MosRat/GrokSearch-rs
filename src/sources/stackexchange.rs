@@ -6,7 +6,7 @@ use url::Url;
 use crate::error::{GrokSearchError, Result};
 use crate::sources::{get_json, SourceCaps, SourceExtractor, SourceType};
 
-const UA: &str = "grok-search-rs/0.1 (https://github.com/Episkey-G/GrokSearch-rs)";
+const UA: &str = "grok-search-rs/0.1 (https://github.com/MosRat/GrokSearch-rs)";
 
 /// StackExchange API filter that adds `question.body_markdown` /
 /// `answer.body_markdown` on top of the `withbody` base. Without it the API only

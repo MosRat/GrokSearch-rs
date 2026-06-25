@@ -16,6 +16,15 @@
 .env
 .env.*
 !.env.example
+PypiSerects
+
+# Python packaging/build artifacts
+/python/build/
+/python/dist/
+/python/*.egg-info/
+/python/grok_search_rs/bin/grok-search-rs
+/python/grok_search_rs/bin/grok-search-rs.exe
+/python/**/__pycache__/
 
 # Agent planning scratch files
 /docs/superpowers/

@@ -7,7 +7,7 @@ use url::Url;
 use crate::error::{GrokSearchError, Result};
 use crate::sources::{get_json, SourceCaps, SourceExtractor, SourceType};
 
-const UA: &str = "grok-search-rs/0.1 (https://github.com/Episkey-G/GrokSearch-rs)";
+const UA: &str = "grok-search-rs/0.1 (https://github.com/MosRat/GrokSearch-rs)";
 
 const EXCLUDED_NS: &[&str] = &[
     "Special",
