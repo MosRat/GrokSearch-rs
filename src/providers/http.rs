@@ -1,4 +1,4 @@
-use reqwest::{Client, Response};
+use reqwest::{Client, ClientBuilder, Response};
 use serde_json::Value;
 use std::time::Duration;
 
@@ -10,14 +10,33 @@ use crate::error::{GrokSearchError, Result};
 /// builder errors (preserves prior behavior for tests that construct providers
 /// without env-driven config).
 pub fn build_client(timeout: Duration) -> Client {
+    build_client_direct(timeout)
+}
+
+pub fn build_client_direct(timeout: Duration) -> Client {
+    base_builder(timeout)
+        .no_proxy()
+        .build()
+        .unwrap_or_else(|_| Client::new())
+}
+
+pub fn build_client_with_proxy(timeout: Duration, proxy_url: &str) -> Result<Client> {
+    let proxy = reqwest::Proxy::all(proxy_url)
+        .map_err(|err| GrokSearchError::Provider(format!("invalid proxy URL: {err}")))?;
+    base_builder(timeout)
+        .no_proxy()
+        .proxy(proxy)
+        .build()
+        .map_err(|err| GrokSearchError::Provider(format!("build proxied HTTP client: {err}")))
+}
+
+fn base_builder(timeout: Duration) -> ClientBuilder {
     Client::builder()
         .timeout(timeout)
         .gzip(true)
         .pool_idle_timeout(Some(Duration::from_secs(90)))
         .tcp_keepalive(Some(Duration::from_secs(60)))
         .tcp_nodelay(true)
-        .build()
-        .unwrap_or_else(|_| Client::new())
 }
 
 /// Failure from [`post_json_with_status`]. `status` is the upstream HTTP

@@ -8,5 +8,6 @@ pub mod mcp;
 pub mod model;
 pub mod oauth;
 pub mod providers;
+pub mod proxy;
 pub mod service;
 pub mod sources;

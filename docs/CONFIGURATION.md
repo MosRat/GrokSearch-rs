@@ -83,7 +83,14 @@ GROK_SEARCH_WEB_SEARCH = "true"
 |---|---|---|
 | `GROK_SEARCH_CACHE_SIZE` | `256` | Maximum cached search sessions for `get_sources`. |
 | `GROK_SEARCH_TIMEOUT_SECONDS` | `60` | HTTP timeout for Grok, Tavily, and Firecrawl requests. |
+| `GROK_SEARCH_PROXY` | `auto` | Proxy mode. `auto` discovers environment/system proxies and uses one only after API reachability checks; `off` forces direct; a URL such as `http://127.0.0.1:7890` or `socks5://127.0.0.1:1080` forces that candidate. |
 | `GROK_SEARCH_FETCH_MAX_CHARS` | unset | Default character cap on `web_fetch` content. Overridden per call by `max_chars`. Unset means no truncation. |
+
+## Proxy
+
+Proxy discovery is cross-platform and conservative: environment variables win first (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, plus lowercase forms), then OS settings are considered. Windows reads the current user's Internet Settings, macOS parses `scutil --proxy`, and Linux checks GNOME `gsettings` before KDE's `kioslaverc`. `NO_PROXY` / `no_proxy` bypasses environment-discovered proxies for matching API hosts.
+
+`auto` never adopts a discovered proxy just because it exists. At startup, `grok-search-rs` probes the configured Grok/OpenAI-compatible, Tavily, and Firecrawl API bases with lightweight `HEAD` requests (falling back to `GET`); any HTTP response counts as network reachability. If the proxy path cannot reach all probeable APIs, the server falls back to direct connections and reports the decision in `doctor.proxy`. PAC/WPAD scripts are detected where possible but not executed.
 
 ## Source extraction
 
@@ -157,6 +164,7 @@ Unknown keys are rejected by the loader — typos surface as parse errors instea
 | `fetch_max_chars` | `GROK_SEARCH_FETCH_MAX_CHARS` |
 | `cache_size` | `GROK_SEARCH_CACHE_SIZE` |
 | `timeout_seconds` | `GROK_SEARCH_TIMEOUT_SECONDS` |
+| `proxy` | `GROK_SEARCH_PROXY` |
 | `github_token` | `GITHUB_TOKEN` |
 | `source_max_answers` | `GROK_SEARCH_SOURCE_MAX_ANSWERS` |
 | `source_max_comments` | `GROK_SEARCH_SOURCE_MAX_COMMENTS` |
@@ -201,4 +209,5 @@ fallback_sources      = 5
 fetch_max_chars       = 200000
 cache_size            = 256
 timeout_seconds       = 60
+proxy                 = "auto"
 ```

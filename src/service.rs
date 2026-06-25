@@ -16,6 +16,7 @@ use crate::model::tool::{GetSourcesOutput, WebFetchOutput, WebSearchInput, WebSe
 use crate::providers::firecrawl::FirecrawlProvider;
 use crate::providers::grok::GrokResponsesProvider;
 use crate::providers::tavily::TavilyProvider;
+use crate::proxy::ProxyDiagnostics;
 
 #[async_trait]
 pub trait AiProvider: Send + Sync {
@@ -109,13 +110,21 @@ pub struct SearchService {
     /// Specialist extractor router. Empty in Phase 1. Behind `Arc` so
     /// `SearchService: Clone` still holds (the router is not `Clone`).
     source_router: Arc<crate::sources::SourceRouter>,
+    proxy_diagnostics: ProxyDiagnostics,
 }
 
 impl SearchService {
     pub fn new(config: Config) -> Result<Self> {
-        use crate::config::Transport;
         let http = crate::providers::http::build_client(config.timeout);
+        Self::new_with_http(config, http, ProxyDiagnostics::default())
+    }
 
+    pub fn new_with_http(
+        config: Config,
+        http: reqwest::Client,
+        proxy_diagnostics: ProxyDiagnostics,
+    ) -> Result<Self> {
+        use crate::config::Transport;
         let ai: Arc<dyn AiProvider> = match config.transport {
             Transport::Responses => {
                 let credential: Arc<dyn crate::credentials::CredentialProvider> =
@@ -212,6 +221,7 @@ impl SearchService {
             fallback_sources,
             http_client: http.clone(),
             source_router,
+            proxy_diagnostics,
         })
     }
 
@@ -229,6 +239,7 @@ impl SearchService {
             fallback_sources: None,
             http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(crate::sources::SourceRouter::default()),
+            proxy_diagnostics: ProxyDiagnostics::default(),
         }
     }
 
@@ -271,6 +282,7 @@ impl SearchService {
             fallback_sources: fallback,
             http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(crate::sources::SourceRouter::default()),
+            proxy_diagnostics: ProxyDiagnostics::default(),
         }
     }
 
@@ -302,6 +314,7 @@ impl SearchService {
             fallback_sources: fallback,
             http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(router),
+            proxy_diagnostics: ProxyDiagnostics::default(),
         }
     }
 
@@ -730,6 +743,7 @@ impl SearchService {
             "cache_size": self.config.cache_size,
             "timeout_seconds": self.config.timeout.as_secs(),
             "github_token": self.config.github_token_status(),
+            "proxy": self.proxy_diagnostics.to_json(),
             "redacted": self.config.redacted_diagnostics()
         })
     }
@@ -1327,6 +1341,7 @@ mod transport_dispatch_tests {
             cache: Arc::new(Mutex::new(SourceCache::new(16))),
             http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(crate::sources::SourceRouter::default()),
+            proxy_diagnostics: ProxyDiagnostics::default(),
         };
 
         let report = svc.doctor().await;
@@ -1354,6 +1369,7 @@ mod transport_dispatch_tests {
             cache: Arc::new(Mutex::new(SourceCache::new(16))),
             http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(crate::sources::SourceRouter::default()),
+            proxy_diagnostics: ProxyDiagnostics::default(),
         };
 
         let report = svc.doctor().await;
@@ -1377,6 +1393,7 @@ mod transport_dispatch_tests {
             cache: Arc::new(Mutex::new(SourceCache::new(16))),
             http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(crate::sources::SourceRouter::default()),
+            proxy_diagnostics: ProxyDiagnostics::default(),
         };
         let report = svc.doctor().await;
         assert_eq!(report["github_token"], "set");
@@ -1397,9 +1414,45 @@ mod transport_dispatch_tests {
             cache: Arc::new(Mutex::new(SourceCache::new(16))),
             http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(crate::sources::SourceRouter::default()),
+            proxy_diagnostics: ProxyDiagnostics::default(),
         };
         let report_unset = svc_unset.doctor().await;
         assert_eq!(report_unset["github_token"], "unset");
+    }
+
+    #[tokio::test]
+    async fn doctor_reports_proxy_diagnostics_without_credentials() {
+        let config = Config::from_env_map([
+            ("GROK_SEARCH_API_KEY", "xai-fake"),
+            ("GROK_SEARCH_PROXY", "http://user:secret@127.0.0.1:7890"),
+        ]);
+        let svc = SearchService {
+            default_model: resolve_default_model(&config),
+            config,
+            ai: Arc::new(FakeAiProvider),
+            sources: None,
+            fallback_sources: None,
+            cache: Arc::new(Mutex::new(SourceCache::new(16))),
+            http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
+            source_router: Arc::new(crate::sources::SourceRouter::default()),
+            proxy_diagnostics: ProxyDiagnostics {
+                mode: "manual".to_string(),
+                status: "proxied".to_string(),
+                source: "manual".to_string(),
+                url_redacted: Some(crate::proxy::redact_proxy_url(
+                    "http://user:secret@127.0.0.1:7890",
+                )),
+                detail: "ok".to_string(),
+                checked_urls: vec!["https://api.x.ai/v1".to_string()],
+            },
+        };
+
+        let report = svc.doctor().await;
+        assert_eq!(report["proxy"]["status"], "proxied");
+        let rendered = report.to_string();
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("user:secret"));
+        assert!(!rendered.contains("secret@"));
     }
 
     #[tokio::test]
@@ -1562,6 +1615,7 @@ mod enrich_tests {
             cache: Arc::new(Mutex::new(SourceCache::new(64))),
             http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(router),
+            proxy_diagnostics: ProxyDiagnostics::default(),
         }
     }
 

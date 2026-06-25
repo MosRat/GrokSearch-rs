@@ -47,7 +47,9 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let service = grok_search_rs::service::SearchService::new(cfg)?;
+    let (http, proxy_diagnostics) = grok_search_rs::proxy::bootstrap(&cfg).await;
+    let service =
+        grok_search_rs::service::SearchService::new_with_http(cfg, http, proxy_diagnostics)?;
     grok_search_rs::mcp::run_stdio(service).await?;
     Ok(())
 }

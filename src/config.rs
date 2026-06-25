@@ -36,6 +36,7 @@ pub struct Config {
     pub fetch_max_chars: Option<usize>,
     pub cache_size: usize,
     pub timeout: Duration,
+    pub proxy: String,
     pub openai_compatible_api_url: Option<String>,
     pub openai_compatible_api_key: Option<String>,
     pub openai_compatible_model: Option<String>,
@@ -81,6 +82,7 @@ impl std::fmt::Debug for Config {
             .field("fetch_max_chars", &self.fetch_max_chars)
             .field("cache_size", &self.cache_size)
             .field("timeout", &self.timeout)
+            .field("proxy", &crate::proxy::redact_proxy_url(&self.proxy))
             .field("openai_compatible_api_url", &self.openai_compatible_api_url)
             .field(
                 "openai_compatible_api_key",
@@ -122,6 +124,7 @@ struct ConfigFile {
     fetch_max_chars: Option<usize>,
     cache_size: Option<usize>,
     timeout_seconds: Option<u64>,
+    proxy: Option<String>,
     openai_compatible_api_url: Option<String>,
     openai_compatible_api_key: Option<String>,
     openai_compatible_model: Option<String>,
@@ -186,6 +189,7 @@ impl ConfigFile {
             "GROK_SEARCH_TIMEOUT_SECONDS",
             self.timeout_seconds.map(|n| n.to_string()),
         );
+        insert("GROK_SEARCH_PROXY", self.proxy);
         insert("OPENAI_COMPATIBLE_API_URL", self.openai_compatible_api_url);
         insert("OPENAI_COMPATIBLE_API_KEY", self.openai_compatible_api_key);
         insert("OPENAI_COMPATIBLE_MODEL", self.openai_compatible_model);
@@ -293,6 +297,7 @@ impl Config {
             fetch_max_chars: optional_positive_usize(&map, "GROK_SEARCH_FETCH_MAX_CHARS"),
             cache_size: usize_value(&map, "GROK_SEARCH_CACHE_SIZE", 256),
             timeout: Duration::from_secs(u64_value(&map, "GROK_SEARCH_TIMEOUT_SECONDS", 60)),
+            proxy: get(&map, "GROK_SEARCH_PROXY", "auto"),
             openai_compatible_api_url: map
                 .get("OPENAI_COMPATIBLE_API_URL")
                 .cloned()
@@ -328,7 +333,7 @@ impl Config {
 
     pub fn redacted_diagnostics(&self) -> String {
         format!(
-            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} github_token={}",
+            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} proxy={} github_token={}",
             self.grok_api_url,
             redact(self.grok_api_key.as_deref()),
             self.grok_auth_mode,
@@ -344,6 +349,7 @@ impl Config {
             self.default_extra_sources,
             self.fallback_sources,
             self.timeout.as_secs(),
+            crate::proxy::redact_proxy_url(&self.proxy),
             self.github_token_status()
         )
     }
@@ -496,6 +502,7 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 # fetch_max_chars       = 200000      # per-request char cap on web_fetch
 # cache_size            = 256
 # timeout_seconds       = 60
+# proxy                = "auto"       # auto | off | http://127.0.0.1:7890
 # source_max_answers    = 5          # max answers rendered per StackExchange question
 # source_max_comments   = 30         # max comments per accepted answer
 # github_token          = "ghp_..."  # GitHub token (optional; anon = 60 req/hr)

@@ -19,6 +19,7 @@ fn config_reads_grok_search_responses_defaults() {
     assert_eq!(cfg.default_extra_sources, 3);
     assert_eq!(cfg.fallback_sources, 5);
     assert_eq!(cfg.timeout.as_secs(), 60);
+    assert_eq!(cfg.proxy, "auto");
     assert_eq!(cfg.grok_auth_mode, AuthMode::ApiKey);
 }
 
@@ -155,6 +156,16 @@ fn config_reads_timeout_seconds() {
 }
 
 #[test]
+fn config_reads_proxy_mode() {
+    let cfg = Config::from_env_map([
+        ("GROK_SEARCH_API_KEY", "grok-test-key"),
+        ("GROK_SEARCH_PROXY", "off"),
+    ]);
+
+    assert_eq!(cfg.proxy, "off");
+}
+
+#[test]
 fn invalid_source_counts_fall_back_to_safe_defaults() {
     let cfg = Config::from_env_map([
         ("GROK_SEARCH_API_KEY", "grok-test-key"),
@@ -179,6 +190,7 @@ grok_model   = "grok-5-test"
 tavily_api_key = "tvly-from-file"
 default_extra_sources = 7
 timeout_seconds = 42
+proxy = "http://file-user:file-pass@127.0.0.1:7890"
 "#,
     )
     .unwrap();
@@ -190,6 +202,7 @@ timeout_seconds = 42
     assert_eq!(cfg.tavily_api_key.as_deref(), Some("tvly-from-file"));
     assert_eq!(cfg.default_extra_sources, 7);
     assert_eq!(cfg.timeout.as_secs(), 42);
+    assert_eq!(cfg.proxy, "http://file-user:file-pass@127.0.0.1:7890");
 }
 
 #[test]
@@ -210,11 +223,13 @@ default_extra_sources = 7
         ("GROK_SEARCH_API_KEY", "grok-env-key".into()),
         ("GROK_SEARCH_MODEL", "model-from-env".into()),
         ("GROK_SEARCH_EXTRA_SOURCES", "2".into()),
+        ("GROK_SEARCH_PROXY", "off".into()),
     ]);
 
     assert_eq!(cfg.grok_model, "model-from-env");
     assert_eq!(cfg.default_extra_sources, 2);
     assert_eq!(cfg.grok_api_key.as_deref(), Some("grok-env-key"));
+    assert_eq!(cfg.proxy, "off");
 }
 
 #[test]
