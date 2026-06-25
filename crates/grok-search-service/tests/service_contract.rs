@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use grok_search_service::{AiProvider, SearchService, SourceProvider};
-use grok_search_sources::sources::{SourceCaps, SourceExtractor, SourceRouter, SourceType};
+use grok_search_source_core::{SourceCaps, SourceExtractor, SourceRouter, SourceType};
 use grok_search_types::model::search::{SearchFilters, SearchRequest, SearchResponse};
 use grok_search_types::model::source::Source;
 use grok_search_types::model::tool::WebSearchInput;
@@ -9,26 +9,13 @@ use reqwest::Client;
 use std::sync::{Arc, Mutex};
 use url::Url;
 
-#[test]
-fn service_requires_grok_search_api_key() {
-    let cfg = grok_search_config::Config::from_env_map([] as [(&str, &str); 0]);
-    let result = SearchService::new(cfg);
-
-    assert!(result.is_err());
-    assert!(result
-        .err()
-        .unwrap()
-        .to_string()
-        .contains("GROK_SEARCH_API_KEY"));
-}
-
 #[tokio::test]
 async fn web_search_returns_content_and_caches_sources() {
     let service = SearchService::fake_with_sources();
 
     let output = service
         .web_search(WebSearchInput {
-            query: "2026年5月14日 OpenAI 最新新闻 官方公告".to_string(),
+            query: "latest official OpenAI news".to_string(),
             platform: None,
             model: None,
             extra_sources: Some(2),
@@ -382,7 +369,7 @@ impl SourceExtractor for AlwaysEmptyExtractor {
     }
 }
 
-// Success criterion 2: always-Err specialist → graceful generic fallback.
+// Success criterion 2: always-Err specialist �?graceful generic fallback.
 #[tokio::test]
 async fn web_fetch_specialist_err_falls_back_to_generic() {
     let service = SearchService::fake_with_router(
@@ -401,7 +388,7 @@ async fn web_fetch_specialist_err_falls_back_to_generic() {
     assert!(output.fallback_reason.is_some()); // D-01: specialist matched then failed
 }
 
-// Success criterion 3: empty render → treated as failure → generic fallback.
+// Success criterion 3: empty render �?treated as failure �?generic fallback.
 #[tokio::test]
 async fn web_fetch_specialist_empty_render_falls_back_to_generic() {
     let service = SearchService::fake_with_router(
@@ -423,13 +410,13 @@ async fn web_fetch_specialist_empty_render_falls_back_to_generic() {
     assert!(reason.contains("empty render"), "got: {reason}");
 }
 
-// D-01: a no-match URL goes generic silently — no fallback_reason.
+// D-01: a no-match URL goes generic silently �?no fallback_reason.
 #[tokio::test]
 async fn web_fetch_no_specialist_match_has_no_fallback_reason() {
     let service = SearchService::fake_with_router(
         Arc::new(FailingSourceProvider),
         Some(Arc::new(FirecrawlLikeSourceProvider)),
-        SourceRouter::default(), // empty router → never matches
+        SourceRouter::default(), // empty router �?never matches
     );
 
     let output = service

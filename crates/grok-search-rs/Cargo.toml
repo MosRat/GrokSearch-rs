@@ -17,9 +17,10 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+mimalloc.workspace = true
 tokio.workspace = true
 grok-search-auth = { path = "../grok-search-auth" }
 grok-search-config = { path = "../grok-search-config" }
 grok-search-mcp = { path = "../grok-search-mcp" }
 grok-search-net = { path = "../grok-search-net" }
-grok-search-service = { path = "../grok-search-service" }
+grok-search-runtime = { path = "../grok-search-runtime" }

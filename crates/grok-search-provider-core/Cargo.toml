@@ -11,6 +11,7 @@ description = "Shared provider traits for GrokSearch-rs"
 [dependencies]
 async-trait.workspace = true
 grok-search-types = { path = "../grok-search-types" }
+serde_json.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

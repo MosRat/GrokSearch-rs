@@ -16,6 +16,11 @@ For a release-style local pass, use:
 scripts/check-workspace.sh
 ```
 
+On Linux, the release-build portion of that script uses
+`scripts/build-linux-release.sh`, which requires `zig` and `cargo-zigbuild` and
+builds static musl binaries for `x86_64-unknown-linux-musl` and
+`aarch64-unknown-linux-musl`.
+
 ## Targeted Tests
 
 Each crate owns the tests for its boundary. Prefer the narrowest command while
@@ -32,6 +37,7 @@ iterating, then run the workspace suite before committing.
 | Parse | `cargo test -p grok-search-parse` | identifier normalization, RRF/dedupe, OpenAlex abstracts, title normalization |
 | Content | `cargo test -p grok-search-content` | PDF validation, max byte guard, truncation |
 | Providers | `cargo test -p grok-search-providers` | Grok/OpenAI-compatible adapters, Tavily/Firecrawl parsing and key failover |
+| Runtime | `cargo test -p grok-search-runtime` | config-to-provider wiring and service assembly |
 | Sources | `cargo test -p grok-search-sources` | GitHub, StackExchange, arXiv, Wikipedia rendering |
 | Academic | `cargo test -p grok-search-academic` | academic provider parsing, merge behavior, identifier handling |
 | Service | `cargo test -p grok-search-service` | orchestration, fallback, enrichment, budgets, doctor |

@@ -1,0 +1,24 @@
+[package]
+name = "grok-search-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Runtime wiring for GrokSearch-rs"
+
+[dependencies]
+grok-search-academic = { path = "../grok-search-academic" }
+grok-search-auth = { path = "../grok-search-auth" }
+grok-search-config = { path = "../grok-search-config" }
+grok-search-net = { path = "../grok-search-net" }
+grok-search-provider-core = { path = "../grok-search-provider-core" }
+grok-search-providers = { path = "../grok-search-providers" }
+grok-search-service = { path = "../grok-search-service" }
+grok-search-sources = { path = "../grok-search-sources" }
+grok-search-types = { path = "../grok-search-types" }
+reqwest.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

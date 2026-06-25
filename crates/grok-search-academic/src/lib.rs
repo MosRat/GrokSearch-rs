@@ -1,3 +1,4 @@
+mod providers;
 mod service;
 
 pub use grok_search_provider_core::{

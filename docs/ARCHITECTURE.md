@@ -6,13 +6,18 @@ GrokSearch-rs is a Rust MCP server that keeps the original GrokSearch product bo
 MCP client
   -> crates/grok-search-rs       CLI and stdio entrypoint
       -> crates/grok-search-mcp  rmcp server adapter and tool schemas
+      -> crates/grok-search-runtime
+          -> concrete runtime wiring from Config to providers, sources, academic service
       -> crates/grok-search-service
-          -> crates/grok-search-auth     static API key or xAI OAuth token
-          -> crates/grok-search-net      reqwest clients, proxy bootstrap, key rotation
           -> crates/grok-search-provider-core
               -> shared AI/source/academic provider traits and capability errors
           -> crates/grok-search-source-core
               -> shared source extractor/router/caps abstractions
+          -> crates/grok-search-types    shared request/response/source/error models
+          -> source cache
+      -> implementation crates used only by runtime
+          -> crates/grok-search-auth     static API key or xAI OAuth token
+          -> crates/grok-search-net      reqwest clients, proxy bootstrap, key rotation
           -> crates/grok-search-parse
               -> shared identifiers, title normalization, OpenAlex abstract, RRF/dedupe helpers
           -> crates/grok-search-content
@@ -24,8 +29,6 @@ MCP client
               -> Firecrawl provider: search / scrape fallback
           -> crates/grok-search-academic  CS literature metadata, citations, full-text PDF parsing
           -> crates/grok-search-sources  specialist fetch/render extractors
-          -> crates/grok-search-types    shared request/response/source/error models
-          -> source cache
 ```
 
 ## Product Boundary
@@ -46,7 +49,7 @@ Academic providers are capability-based: dblp and Crossref are metadata-first, S
 
 ## Provider Layer
 
-Provider traits are defined in `grok-search-provider-core`. `grok-search-providers` implements the web-side providers (Grok/OpenAI-compatible/Tavily/Firecrawl), while `grok-search-academic` implements academic providers. `grok-search-service` depends on the traits and concrete crates only at the orchestration boundary.
+Provider traits are defined in `grok-search-provider-core`. `grok-search-providers` implements the web-side providers (Grok/OpenAI-compatible/Tavily/Firecrawl), while `grok-search-academic` implements academic providers. `grok-search-runtime` is the only crate that wires concrete implementations into the service; `grok-search-service` depends on abstractions and shared types only.
 
 The service builds an internal search request and sends one Responses payload:
 

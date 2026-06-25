@@ -7,7 +7,6 @@
 //!   cargo test --test integration_service -- --ignored --nocapture
 
 use grok_search_config::{Config, Transport};
-use grok_search_service::SearchService;
 use grok_search_types::model::tool::WebSearchInput;
 
 #[tokio::test(flavor = "current_thread")]
@@ -27,7 +26,7 @@ async fn full_service_web_search_via_chat_completions() {
     ]);
     assert_eq!(config.transport, Transport::ChatCompletions);
 
-    let svc = SearchService::new(config).expect("service");
+    let svc = grok_search_runtime::new(config).expect("service");
     let out = svc
         .web_search(WebSearchInput {
             query: "What date did xAI release Grok 4.1 Fast? Answer with a citation.".into(),

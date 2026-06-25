@@ -5,14 +5,12 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::cache::SourceCache;
-use grok_search_academic::AcademicService;
-use grok_search_auth::{OAuthCredential, StaticApiKeyCredential};
 use grok_search_config::{AuthMode, Config};
 use grok_search_net::proxy::ProxyDiagnostics;
-pub use grok_search_provider_core::{AiProvider, SourceProvider};
-use grok_search_providers::providers::firecrawl::FirecrawlProvider;
-use grok_search_providers::providers::grok::GrokResponsesProvider;
-use grok_search_providers::providers::tavily::TavilyProvider;
+pub use grok_search_provider_core::{AcademicServiceProvider, AiProvider, SourceProvider};
+use grok_search_source_core::{
+    resolve_content, SourceCaps, SourceRouter, SourceType, NO_SPECIALIST_MATCH,
+};
 use grok_search_types::model::search::{
     ContentBlock, SearchFilters, SearchMessage, SearchRequest, SearchResponse, SearchTool,
 };
@@ -45,125 +43,37 @@ pub struct SearchService {
     http_client: reqwest::Client,
     /// Specialist extractor router. Empty in Phase 1. Behind `Arc` so
     /// `SearchService: Clone` still holds (the router is not `Clone`).
-    source_router: Arc<grok_search_sources::sources::SourceRouter>,
+    source_router: Arc<SourceRouter>,
     proxy_diagnostics: ProxyDiagnostics,
-    academic: Option<AcademicService>,
+    academic: Option<Arc<dyn AcademicServiceProvider>>,
+}
+
+pub struct SearchServiceParts {
+    pub config: Config,
+    pub ai: Arc<dyn AiProvider>,
+    pub sources: Option<Arc<dyn SourceProvider>>,
+    pub fallback_sources: Option<Arc<dyn SourceProvider>>,
+    pub http_client: reqwest::Client,
+    pub source_router: SourceRouter,
+    pub proxy_diagnostics: ProxyDiagnostics,
+    pub academic: Option<Arc<dyn AcademicServiceProvider>>,
 }
 
 impl SearchService {
-    pub fn new(config: Config) -> Result<Self> {
-        let http = grok_search_net::http::build_client(config.timeout);
-        Self::new_with_http(config, http, ProxyDiagnostics::default())
-    }
-
-    pub fn new_with_http(
-        config: Config,
-        http: reqwest::Client,
-        proxy_diagnostics: ProxyDiagnostics,
-    ) -> Result<Self> {
-        use grok_search_config::Transport;
-        let ai: Arc<dyn AiProvider> = match config.transport {
-            Transport::Responses => {
-                let credential: Arc<dyn grok_search_auth::CredentialProvider> =
-                    match config.grok_auth_mode {
-                        AuthMode::ApiKey => Arc::new(StaticApiKeyCredential::new(
-                            config
-                                .grok_api_key
-                                .clone()
-                                .ok_or(GrokSearchError::MissingConfig("GROK_SEARCH_API_KEY"))?,
-                        )),
-                        AuthMode::OAuth => {
-                            let auth_path = config
-                                .grok_auth_file
-                                .clone()
-                                .or_else(grok_search_config::auth_path)
-                                .ok_or_else(|| {
-                                    GrokSearchError::OAuth(
-                                        "oauth_auth_path_unavailable: set GROK_SEARCH_AUTH_FILE"
-                                            .to_string(),
-                                    )
-                                })?;
-                            Arc::new(OAuthCredential::new(http.clone(), auth_path))
-                        }
-                    };
-                Arc::new(GrokResponsesProvider::with_credential_client(
-                    http.clone(),
-                    config.grok_api_url.clone(),
-                    credential,
-                    config.web_search_enabled,
-                    config.x_search_enabled,
-                ))
-            }
-            Transport::ChatCompletions => {
-                let url = config
-                    .openai_compatible_api_url
-                    .clone()
-                    .ok_or(GrokSearchError::MissingConfig("OPENAI_COMPATIBLE_API_URL"))?;
-                let key = config
-                    .openai_compatible_api_key
-                    .clone()
-                    .ok_or(GrokSearchError::MissingConfig("OPENAI_COMPATIBLE_API_KEY"))?;
-                let model = config
-                    .openai_compatible_model
-                    .clone()
-                    .unwrap_or_else(|| config.grok_model.clone());
-                if config.x_search_enabled {
-                    eprintln!(
-                        "grok-search-rs: x_search_enabled is ignored when using OPENAI_COMPATIBLE_* transport"
-                    );
-                }
-                Arc::new(
-                    grok_search_providers::providers::openai_compatible::OpenAICompatProvider::with_client(
-                        http.clone(),
-                        url,
-                        key,
-                        model,
-                        config.web_search_enabled,
-                    ),
-                )
-            }
-        };
-
-        let sources = if config.tavily_enabled {
-            config.tavily_api_key.clone().map(|key| {
-                Arc::new(TavilyProvider::with_client(
-                    http.clone(),
-                    config.tavily_api_url.clone(),
-                    key,
-                )) as Arc<dyn SourceProvider>
-            })
-        } else {
-            None
-        };
-
-        let fallback_sources = if config.firecrawl_enabled {
-            config.firecrawl_api_key.clone().map(|key| {
-                Arc::new(FirecrawlProvider::with_client(
-                    http.clone(),
-                    config.firecrawl_api_url.clone(),
-                    key,
-                )) as Arc<dyn SourceProvider>
-            })
-        } else {
-            None
-        };
-
-        let source_router = Arc::new(grok_search_sources::sources::router_from_config(&config));
-        let academic = config
-            .academic_enabled
-            .then(|| AcademicService::new(http.clone(), config.clone()));
-        Ok(Self {
+    pub fn from_parts(parts: SearchServiceParts) -> Self {
+        let config = parts.config;
+        Self {
             cache: Arc::new(Mutex::new(SourceCache::new(config.cache_size))),
             default_model: resolve_default_model(&config),
             config: config.clone(),
-            ai,
-            sources,
-            fallback_sources,
-            http_client: http.clone(),
-            source_router,
-            proxy_diagnostics,
-            academic,
-        })
+            ai: parts.ai,
+            sources: parts.sources,
+            fallback_sources: parts.fallback_sources,
+            http_client: parts.http_client,
+            source_router: Arc::new(parts.source_router),
+            proxy_diagnostics: parts.proxy_diagnostics,
+            academic: parts.academic,
+        }
     }
 
     pub fn fake_with_sources() -> Self {
@@ -179,14 +89,9 @@ impl SearchService {
             sources: Some(Arc::new(FakeSourceProvider)),
             fallback_sources: None,
             http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
-            source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
+            source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
-            academic: config.academic_enabled.then(|| {
-                AcademicService::new(
-                    grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
-                    config.clone(),
-                )
-            }),
+            academic: None,
         }
     }
 
@@ -228,24 +133,19 @@ impl SearchService {
             sources: Some(primary),
             fallback_sources: fallback,
             http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
-            source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
+            source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
-            academic: config.academic_enabled.then(|| {
-                AcademicService::new(
-                    grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
-                    config.clone(),
-                )
-            }),
+            academic: None,
         }
     }
 
-    /// Test factory that injects a populated [`grok_search_sources::sources::SourceRouter`] so
+    /// Test factory that injects a populated [`SourceRouter`] so
     /// fallback behavior can be exercised with fake extractors. Mirrors
     /// `fake_custom`'s provider wiring.
     pub fn fake_with_router(
         primary: Arc<dyn SourceProvider>,
         fallback: Option<Arc<dyn SourceProvider>>,
-        router: grok_search_sources::sources::SourceRouter,
+        router: SourceRouter,
     ) -> Self {
         let mut vars = vec![
             ("GROK_SEARCH_API_KEY".to_string(), "fake-grok".to_string()),
@@ -268,12 +168,7 @@ impl SearchService {
             http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(router),
             proxy_diagnostics: ProxyDiagnostics::default(),
-            academic: config.academic_enabled.then(|| {
-                AcademicService::new(
-                    grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
-                    config.clone(),
-                )
-            }),
+            academic: None,
         }
     }
 
@@ -374,7 +269,7 @@ impl SearchService {
                 deadline,
                 &self.http_client,
                 &self.source_router,
-                grok_search_sources::sources::SourceCaps {
+                SourceCaps {
                     max_answers: self.config.source_max_answers,
                     max_comments: self.config.source_max_comments,
                 },
@@ -464,7 +359,7 @@ impl SearchService {
         fallback.truncate(self.config.fallback_sources);
         let fallback = with_provider(fallback, fallback_label(raw_origin));
 
-        // D-03: the degraded path enriches eagerly — one-hand evidence is most
+        // D-03: the degraded path enriches eagerly �?one-hand evidence is most
         // valuable when there is no verifiable summary, so there is no
         // extra_sources gate here (that gate is the normal web_search path's
         // concern, SRCH-04). The one exception is an explicit include_content=false
@@ -476,7 +371,7 @@ impl SearchService {
                 deadline,
                 &self.http_client,
                 &self.source_router,
-                grok_search_sources::sources::SourceCaps {
+                SourceCaps {
                     max_answers: self.config.source_max_answers,
                     max_comments: self.config.source_max_comments,
                 },
@@ -572,47 +467,35 @@ impl SearchService {
 
         let (content, source_type, fallback_reason) = match url::Url::parse(url) {
             Ok(parsed) => {
-                match grok_search_sources::sources::resolve_content(
+                match resolve_content(
                     &self.http_client,
                     &parsed,
                     self.source_router.as_ref(),
-                    &grok_search_sources::sources::SourceCaps {
+                    &SourceCaps {
                         max_answers: self.config.source_max_answers,
                         max_comments: self.config.source_max_comments,
                     },
                 )
                 .await
                 {
-                    // Specialist succeeded — keep its content and source type.
+                    // Specialist succeeded �?keep its content and source type.
                     Ok((content, kind)) => (content, kind, None),
                     // No specialist matched: go generic silently (D-01).
-                    Err(reason) if reason == grok_search_sources::sources::NO_SPECIALIST_MATCH => {
+                    Err(reason) if reason == NO_SPECIALIST_MATCH => {
                         let generic = self.web_fetch_raw(url).await?;
-                        (
-                            generic,
-                            grok_search_sources::sources::SourceType::Generic,
-                            None,
-                        )
+                        (generic, SourceType::Generic, None)
                     }
                     // Specialist matched but failed/empty: surface the reason (D-01).
                     Err(reason) => {
                         let generic = self.web_fetch_raw(url).await?;
-                        (
-                            generic,
-                            grok_search_sources::sources::SourceType::Generic,
-                            Some(reason),
-                        )
+                        (generic, SourceType::Generic, Some(reason))
                     }
                 }
             }
-            // Malformed URL is not a specialist failure — go generic, no reason.
+            // Malformed URL is not a specialist failure �?go generic, no reason.
             Err(_) => {
                 let generic = self.web_fetch_raw(url).await?;
-                (
-                    generic,
-                    grok_search_sources::sources::SourceType::Generic,
-                    None,
-                )
+                (generic, SourceType::Generic, None)
             }
         };
 
@@ -677,10 +560,13 @@ impl SearchService {
             .await
     }
 
-    fn academic_service(&self) -> Result<&AcademicService> {
-        self.academic.as_ref().ok_or(GrokSearchError::MissingConfig(
-            "GROK_SEARCH_ACADEMIC_ENABLED",
-        ))
+    fn academic_service(&self) -> Result<&dyn AcademicServiceProvider> {
+        self.academic
+            .as_ref()
+            .map(|service| service.as_ref())
+            .ok_or(GrokSearchError::MissingConfig(
+                "GROK_SEARCH_ACADEMIC_ENABLED",
+            ))
     }
 
     /// Runtime diagnostics with live connectivity probes against each configured backend.
@@ -701,7 +587,7 @@ impl SearchService {
         // doctor() stays truthful when callers point us at an OpenAI-compatible
         // gateway. The legacy "grok" node name is preserved for backward
         // compatibility, but its fields are now sourced from `default_model`
-        // and the transport-appropriate API URL — never silently from
+        // and the transport-appropriate API URL �?never silently from
         // `grok_model` / `grok_api_url` on the chat-completions path.
         let (provider_label, ai_api_url, ai_x_search_enabled) = match self.config.transport {
             Transport::Responses => (
@@ -764,7 +650,7 @@ impl SearchService {
             "academic": self
                 .academic
                 .as_ref()
-                .map(AcademicService::diagnostics)
+                .map(|academic| academic.diagnostics())
                 .unwrap_or_else(|| serde_json::json!({ "enabled": false })),
             "redacted": self.config.redacted_diagnostics()
         })
@@ -855,7 +741,7 @@ enum RawSourceOrigin {
 /// whatever `OPENAI_COMPATIBLE_MODEL` declares, falling back to `grok_model`
 /// only when the operator hasn't set one. Resolved once at service
 /// construction so every outgoing `SearchRequest` carries the right default
-/// — preventing the chat path from silently shipping a Grok-only ID.
+/// �?preventing the chat path from silently shipping a Grok-only ID.
 fn resolve_default_model(config: &Config) -> String {
     use grok_search_config::Transport;
     match config.transport {
@@ -911,7 +797,7 @@ fn apply_fetch_limit(
     url: &str,
     mut content: String,
     max_chars: Option<usize>,
-    source_type: grok_search_sources::sources::SourceType,
+    source_type: SourceType,
     fallback_reason: Option<String>,
 ) -> WebFetchOutput {
     let Some(limit) = max_chars else {
@@ -988,10 +874,10 @@ async fn generic_source_fetch(
 /// Concurrently back-fill `Source.content` for the first `max_sources` sources
 /// via the Phase 1 `resolve_content` pipeline; later sources stay
 /// metadata-only (content = None) so a Grok response with dozens of citations
-/// cannot blow up the payload — agents drill into them with `web_fetch`.
+/// cannot blow up the payload �?agents drill into them with `web_fetch`.
 /// Bounded by `concurrency` (Semaphore) and the shared `deadline` (D-02:
 /// per-source `timeout_at`, not an independent budget). Every enriched source
-/// ends with `content = Some(..)` — real markdown (truncated to `max_chars`)
+/// ends with `content = Some(..)` �?real markdown (truncated to `max_chars`)
 /// on success, or a deterministic `_Failed to retrieve: ..._` note on any
 /// failure/timeout/invalid-url (D-05 within the inline window: never None,
 /// never empty). Source order is preserved.
@@ -1000,8 +886,8 @@ async fn enrich_sources(
     sources: Vec<Source>,
     deadline: tokio::time::Instant,
     client: &reqwest::Client,
-    router: &Arc<grok_search_sources::sources::SourceRouter>,
-    caps: grok_search_sources::sources::SourceCaps,
+    router: &Arc<SourceRouter>,
+    caps: SourceCaps,
     concurrency: usize,
     max_chars: usize,
     max_sources: usize,
@@ -1029,15 +915,13 @@ async fn enrich_sources(
                     "_Failed to retrieve: invalid_url_\n\nSource: {url_str}"
                 )),
                 Ok(parsed) => {
-                    let future = grok_search_sources::sources::resolve_content(
-                        &client, &parsed, &router, &caps,
-                    );
+                    let future = resolve_content(&client, &parsed, &router, &caps);
                     match tokio::time::timeout_at(deadline, future).await {
                         Ok(Ok((md, _kind))) => {
                             let truncated: String = md.chars().take(max_chars).collect();
                             Some(truncated)
                         }
-                        // Specialist produced no content — either no specialist
+                        // Specialist produced no content �?either no specialist
                         // matched (generic URL) OR a matched specialist's API
                         // failed/rate-limited/rendered empty. Either way, mirror
                         // web_fetch and try the configured Tavily/Firecrawl generic
@@ -1087,7 +971,7 @@ async fn enrich_sources(
 
 /// Approximate serialized footprint of one source: every metadata field plus
 /// inline content plus a fixed allowance for JSON keys/quotes/separators. The
-/// budget must track what actually lands in the agent's context — a broad
+/// budget must track what actually lands in the agent's context �?a broad
 /// query where Grok cites 50+ pages overflows on metadata alone, so counting
 /// only inline content under-reports the payload.
 fn source_weight(source: &Source) -> usize {
@@ -1111,7 +995,7 @@ fn source_weight(source: &Source) -> usize {
 /// first) survive intact. Two passes:
 ///
 /// 1. Replace tail inline content with an actionable note naming `web_fetch`
-///    and `get_sources` — the official MCP fetch server's "call again with
+///    and `get_sources` �?the official MCP fetch server's "call again with
 ///    start_index" guidance, applied to sources.
 /// 2. Still over budget (metadata overflow): drop whole tail sources from the
 ///    returned list, always keeping at least one.
@@ -1142,7 +1026,7 @@ fn apply_response_budget(
         let url = sources[idx].url.clone();
         let note = |verb: &str| {
             format!(
-                "_[{verb}: response budget reached — full text via web_fetch(\"{url}\") or get_sources(session_id=\"{session_id}\", offset={idx}, limit=1)]_"
+                "_[{verb}: response budget reached �?full text via web_fetch(\"{url}\") or get_sources(session_id=\"{session_id}\", offset={idx}, limit=1)]_"
             )
         };
         let omit_note = note("inline content omitted");
@@ -1173,7 +1057,7 @@ fn apply_response_budget(
         }
     }
 
-    // Pass 2: metadata alone still over budget — cut whole tail sources.
+    // Pass 2: metadata alone still over budget �?cut whole tail sources.
     // They stay in the cache; get_sources(offset=..) pages through them.
     while total > budget && sources.len() > 1 {
         let dropped = sources.pop().expect("len > 1");
@@ -1273,665 +1157,5 @@ impl SourceProvider for FakeSourceProvider {
 }
 
 #[cfg(test)]
-mod transport_dispatch_tests {
-    use super::*;
-    use grok_search_config::Transport;
-
-    #[test]
-    fn service_constructs_for_chat_completions_transport() {
-        let config = Config::from_env_map([
-            ("OPENAI_COMPATIBLE_API_URL", "https://example.com/v1"),
-            ("OPENAI_COMPATIBLE_API_KEY", "sk-fake"),
-            ("OPENAI_COMPATIBLE_MODEL", "grok-4.3-fast"),
-            ("TAVILY_API_KEY", "fake-tavily"),
-        ]);
-        assert_eq!(config.transport, Transport::ChatCompletions);
-        let svc = SearchService::new(config).expect("service should build");
-        // Smoke: just ensure construction doesn't blow up. The actual provider
-        // type is hidden behind Arc<dyn AiProvider>; we verify behavior in the
-        // ignored e2e probe (Task 7) and adapter unit tests (Tasks 3-4).
-        drop(svc);
-    }
-
-    #[test]
-    fn service_rejects_chat_completions_without_url() {
-        let config = Config::from_env_map([("OPENAI_COMPATIBLE_API_KEY", "sk-fake")]);
-        // url missing -> falls back to Responses transport, which then needs
-        // GROK_SEARCH_API_KEY which is also missing -> MissingConfig.
-        assert!(SearchService::new(config).is_err());
-    }
-
-    #[test]
-    fn default_model_follows_chat_completions_when_compat_model_set() {
-        // Reproduces the regression: SearchService::build_search_request used
-        // to stamp `grok_model` into every SearchRequest, masking
-        // OPENAI_COMPATIBLE_MODEL on the chat-completions transport.
-        let config = Config::from_env_map([
-            ("OPENAI_COMPATIBLE_API_URL", "https://example.com/v1"),
-            ("OPENAI_COMPATIBLE_API_KEY", "sk-fake"),
-            ("OPENAI_COMPATIBLE_MODEL", "gpt-4o-mini"),
-            ("GROK_SEARCH_MODEL", "grok-4-1-fast-reasoning"),
-        ]);
-        assert_eq!(config.transport, Transport::ChatCompletions);
-        assert_eq!(resolve_default_model(&config), "gpt-4o-mini");
-    }
-
-    #[test]
-    fn default_model_falls_back_to_grok_model_when_compat_model_missing() {
-        let config = Config::from_env_map([
-            ("OPENAI_COMPATIBLE_API_URL", "https://example.com/v1"),
-            ("OPENAI_COMPATIBLE_API_KEY", "sk-fake"),
-            ("GROK_SEARCH_MODEL", "grok-4-1-fast-reasoning"),
-        ]);
-        assert_eq!(config.transport, Transport::ChatCompletions);
-        assert_eq!(resolve_default_model(&config), "grok-4-1-fast-reasoning");
-    }
-
-    #[test]
-    fn default_model_uses_grok_model_on_responses_transport() {
-        let config = Config::from_env_map([
-            ("GROK_SEARCH_API_KEY", "xai-fake"),
-            ("GROK_SEARCH_MODEL", "grok-4-1-fast-reasoning"),
-            ("OPENAI_COMPATIBLE_MODEL", "gpt-4o-mini"),
-        ]);
-        assert_eq!(config.transport, Transport::Responses);
-        assert_eq!(resolve_default_model(&config), "grok-4-1-fast-reasoning");
-    }
-
-    #[tokio::test]
-    async fn doctor_reports_openai_compatible_transport_fields() {
-        // Regression: doctor() used to hardcode "grok_responses" / grok_model /
-        // grok_api_url, masking what the service actually dispatches to on the
-        // chat-completions transport. Now it must reflect compat config.
-        let config = Config::from_env_map([
-            ("OPENAI_COMPATIBLE_API_URL", "https://compat.example/v1"),
-            ("OPENAI_COMPATIBLE_API_KEY", "sk-fake"),
-            ("OPENAI_COMPATIBLE_MODEL", "gpt-4o-mini"),
-            ("GROK_SEARCH_MODEL", "grok-4-1-fast-reasoning"),
-            // X-search is silently ignored on this transport — doctor must
-            // report the effective behavior (false), not the raw env flag.
-            ("GROK_SEARCH_X_SEARCH", "true"),
-        ]);
-        assert_eq!(config.transport, Transport::ChatCompletions);
-
-        // Hand-build the service with fake AI to avoid any real HTTP from
-        // probe_grok during doctor().
-        let svc = SearchService {
-            default_model: resolve_default_model(&config),
-            config,
-            ai: Arc::new(FakeAiProvider),
-            sources: None,
-            fallback_sources: None,
-            cache: Arc::new(Mutex::new(SourceCache::new(16))),
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
-            source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
-            proxy_diagnostics: ProxyDiagnostics::default(),
-            academic: None,
-        };
-
-        let report = svc.doctor().await;
-        assert_eq!(report["provider"], "openai_compatible");
-        assert_eq!(report["transport"], "openai_compatible");
-        assert_eq!(report["grok"]["api_url"], "https://compat.example/v1");
-        assert_eq!(report["grok"]["model"], "gpt-4o-mini");
-        assert_eq!(report["grok"]["x_search_enabled"], false);
-    }
-
-    #[tokio::test]
-    async fn doctor_still_reports_grok_responses_on_responses_transport() {
-        let config = Config::from_env_map([
-            ("GROK_SEARCH_API_KEY", "xai-fake"),
-            ("GROK_SEARCH_MODEL", "grok-4-1-fast-reasoning"),
-        ]);
-        assert_eq!(config.transport, Transport::Responses);
-
-        let svc = SearchService {
-            default_model: resolve_default_model(&config),
-            config,
-            ai: Arc::new(FakeAiProvider),
-            sources: None,
-            fallback_sources: None,
-            cache: Arc::new(Mutex::new(SourceCache::new(16))),
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
-            source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
-            proxy_diagnostics: ProxyDiagnostics::default(),
-            academic: None,
-        };
-
-        let report = svc.doctor().await;
-        assert_eq!(report["provider"], "grok_responses");
-        assert_eq!(report["grok"]["model"], "grok-4-1-fast-reasoning");
-    }
-
-    #[tokio::test]
-    async fn doctor_reports_github_token_status() {
-        // With GITHUB_TOKEN set -> "set", and the raw value never leaks.
-        let config = Config::from_env_map([
-            ("GROK_SEARCH_API_KEY", "xai-fake"),
-            ("GITHUB_TOKEN", "ghp_test"),
-        ]);
-        let svc = SearchService {
-            default_model: resolve_default_model(&config),
-            config,
-            ai: Arc::new(FakeAiProvider),
-            sources: None,
-            fallback_sources: None,
-            cache: Arc::new(Mutex::new(SourceCache::new(16))),
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
-            source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
-            proxy_diagnostics: ProxyDiagnostics::default(),
-            academic: None,
-        };
-        let report = svc.doctor().await;
-        assert_eq!(report["github_token"], "set");
-        // No-leak: the full report must not contain the token value anywhere.
-        assert!(
-            !report.to_string().contains("ghp_test"),
-            "token value leaked into doctor report: {report}"
-        );
-
-        // Without GITHUB_TOKEN -> "unset".
-        let config_unset = Config::from_env_map([("GROK_SEARCH_API_KEY", "xai-fake")]);
-        let svc_unset = SearchService {
-            default_model: resolve_default_model(&config_unset),
-            config: config_unset,
-            ai: Arc::new(FakeAiProvider),
-            sources: None,
-            fallback_sources: None,
-            cache: Arc::new(Mutex::new(SourceCache::new(16))),
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
-            source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
-            proxy_diagnostics: ProxyDiagnostics::default(),
-            academic: None,
-        };
-        let report_unset = svc_unset.doctor().await;
-        assert_eq!(report_unset["github_token"], "unset");
-    }
-
-    #[tokio::test]
-    async fn doctor_reports_proxy_diagnostics_without_credentials() {
-        let config = Config::from_env_map([
-            ("GROK_SEARCH_API_KEY", "xai-fake"),
-            ("GROK_SEARCH_PROXY", "http://user:secret@127.0.0.1:7890"),
-        ]);
-        let svc = SearchService {
-            default_model: resolve_default_model(&config),
-            config,
-            ai: Arc::new(FakeAiProvider),
-            sources: None,
-            fallback_sources: None,
-            cache: Arc::new(Mutex::new(SourceCache::new(16))),
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
-            source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
-            proxy_diagnostics: ProxyDiagnostics {
-                mode: "manual".to_string(),
-                status: "proxied".to_string(),
-                source: "manual".to_string(),
-                url_redacted: Some(grok_search_net::proxy::redact_proxy_url(
-                    "http://user:secret@127.0.0.1:7890",
-                )),
-                detail: "ok".to_string(),
-                checked_urls: vec!["https://api.x.ai/v1".to_string()],
-            },
-            academic: None,
-        };
-
-        let report = svc.doctor().await;
-        assert_eq!(report["proxy"]["status"], "proxied");
-        let rendered = report.to_string();
-        assert!(rendered.contains("***"));
-        assert!(!rendered.contains("user:secret"));
-        assert!(!rendered.contains("secret@"));
-    }
-
-    #[tokio::test]
-    async fn fake_with_router_constructs_and_clones() {
-        let svc = SearchService::fake_with_router(
-            Arc::new(FakeSourceProvider),
-            None,
-            grok_search_sources::sources::SourceRouter::default(),
-        );
-        // SearchService derives Clone; storing Arc<SourceRouter> must preserve it.
-        let _clone = svc.clone();
-    }
-}
-
-#[cfg(test)]
-mod enrich_tests {
-    use super::*;
-    use grok_search_sources::sources::{SourceCaps, SourceExtractor, SourceRouter, SourceType};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
-    use url::Url;
-
-    /// Always-matching extractor that records peak concurrency and returns a
-    /// fixed body after a visibility sleep.
-    struct CountingExtractor {
-        peak: Arc<AtomicUsize>,
-        current: Arc<AtomicUsize>,
-        sleep_ms: u64,
-    }
-    #[async_trait]
-    impl SourceExtractor for CountingExtractor {
-        fn matches(&self, _url: &Url) -> bool {
-            true
-        }
-        fn kind(&self) -> SourceType {
-            SourceType::Wikipedia
-        }
-        async fn fetch_render(
-            &self,
-            _c: &reqwest::Client,
-            _u: &Url,
-            _caps: &SourceCaps,
-        ) -> Result<String> {
-            let n = self.current.fetch_add(1, Ordering::SeqCst) + 1;
-            self.peak.fetch_max(n, Ordering::SeqCst);
-            tokio::time::sleep(Duration::from_millis(self.sleep_ms)).await;
-            self.current.fetch_sub(1, Ordering::SeqCst);
-            Ok("content".to_string())
-        }
-    }
-
-    /// URL-discriminating failure extractor: matches ONLY urls containing
-    /// `fail_url_marker`, so a router can route one source here and the rest to
-    /// CountingExtractor (true fault isolation).
-    struct MarkerErrExtractor {
-        fail_url_marker: String,
-    }
-    #[async_trait]
-    impl SourceExtractor for MarkerErrExtractor {
-        fn matches(&self, url: &Url) -> bool {
-            url.as_str().contains(&self.fail_url_marker)
-        }
-        fn kind(&self) -> SourceType {
-            SourceType::GithubIssue
-        }
-        async fn fetch_render(
-            &self,
-            _c: &reqwest::Client,
-            _u: &Url,
-            _caps: &SourceCaps,
-        ) -> Result<String> {
-            Err(grok_search_types::GrokSearchError::Provider(
-                "always_fails".to_string(),
-            ))
-        }
-    }
-
-    /// Returns an oversized body to exercise the per-source char cap.
-    struct OversizeExtractor {
-        len: usize,
-    }
-    #[async_trait]
-    impl SourceExtractor for OversizeExtractor {
-        fn matches(&self, _url: &Url) -> bool {
-            true
-        }
-        fn kind(&self) -> SourceType {
-            SourceType::Wikipedia
-        }
-        async fn fetch_render(
-            &self,
-            _c: &reqwest::Client,
-            _u: &Url,
-            _caps: &SourceCaps,
-        ) -> Result<String> {
-            Ok("x".repeat(self.len))
-        }
-    }
-
-    /// Hangs far past any test deadline — used to trigger the timeout note.
-    struct HangingExtractor;
-    #[async_trait]
-    impl SourceExtractor for HangingExtractor {
-        fn matches(&self, _url: &Url) -> bool {
-            true
-        }
-        fn kind(&self) -> SourceType {
-            SourceType::Wikipedia
-        }
-        async fn fetch_render(
-            &self,
-            _c: &reqwest::Client,
-            _u: &Url,
-            _caps: &SourceCaps,
-        ) -> Result<String> {
-            tokio::time::sleep(Duration::from_secs(3600)).await;
-            Ok("never".to_string())
-        }
-    }
-
-    /// Supplemental provider whose `search_sources` returns example.com sources
-    /// but whose generic `fetch` always errors — used to exercise the
-    /// "specialist failed AND generic fetch failed → note" path.
-    struct SearchOkFetchErrProvider;
-    #[async_trait]
-    impl SourceProvider for SearchOkFetchErrProvider {
-        async fn search_sources(
-            &self,
-            _query: &str,
-            max_results: usize,
-            _filters: &SearchFilters,
-        ) -> Result<Vec<Source>> {
-            Ok((0..max_results)
-                .map(|idx| Source::new(format!("https://example.com/source-{idx}"), "tavily"))
-                .collect())
-        }
-        async fn fetch(&self, _url: &str) -> Result<String> {
-            Err(grok_search_types::GrokSearchError::Provider(
-                "generic fetch unavailable".to_string(),
-            ))
-        }
-        async fn map(&self, _url: &str, _max_results: usize) -> Result<Vec<Source>> {
-            Ok(Vec::new())
-        }
-    }
-
-    /// Build a SearchService with fake AI + a caller-supplied supplemental
-    /// provider, router, and config. Mirrors the doctor_* struct-literal tests.
-    fn service_with_sources(
-        config: Config,
-        router: SourceRouter,
-        sources: Option<Arc<dyn SourceProvider>>,
-    ) -> SearchService {
-        SearchService {
-            default_model: resolve_default_model(&config),
-            config,
-            ai: Arc::new(FakeAiProvider),
-            sources,
-            fallback_sources: None,
-            cache: Arc::new(Mutex::new(SourceCache::new(64))),
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
-            source_router: Arc::new(router),
-            proxy_diagnostics: ProxyDiagnostics::default(),
-            academic: None,
-        }
-    }
-
-    fn service_with(config: Config, router: SourceRouter) -> SearchService {
-        service_with_sources(config, router, Some(Arc::new(FakeSourceProvider)))
-    }
-
-    fn enrich_config() -> Config {
-        Config::from_env_map([
-            ("GROK_SEARCH_API_KEY", "fake-grok"),
-            ("TAVILY_API_KEY", "fake-tavily"),
-        ])
-    }
-
-    fn base_input() -> WebSearchInput {
-        WebSearchInput {
-            query: "q".to_string(),
-            ..Default::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn counting_extractor_self_test() {
-        // Sanity: the helper itself records concurrency.
-        let peak = Arc::new(AtomicUsize::new(0));
-        let current = Arc::new(AtomicUsize::new(0));
-        let router = SourceRouter::with_extractors(vec![Box::new(CountingExtractor {
-            peak: Arc::clone(&peak),
-            current: Arc::clone(&current),
-            sleep_ms: 5,
-        })]);
-        let svc = service_with(enrich_config(), router);
-        let _ = svc.web_search(base_input()).await.expect("web_search");
-        assert!(peak.load(Ordering::SeqCst) >= 1);
-    }
-
-    #[tokio::test]
-    async fn web_search_inline_default_fills_content() {
-        let peak = Arc::new(AtomicUsize::new(0));
-        let current = Arc::new(AtomicUsize::new(0));
-        let router = SourceRouter::with_extractors(vec![Box::new(CountingExtractor {
-            peak,
-            current,
-            sleep_ms: 0,
-        })]);
-        let svc = service_with(enrich_config(), router);
-        let out = svc.web_search(base_input()).await.expect("web_search");
-
-        assert!(!out.sources.is_empty());
-        for s in &out.sources {
-            let c = s.content.as_deref().unwrap_or("");
-            assert!(!c.is_empty(), "every source must have non-empty content");
-        }
-    }
-
-    #[tokio::test]
-    async fn enrich_generic_url_uses_provider_fetch_fallback() {
-        // No specialist matches the supplemental URLs → inline enrichment must
-        // fall back to the configured source provider's generic fetch (mirroring
-        // web_fetch), not emit a `_Failed to retrieve: no_specialist_match_`
-        // note for ordinary search results (P1).
-        let svc = service_with(enrich_config(), SourceRouter::default());
-        let out = svc.web_search(base_input()).await.expect("web_search");
-
-        assert!(!out.sources.is_empty());
-        for s in &out.sources {
-            let c = s.content.as_deref().unwrap_or("");
-            assert!(
-                c.starts_with("Fetched content from"),
-                "generic source must use the provider fetch fallback, got: {c:?}"
-            );
-            assert!(
-                !c.contains("no_specialist_match"),
-                "must not leak the no_specialist_match note: {c:?}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn enrich_concurrency_is_bounded() {
-        let peak = Arc::new(AtomicUsize::new(0));
-        let current = Arc::new(AtomicUsize::new(0));
-        let router = SourceRouter::with_extractors(vec![Box::new(CountingExtractor {
-            peak: Arc::clone(&peak),
-            current: Arc::clone(&current),
-            sleep_ms: 25, // wide enough window for overlap to register
-        })]);
-        let mut config = enrich_config();
-        config.enrich_concurrency = 2;
-        let svc = service_with(config, router);
-
-        let _ = svc.web_search(base_input()).await.expect("web_search");
-        // 4 sources, concurrency 2 → peak must never exceed 2.
-        assert!(
-            peak.load(Ordering::SeqCst) <= 2,
-            "peak={}",
-            peak.load(Ordering::SeqCst)
-        );
-    }
-
-    #[tokio::test]
-    async fn enrich_truncates_to_max_chars() {
-        let router =
-            SourceRouter::with_extractors(vec![Box::new(OversizeExtractor { len: 20_000 })]);
-        let svc = service_with(enrich_config(), router); // default enrich_max_chars = 15000
-        let out = svc.web_search(base_input()).await.expect("web_search");
-
-        for s in &out.sources {
-            let len = s.content.as_deref().map(|c| c.chars().count()).unwrap_or(0);
-            assert!(len <= 15_000, "content len {len} exceeds cap");
-            assert!(len > 0);
-        }
-    }
-
-    #[tokio::test]
-    async fn enrich_fault_isolation_one_fails_rest_ok() {
-        let peak = Arc::new(AtomicUsize::new(0));
-        let current = Arc::new(AtomicUsize::new(0));
-        let router = SourceRouter::with_extractors(vec![
-            Box::new(MarkerErrExtractor {
-                fail_url_marker: "openai.com".to_string(),
-            }),
-            Box::new(CountingExtractor {
-                peak,
-                current,
-                sleep_ms: 0,
-            }),
-        ]);
-        // Provider whose generic fetch ALSO fails, so the failing specialist
-        // source genuinely falls through to the note (not the generic rescue).
-        let svc = service_with_sources(
-            enrich_config(),
-            router,
-            Some(Arc::new(SearchOkFetchErrProvider)),
-        );
-        let out = svc
-            .web_search(base_input())
-            .await
-            .expect("web_search returns Ok despite one failure");
-
-        let failed = out
-            .sources
-            .iter()
-            .find(|s| s.url.contains("openai.com"))
-            .expect("grok source present");
-        let passed = out
-            .sources
-            .iter()
-            .find(|s| s.url.contains("example.com"))
-            .expect("supplemental source present");
-
-        assert!(
-            failed
-                .content
-                .as_deref()
-                .unwrap_or("")
-                .starts_with("_Failed to retrieve:"),
-            "failing source must carry a failure note, got: {:?}",
-            failed.content
-        );
-        let pc = passed.content.as_deref().unwrap_or("");
-        assert!(
-            !pc.is_empty() && !pc.starts_with("_Failed to retrieve:"),
-            "passing source must carry real content, got: {pc:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn enrich_specialist_failure_rescued_by_generic_fetch() {
-        // A matched specialist whose API errors must fall back to the configured
-        // generic fetch (mirroring web_fetch), not store a failure note, when a
-        // source provider can still fetch the URL.
-        let router = SourceRouter::with_extractors(vec![Box::new(MarkerErrExtractor {
-            fail_url_marker: "openai.com".to_string(),
-        })]);
-        let svc = service_with(enrich_config(), router); // FakeSourceProvider.fetch succeeds
-        let out = svc.web_search(base_input()).await.expect("web_search");
-
-        let failed = out
-            .sources
-            .iter()
-            .find(|s| s.url.contains("openai.com"))
-            .expect("grok source present");
-        let content = failed.content.as_deref().unwrap_or("");
-        assert!(
-            content.starts_with("Fetched content from"),
-            "specialist failure must be rescued by generic fetch, got: {content:?}"
-        );
-        assert!(
-            !content.starts_with("_Failed to retrieve:"),
-            "must not store a failure note when generic fetch succeeds: {content:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn enrich_timeout_yields_note_not_error() {
-        let router = SourceRouter::with_extractors(vec![Box::new(HangingExtractor)]);
-        let mut config = enrich_config();
-        config.timeout = Duration::from_millis(50); // deadline fires fast
-        let svc = service_with(config, router);
-
-        let out = svc
-            .web_search(base_input())
-            .await
-            .expect("web_search returns Ok on timeout");
-        for s in &out.sources {
-            assert!(
-                s.content.as_deref().unwrap_or("").contains("timeout"),
-                "expected timeout note, got: {:?}",
-                s.content
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn include_content_false_omits_content_field() {
-        let peak = Arc::new(AtomicUsize::new(0));
-        let current = Arc::new(AtomicUsize::new(0));
-        let router = SourceRouter::with_extractors(vec![Box::new(CountingExtractor {
-            peak,
-            current,
-            sleep_ms: 0,
-        })]);
-        let svc = service_with(enrich_config(), router);
-
-        let mut input = base_input();
-        input.include_content = Some(false);
-        let out = svc.web_search(input).await.expect("web_search");
-
-        for s in &out.sources {
-            assert!(s.content.is_none());
-            let value = serde_json::to_value(s).unwrap();
-            assert!(
-                value.get("content").is_none(),
-                "JSON must omit the content key, not emit null"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn extra_sources_zero_suppresses_inline() {
-        let peak = Arc::new(AtomicUsize::new(0));
-        let current = Arc::new(AtomicUsize::new(0));
-        let router = SourceRouter::with_extractors(vec![Box::new(CountingExtractor {
-            peak,
-            current,
-            sleep_ms: 0,
-        })]);
-        let svc = service_with(enrich_config(), router);
-
-        let mut input = base_input();
-        input.extra_sources = Some(0); // effective_extra_sources == 0 → dual gate suppresses enrich
-        let out = svc.web_search(input).await.expect("web_search");
-
-        for s in &out.sources {
-            assert!(
-                s.content.is_none(),
-                "extra_sources=0 must keep the legacy no-content shape"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn get_sources_inherits_enriched_content() {
-        let peak = Arc::new(AtomicUsize::new(0));
-        let current = Arc::new(AtomicUsize::new(0));
-        let router = SourceRouter::with_extractors(vec![Box::new(CountingExtractor {
-            peak,
-            current,
-            sleep_ms: 0,
-        })]);
-        let svc = service_with(enrich_config(), router);
-
-        let out = svc.web_search(base_input()).await.expect("web_search");
-        let again = svc
-            .get_sources(&out.session_id, 0, None)
-            .await
-            .expect("get_sources");
-
-        assert_eq!(out.sources.len(), again.sources.len());
-        for (a, b) in out.sources.iter().zip(again.sources.iter()) {
-            assert_eq!(a.url, b.url);
-            assert_eq!(
-                a.content, b.content,
-                "get_sources must reuse the cached enriched content"
-            );
-        }
-    }
-}
+#[path = "service_tests.rs"]
+mod service_tests;

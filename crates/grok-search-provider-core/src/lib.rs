@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 use grok_search_types::model::search::{SearchFilters, SearchRequest, SearchResponse};
-use grok_search_types::{AcademicCitationSummary, AcademicPaper, GrokSearchError, Result, Source};
+use grok_search_types::{
+    AcademicCitationSummary, AcademicCitationsOutput, AcademicGetOutput, AcademicPaper,
+    AcademicReadOutput, AcademicSearchInput, AcademicSearchOutput, GrokSearchError, Result, Source,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AcademicIdentifier {
@@ -67,6 +70,30 @@ pub trait AcademicProvider: Send + Sync {
     async fn resolve_fulltext(&self, _paper: &AcademicPaper) -> Result<Option<FullTextLocation>> {
         Ok(None)
     }
+}
+
+#[async_trait]
+pub trait AcademicServiceProvider: Send + Sync {
+    async fn search(&self, input: AcademicSearchInput) -> Result<AcademicSearchOutput>;
+
+    async fn get(
+        &self,
+        identifier: &str,
+        include_citations: bool,
+        include_open_access: bool,
+    ) -> Result<AcademicGetOutput>;
+
+    async fn citations(&self, identifier: &str, limit: usize) -> Result<AcademicCitationsOutput>;
+
+    async fn read(
+        &self,
+        identifier: Option<String>,
+        url: Option<String>,
+        max_chars: Option<usize>,
+        output_format: Option<String>,
+    ) -> Result<AcademicReadOutput>;
+
+    fn diagnostics(&self) -> serde_json::Value;
 }
 
 #[cfg(test)]

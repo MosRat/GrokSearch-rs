@@ -2,6 +2,9 @@ use std::io::{IsTerminal, Write};
 
 use grok_search_config::{self as config, AuthMode, Config, InitOutcome};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     // CLI shim: handle --version, --init before MCP server mode.
@@ -48,7 +51,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let (http, proxy_diagnostics) = grok_search_net::proxy::bootstrap(&cfg).await;
-    let service = grok_search_service::SearchService::new_with_http(cfg, http, proxy_diagnostics)?;
+    let service = grok_search_runtime::new_with_http(cfg, http, proxy_diagnostics)?;
     grok_search_mcp::run_stdio(service).await?;
     Ok(())
 }

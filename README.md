@@ -238,6 +238,16 @@ cargo build --release
 
 The binary lands at `target/release/grok-search-rs`. Point your MCP client's `command` at the absolute path.
 
+Linux release binaries are built as static musl targets with Zig:
+
+```bash
+cargo install cargo-zigbuild
+scripts/build-linux-release.sh
+```
+
+That produces `target/x86_64-unknown-linux-musl/release/grok-search-rs` and
+`target/aarch64-unknown-linux-musl/release/grok-search-rs`.
+
 ---
 
 ## Development

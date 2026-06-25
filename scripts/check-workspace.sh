@@ -29,7 +29,12 @@ echo "==> cargo clippy"
 echo "==> cargo test"
 "${CARGO[@]}" test --workspace
 
-echo "==> cargo build --release"
-"${CARGO[@]}" build --release
+if [[ "$(uname -s 2>/dev/null || echo unknown)" == "Linux" ]]; then
+  echo "==> Linux release build (zigbuild musl)"
+  scripts/build-linux-release.sh
+else
+  echo "==> cargo build --release"
+  "${CARGO[@]}" build --release
+fi
 
 echo "workspace check passed"
