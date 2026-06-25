@@ -406,7 +406,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-auth"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "async-trait",
  "base64",
@@ -425,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-config"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "grok-search-types",
  "serde",
@@ -436,7 +436,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-mcp"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "anyhow",
  "grok-search-service",
@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-net"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "grok-search-config",
  "grok-search-types",
@@ -462,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-providers"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "grok-search-auth",
  "grok-search-config",
@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-rs"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "anyhow",
  "grok-search-auth",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-service"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "async-trait",
  "grok-search-auth",
@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-sources"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "async-trait",
  "grok-search-config",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-types"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "serde",
  "serde_json",
