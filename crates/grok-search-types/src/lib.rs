@@ -2,6 +2,11 @@ pub mod error;
 pub mod model;
 
 pub use error::{GrokSearchError, Result};
+pub use model::academic::{
+    AcademicCitationSummary, AcademicCitationsInput, AcademicCitationsOutput, AcademicGetInput,
+    AcademicGetOutput, AcademicPaper, AcademicReadInput, AcademicReadOutput, AcademicSearchInput,
+    AcademicSearchOutput,
+};
 pub use model::search::{
     ContentBlock, SearchFilters, SearchMessage, SearchRequest, SearchResponse, SearchTool,
 };
@@ -16,6 +21,8 @@ pub enum SourceType {
     Stackexchange,
     Arxiv,
     Wikipedia,
+    AcademicMetadata,
+    AcademicPdf,
     Generic,
 }
 
@@ -27,6 +34,8 @@ impl SourceType {
             SourceType::Stackexchange => "stackexchange",
             SourceType::Arxiv => "arxiv",
             SourceType::Wikipedia => "wikipedia",
+            SourceType::AcademicMetadata => "academic_metadata",
+            SourceType::AcademicPdf => "academic_pdf",
             SourceType::Generic => "generic",
         }
     }

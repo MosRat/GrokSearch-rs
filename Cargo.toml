@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/grok-search-academic",
     "crates/grok-search-auth",
     "crates/grok-search-config",
     "crates/grok-search-mcp",
@@ -41,6 +42,7 @@ tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "rt",
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+pdf_oxide = "0.3"
 
 [profile.release]
 strip = true

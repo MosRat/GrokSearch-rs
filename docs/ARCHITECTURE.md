@@ -14,6 +14,7 @@ MCP client
               -> OpenAI-compatible chat-completions provider
               -> Tavily provider: search / extract / map
               -> Firecrawl provider: search / scrape fallback
+          -> crates/grok-search-academic  CS literature metadata, citations, full-text PDF parsing
           -> crates/grok-search-sources  specialist fetch/render extractors
           -> crates/grok-search-types    shared request/response/source/error models
           -> source cache
@@ -27,6 +28,13 @@ MCP client
 - `web_map` discovers URLs through Tavily Map.
 - Tavily and Firecrawl are not the default answer generators inside `web_search`; they provide enrichment, fallback sources, fetch, and map capability.
 - Agents should use `web_search` for concise sourced summaries, call `get_sources` before source-specific claims, citation lists, or follow-up fetches, and call `web_fetch` for exact page evidence, quotes, technical details, or when the summary is insufficient.
+- Agents should use `academic_search` / `academic_get` / `academic_citations` / `academic_read` for computer-science paper discovery, metadata, citation summaries, and PDF text extraction rather than forcing scholarly tasks through generic web tools.
+
+## Academic Layer
+
+`grok-search-academic` owns scholarly semantics that do not fit the generic `SourceProvider` trait. It still reuses the shared `reqwest::Client`, proxy decision, timeout, error type, redaction conventions, and MCP schema style.
+
+Academic providers are capability-based: dblp and Crossref are metadata-first, Semantic Scholar and OpenAlex add citations/references, arXiv and open-access locations provide PDFs, Unpaywall resolves DOI-based OA full text, and Sci-Hub is disabled by default and only used as a final explicitly configured fallback. Results are normalized into `AcademicPaper` while provenance URLs remain regular `Source` values.
 
 ## Provider Layer
 

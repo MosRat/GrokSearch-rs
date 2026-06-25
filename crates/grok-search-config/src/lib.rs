@@ -48,6 +48,13 @@ pub struct Config {
     pub enrich_max_chars: usize,
     pub max_inline_sources: usize,
     pub response_max_chars: usize,
+    pub academic_enabled: bool,
+    pub academic_email: Option<String>,
+    pub semantic_scholar_api_key: Option<String>,
+    pub academic_scihub_enabled: bool,
+    pub academic_scihub_base_url: Option<String>,
+    pub academic_max_pdf_bytes: usize,
+    pub academic_pdf_max_chars: Option<usize>,
 }
 
 /// Hand-written `Debug` that masks secret-bearing fields so a stray
@@ -97,6 +104,19 @@ impl std::fmt::Debug for Config {
             .field("enrich_max_chars", &self.enrich_max_chars)
             .field("max_inline_sources", &self.max_inline_sources)
             .field("response_max_chars", &self.response_max_chars)
+            .field("academic_enabled", &self.academic_enabled)
+            .field("academic_email", &self.academic_email_status())
+            .field(
+                "semantic_scholar_api_key",
+                &mask(&self.semantic_scholar_api_key),
+            )
+            .field("academic_scihub_enabled", &self.academic_scihub_enabled)
+            .field(
+                "academic_scihub_base_url",
+                &redact_optional_url(&self.academic_scihub_base_url),
+            )
+            .field("academic_max_pdf_bytes", &self.academic_max_pdf_bytes)
+            .field("academic_pdf_max_chars", &self.academic_pdf_max_chars)
             .finish()
     }
 }
@@ -135,6 +155,13 @@ struct ConfigFile {
     enrich_max_chars: Option<usize>,
     max_inline_sources: Option<usize>,
     response_max_chars: Option<usize>,
+    academic_enabled: Option<bool>,
+    academic_email: Option<String>,
+    semantic_scholar_api_key: Option<String>,
+    academic_scihub_enabled: Option<bool>,
+    academic_scihub_base_url: Option<String>,
+    academic_max_pdf_bytes: Option<usize>,
+    academic_pdf_max_chars: Option<usize>,
 }
 
 impl ConfigFile {
@@ -217,6 +244,28 @@ impl ConfigFile {
         insert(
             "GROK_SEARCH_RESPONSE_MAX_CHARS",
             self.response_max_chars.map(|n| n.to_string()),
+        );
+        insert(
+            "GROK_SEARCH_ACADEMIC_ENABLED",
+            self.academic_enabled.map(|b| b.to_string()),
+        );
+        insert("GROK_SEARCH_ACADEMIC_EMAIL", self.academic_email);
+        insert("SEMANTIC_SCHOLAR_API_KEY", self.semantic_scholar_api_key);
+        insert(
+            "GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED",
+            self.academic_scihub_enabled.map(|b| b.to_string()),
+        );
+        insert(
+            "GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL",
+            self.academic_scihub_base_url,
+        );
+        insert(
+            "GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES",
+            self.academic_max_pdf_bytes.map(|n| n.to_string()),
+        );
+        insert(
+            "GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS",
+            self.academic_pdf_max_chars.map(|n| n.to_string()),
         );
         out
     }
@@ -318,6 +367,30 @@ impl Config {
             enrich_max_chars: usize_value(&map, "GROK_SEARCH_ENRICH_MAX_CHARS", 15000),
             max_inline_sources: usize_value(&map, "GROK_SEARCH_MAX_INLINE_SOURCES", 5),
             response_max_chars: usize_value(&map, "GROK_SEARCH_RESPONSE_MAX_CHARS", 60_000),
+            academic_enabled: bool_value(&map, "GROK_SEARCH_ACADEMIC_ENABLED", true),
+            academic_email: map
+                .get("GROK_SEARCH_ACADEMIC_EMAIL")
+                .or_else(|| map.get("UNPAYWALL_EMAIL"))
+                .cloned()
+                .filter(|v| !v.is_empty()),
+            semantic_scholar_api_key: map
+                .get("SEMANTIC_SCHOLAR_API_KEY")
+                .cloned()
+                .filter(|v| !v.is_empty()),
+            academic_scihub_enabled: bool_value(&map, "GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED", false),
+            academic_scihub_base_url: map
+                .get("GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL")
+                .cloned()
+                .filter(|v| !v.is_empty()),
+            academic_max_pdf_bytes: usize_value(
+                &map,
+                "GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES",
+                50 * 1024 * 1024,
+            ),
+            academic_pdf_max_chars: optional_positive_usize(
+                &map,
+                "GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS",
+            ),
         }
     }
 
@@ -331,9 +404,29 @@ impl Config {
         }
     }
 
+    pub fn academic_email_status(&self) -> &'static str {
+        if self.academic_email.is_some() {
+            "set"
+        } else {
+            "unset"
+        }
+    }
+
+    pub fn semantic_scholar_key_status(&self) -> &'static str {
+        if self.semantic_scholar_api_key.is_some() {
+            "set"
+        } else {
+            "unset"
+        }
+    }
+
+    pub fn redacted_scihub_base_url(&self) -> Option<String> {
+        redact_optional_url(&self.academic_scihub_base_url)
+    }
+
     pub fn redacted_diagnostics(&self) -> String {
         format!(
-            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} proxy={} github_token={}",
+            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} proxy={} github_token={} academic_enabled={} academic_email={} semantic_scholar_api_key={} academic_scihub_enabled={} academic_scihub_base_url={}",
             self.grok_api_url,
             redact(self.grok_api_key.as_deref()),
             self.grok_auth_mode,
@@ -350,7 +443,12 @@ impl Config {
             self.fallback_sources,
             self.timeout.as_secs(),
             redact_proxy_url_for_config(&self.proxy),
-            self.github_token_status()
+            self.github_token_status(),
+            self.academic_enabled,
+            self.academic_email_status(),
+            redact(self.semantic_scholar_api_key.as_deref()),
+            self.academic_scihub_enabled,
+            self.redacted_scihub_base_url().unwrap_or_else(|| "unset".to_string())
         )
     }
 }
@@ -510,6 +608,15 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 # enrich_max_chars      = 15000      # per-source inline content char cap
 # max_inline_sources    = 5          # max sources carrying inline content per response
 # response_max_chars    = 60000      # whole-response char budget (answer + inline content)
+
+# Academic search (CS-focused literature tools)
+# academic_enabled          = true
+# academic_email            = "you@example.com" # Unpaywall email; also polite API contact
+# semantic_scholar_api_key  = "..."             # optional; anonymous mode works with lower limits
+# academic_scihub_enabled   = false             # explicit opt-in only; legal risk varies
+# academic_scihub_base_url  = "https://..."     # only read when academic_scihub_enabled=true
+# academic_max_pdf_bytes    = 52428800          # max PDF download size for academic_read
+# academic_pdf_max_chars    = 200000            # text cap for parsed PDFs
 "#;
 
 fn redact_proxy_url_for_config(raw: &str) -> String {
@@ -526,6 +633,20 @@ fn redact_proxy_url_for_config(raw: &str) -> String {
         let _ = url.set_password(Some("***"));
     }
     url.to_string()
+}
+
+fn redact_optional_url(raw: &Option<String>) -> Option<String> {
+    let raw = raw.as_deref()?;
+    let Ok(mut url) = url::Url::parse(raw) else {
+        return Some("<invalid url>".to_string());
+    };
+    if !url.username().is_empty() {
+        let _ = url.set_username("***");
+    }
+    if url.password().is_some() {
+        let _ = url.set_password(Some("***"));
+    }
+    Some(url.to_string())
 }
 
 fn load_file_map(path: &Path) -> Option<HashMap<String, String>> {
@@ -755,6 +876,32 @@ mod source_config_tests {
     fn enrich_concurrency_reads_env_and_clamps() {
         let cfg = Config::from_env_map([("GROK_SEARCH_ENRICH_CONCURRENCY", "7")]);
         assert_eq!(cfg.enrich_concurrency, 5); // clamped to 1..=5
+    }
+
+    #[test]
+    fn academic_config_defaults_and_redaction_hold() {
+        let cfg = Config::from_env_map(Vec::<(String, String)>::new());
+        assert!(cfg.academic_enabled);
+        assert!(!cfg.academic_scihub_enabled);
+        assert_eq!(cfg.academic_email_status(), "unset");
+        assert_eq!(cfg.semantic_scholar_key_status(), "unset");
+
+        let cfg = Config::from_env_map([
+            ("GROK_SEARCH_ACADEMIC_EMAIL", "person@example.com"),
+            ("SEMANTIC_SCHOLAR_API_KEY", "s2-secret"),
+            ("GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED", "true"),
+            (
+                "GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL",
+                "https://user:pass@example.org",
+            ),
+        ]);
+        assert_eq!(cfg.academic_email_status(), "set");
+        assert_eq!(cfg.semantic_scholar_key_status(), "set");
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains("s2-secret"));
+        assert!(!dbg.contains("user:pass"));
+        assert!(!cfg.redacted_diagnostics().contains("s2-secret"));
+        assert!(cfg.redacted_scihub_base_url().unwrap().contains("***:***"));
     }
 }
 

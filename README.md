@@ -179,6 +179,18 @@ These specialists need **no Tavily/Firecrawl key** — they hit the public GitHu
 StackExchange, arXiv, and Wikipedia APIs directly. Tavily/Firecrawl are only used
 for the generic fallback path.
 
+### Academic search
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GROK_SEARCH_ACADEMIC_ENABLED` | `true` | Enables the `academic_*` MCP tools. |
+| `GROK_SEARCH_ACADEMIC_EMAIL` | unset | Contact email for Unpaywall and polite academic API usage. Without it, Unpaywall full-text lookup is skipped. |
+| `SEMANTIC_SCHOLAR_API_KEY` | unset | Optional Semantic Scholar Graph API key; anonymous mode is used when unset. |
+| `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | `false` | Explicit opt-in for Sci-Hub as the final `academic_read` fallback. Legal risk varies by jurisdiction and use. |
+| `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` | unset | Sci-Hub base URL, only read when Sci-Hub fallback is enabled. Credentials are redacted in diagnostics. |
+| `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF download size for `academic_read`. |
+| `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for `pdf_oxide` PDF text extraction. Falls back to `GROK_SEARCH_FETCH_MAX_CHARS`, then `200000`. |
+
 ### Selection rules at startup
 
 1. If `GROK_SEARCH_AUTH_MODE=oauth` → **Responses** transport with the local OAuth token.
@@ -209,6 +221,10 @@ Tired of duplicating `env` blocks across clients? Run `grok-search-rs --init` on
 | `web_fetch` | Page content as clean Markdown. Specialist extractors for GitHub / StackExchange / arXiv / Wikipedia; generic Tavily → Firecrawl fallback otherwise. Returns `source_type` + `fallback_reason`. |
 | `web_map` | Discover URLs on a domain via Tavily Map. |
 | `doctor` | Live connectivity probe + redacted config. Run first when something looks off. |
+| `academic_search` | CS-focused literature search across dblp, Semantic Scholar, arXiv, OpenAlex, and Crossref with dedupe/RRF ranking. |
+| `academic_get` | Resolve one paper by DOI, arXiv ID/URL, Semantic Scholar ID, OpenAlex ID/URL, dblp URL/key, or title-like query. |
+| `academic_citations` | Citation/reference summary for one paper, using Semantic Scholar first and OpenAlex as fallback. |
+| `academic_read` | Resolve an academic PDF and return `pdf_oxide` parsed Markdown/text; Sci-Hub is used only when explicitly configured and only as last fallback. |
 
 ---
 

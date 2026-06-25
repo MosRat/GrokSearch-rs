@@ -118,6 +118,20 @@ content; truncated sources carry a note pointing at `web_fetch(url)` /
 | `GROK_SEARCH_MAX_INLINE_SOURCES` | `5` | Maximum sources that carry inline `content` per `web_search` response; the rest return metadata only. |
 | `GROK_SEARCH_RESPONSE_MAX_CHARS` | `60000` | Whole-response character budget (answer + per-source metadata and inline content). Over-budget responses truncate inline content tail-first, then drop trailing sources (always keeping at least one) and set `truncated: true`. |
 
+## Academic search
+
+The `academic_*` MCP tools are independent of `web_*` and focus on computer-science literature. They reuse the same HTTP client, timeout, proxy, redaction, and doctor diagnostics pipeline as the rest of the server.
+
+| Variable | Default | Description |
+|---|---|---|
+| `GROK_SEARCH_ACADEMIC_ENABLED` | `true` | Enables `academic_search`, `academic_get`, `academic_citations`, and `academic_read`. |
+| `GROK_SEARCH_ACADEMIC_EMAIL` | unset | Contact email for Unpaywall and polite OpenAlex/Crossref usage. Unpaywall is skipped when absent. Legacy `UNPAYWALL_EMAIL` is also accepted. |
+| `SEMANTIC_SCHOLAR_API_KEY` | unset | Optional Semantic Scholar key. When unset, anonymous Graph API requests are used. |
+| `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | `false` | Explicit opt-in for Sci-Hub fallback in `academic_read`. It is never used by default. |
+| `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` | unset | Sci-Hub base URL, only used when Sci-Hub fallback is enabled. User/password components are redacted in Debug and doctor output. |
+| `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF bytes downloaded for `academic_read`. |
+| `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for parsed PDF output. Falls back to `GROK_SEARCH_FETCH_MAX_CHARS`, then `200000`. |
+
 ## Config file
 
 Drop a TOML file at `<home>/.config/grok-search-rs/config.toml` (or any path pointed to by `GROK_SEARCH_CONFIG`) to set defaults once and skip the per-client `env` block. Process env still wins, so individual clients can override any field at runtime.
@@ -172,6 +186,13 @@ Unknown keys are rejected by the loader — typos surface as parse errors instea
 | `enrich_max_chars` | `GROK_SEARCH_ENRICH_MAX_CHARS` |
 | `max_inline_sources` | `GROK_SEARCH_MAX_INLINE_SOURCES` |
 | `response_max_chars` | `GROK_SEARCH_RESPONSE_MAX_CHARS` |
+| `academic_enabled` | `GROK_SEARCH_ACADEMIC_ENABLED` |
+| `academic_email` | `GROK_SEARCH_ACADEMIC_EMAIL` |
+| `semantic_scholar_api_key` | `SEMANTIC_SCHOLAR_API_KEY` |
+| `academic_scihub_enabled` | `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` |
+| `academic_scihub_base_url` | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` |
+| `academic_max_pdf_bytes` | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` |
+| `academic_pdf_max_chars` | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` |
 
 Example — minimum useful file:
 

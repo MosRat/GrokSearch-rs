@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use grok_search_service::SearchService;
 use grok_search_types::model::tool::WebSearchInput;
+use grok_search_types::AcademicSearchInput;
 use grok_search_types::{GrokSearchError, Result};
 use rmcp::model::{
     CallToolRequestParam, CallToolResult, Content, Implementation, ListToolsResult,
@@ -119,6 +120,62 @@ async fn call_tool(service: &SearchService, name: &str, args: Value) -> Result<V
                 "sources": mapped_sources
             }))
         }
+        "academic_search" => {
+            let params: AcademicSearchParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            if params.query.trim().is_empty() {
+                return Err(GrokSearchError::InvalidParams(
+                    "academic_search.query is required".into(),
+                ));
+            }
+            let output = service.academic_search(params.into()).await?;
+            serialize_output(output, "serialize academic search")
+        }
+        "academic_get" => {
+            let params: AcademicGetParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            if params.identifier.trim().is_empty() {
+                return Err(GrokSearchError::InvalidParams(
+                    "academic_get.identifier is required".into(),
+                ));
+            }
+            let output = service
+                .academic_get(
+                    &params.identifier,
+                    params.include_citations.unwrap_or(false),
+                    params.include_open_access.unwrap_or(true),
+                )
+                .await?;
+            serialize_output(output, "serialize academic get")
+        }
+        "academic_citations" => {
+            let params: AcademicCitationsParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            let output = service
+                .academic_citations(&params.identifier, params.limit.filter(|value| *value > 0))
+                .await?;
+            serialize_output(output, "serialize academic citations")
+        }
+        "academic_read" => {
+            let params: AcademicReadParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            if params.identifier.as_deref().unwrap_or("").trim().is_empty()
+                && params.url.as_deref().unwrap_or("").trim().is_empty()
+            {
+                return Err(GrokSearchError::InvalidParams(
+                    "academic_read requires identifier or url".into(),
+                ));
+            }
+            let output = service
+                .academic_read(
+                    params.identifier,
+                    params.url,
+                    params.max_chars,
+                    params.output_format,
+                )
+                .await?;
+            serialize_output(output, "serialize academic read")
+        }
         _ => Err(GrokSearchError::NotFound(format!("unknown tool: {name}"))),
     }
 }
@@ -175,6 +232,55 @@ struct WebFetchParams {
 struct WebMapParams {
     url: String,
     max_results: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AcademicSearchParams {
+    query: String,
+    #[serde(default)]
+    sources: Vec<String>,
+    max_results: Option<usize>,
+    year_from: Option<u32>,
+    year_to: Option<u32>,
+    open_access_only: Option<bool>,
+    include_abstract: Option<bool>,
+    include_citations: Option<bool>,
+}
+
+impl From<AcademicSearchParams> for AcademicSearchInput {
+    fn from(params: AcademicSearchParams) -> Self {
+        Self {
+            query: params.query,
+            sources: params.sources,
+            max_results: params.max_results,
+            year_from: params.year_from,
+            year_to: params.year_to,
+            open_access_only: params.open_access_only,
+            include_abstract: params.include_abstract,
+            include_citations: params.include_citations,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AcademicGetParams {
+    identifier: String,
+    include_citations: Option<bool>,
+    include_open_access: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AcademicCitationsParams {
+    identifier: String,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AcademicReadParams {
+    identifier: Option<String>,
+    url: Option<String>,
+    max_chars: Option<usize>,
+    output_format: Option<String>,
 }
 
 fn tools() -> Vec<Tool> {
@@ -315,6 +421,66 @@ fn tools_list() -> Value {
                 "name": "doctor",
                 "description": "Diagnostic probe: live connectivity check for Grok, Tavily, and Firecrawl backends, plus masked configuration. Use to verify the server is wired up and reachable.",
                 "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "academic_search",
+                "description": "Search computer-science academic literature across dblp, Semantic Scholar, arXiv, OpenAlex, and Crossref. Results are deduplicated by DOI/arXiv/title and ranked with reciprocal rank fusion; OpenAlex/Crossref/Semantic metadata is used to enrich papers when available.",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": { "type": "string" },
+                        "sources": {
+                            "type": "array",
+                            "items": { "type": "string", "enum": ["dblp", "semantic", "arxiv", "openalex", "crossref"] },
+                            "description": "Selected sources. Defaults to dblp, semantic, and arxiv."
+                        },
+                        "max_results": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 },
+                        "year_from": { "type": "integer", "minimum": 1 },
+                        "year_to": { "type": "integer", "minimum": 1 },
+                        "open_access_only": { "type": "boolean" },
+                        "include_abstract": { "type": "boolean", "default": true },
+                        "include_citations": { "type": "boolean", "default": false }
+                    }
+                }
+            },
+            {
+                "name": "academic_get",
+                "description": "Resolve one academic paper by DOI, arXiv ID/URL, Semantic Scholar paperId, OpenAlex ID/URL, dblp URL/key, or title-like query. Returns normalized metadata and optionally citation/open-access enrichment.",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["identifier"],
+                    "properties": {
+                        "identifier": { "type": "string" },
+                        "include_citations": { "type": "boolean", "default": false },
+                        "include_open_access": { "type": "boolean", "default": true }
+                    }
+                }
+            },
+            {
+                "name": "academic_citations",
+                "description": "Return a summary of citing and referenced papers for one academic identifier. Uses Semantic Scholar first and OpenAlex as fallback; this is an overview, not a full citation graph crawl.",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["identifier"],
+                    "properties": {
+                        "identifier": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 }
+                    }
+                }
+            },
+            {
+                "name": "academic_read",
+                "description": "Resolve and read an academic PDF as Markdown or text. Open-access sources are tried first: arXiv, Semantic Scholar, OpenAlex, Unpaywall. Sci-Hub is only considered when explicitly enabled in configuration and remains the last fallback.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "identifier": { "type": "string" },
+                        "url": { "type": "string" },
+                        "max_chars": { "type": "integer", "minimum": 1 },
+                        "output_format": { "type": "string", "enum": ["markdown", "text"], "default": "markdown" }
+                    }
+                }
             }
         ]
     })
@@ -334,7 +500,11 @@ mod tests {
                 "get_sources",
                 "web_fetch",
                 "web_map",
-                "doctor"
+                "doctor",
+                "academic_search",
+                "academic_get",
+                "academic_citations",
+                "academic_read"
             ]
         );
     }

@@ -73,6 +73,58 @@ pub async fn post_json(
         .map_err(|failure| failure.error)
 }
 
+pub async fn get_bytes(
+    client: &Client,
+    url: &str,
+    headers: &[(reqwest::header::HeaderName, &str)],
+    label: &str,
+) -> Result<Vec<u8>> {
+    let mut builder = client.get(url);
+    for (name, value) in headers {
+        builder = builder.header(name.clone(), *value);
+    }
+    let response = builder.send().await.map_err(|err| {
+        if err.is_timeout() {
+            GrokSearchError::Timeout(format!("{label} GET timed out: {err}"))
+        } else {
+            GrokSearchError::Provider(format!("{label} GET failed: {err}"))
+        }
+    })?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| GrokSearchError::Provider(format!("{label} body read failed: {err}")))?;
+    if !status.is_success() {
+        let text = String::from_utf8_lossy(&bytes);
+        return Err(GrokSearchError::Provider(format!(
+            "{label} returned HTTP {status}: {text}"
+        )));
+    }
+    Ok(bytes.to_vec())
+}
+
+pub async fn get_json(
+    client: &Client,
+    url: &str,
+    headers: &[(reqwest::header::HeaderName, &str)],
+    label: &str,
+) -> Result<Value> {
+    let bytes = get_bytes(client, url, headers, label).await?;
+    serde_json::from_slice(&bytes)
+        .map_err(|err| GrokSearchError::Parse(format!("invalid {label} JSON: {err}")))
+}
+
+pub async fn get_text(
+    client: &Client,
+    url: &str,
+    headers: &[(reqwest::header::HeaderName, &str)],
+    label: &str,
+) -> Result<String> {
+    let bytes = get_bytes(client, url, headers, label).await?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// Status-aware variant of [`post_json`]: identical behavior, but non-2xx
 /// responses carry their HTTP status alongside the normalized error.
 pub async fn post_json_with_status(

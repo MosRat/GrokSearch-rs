@@ -8,6 +8,7 @@ mod cache;
 pub mod logging;
 
 use crate::cache::SourceCache;
+use grok_search_academic::AcademicService;
 use grok_search_auth::{OAuthCredential, StaticApiKeyCredential};
 use grok_search_config::{AuthMode, Config};
 use grok_search_net::proxy::ProxyDiagnostics;
@@ -21,6 +22,10 @@ use grok_search_types::model::search::{
 use grok_search_types::model::source::{merge_sources, Source};
 use grok_search_types::model::tool::{
     GetSourcesOutput, WebFetchOutput, WebSearchInput, WebSearchOutput,
+};
+use grok_search_types::{
+    AcademicCitationsOutput, AcademicGetOutput, AcademicReadOutput, AcademicSearchInput,
+    AcademicSearchOutput,
 };
 use grok_search_types::{GrokSearchError, Result};
 
@@ -117,6 +122,7 @@ pub struct SearchService {
     /// `SearchService: Clone` still holds (the router is not `Clone`).
     source_router: Arc<grok_search_sources::sources::SourceRouter>,
     proxy_diagnostics: ProxyDiagnostics,
+    academic: Option<AcademicService>,
 }
 
 impl SearchService {
@@ -220,16 +226,20 @@ impl SearchService {
         let source_router = Arc::new(grok_search_sources::sources::SourceRouter::from_config(
             &config,
         ));
+        let academic = config
+            .academic_enabled
+            .then(|| AcademicService::new(http.clone(), config.clone()));
         Ok(Self {
             cache: Arc::new(Mutex::new(SourceCache::new(config.cache_size))),
             default_model: resolve_default_model(&config),
-            config,
+            config: config.clone(),
             ai,
             sources,
             fallback_sources,
             http_client: http.clone(),
             source_router,
             proxy_diagnostics,
+            academic,
         })
     }
 
@@ -241,13 +251,19 @@ impl SearchService {
         Self {
             cache: Arc::new(Mutex::new(SourceCache::new(256))),
             default_model: resolve_default_model(&config),
-            config,
+            config: config.clone(),
             ai: Arc::new(FakeAiProvider),
             sources: Some(Arc::new(FakeSourceProvider)),
             fallback_sources: None,
             http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
+            academic: config.academic_enabled.then(|| {
+                AcademicService::new(
+                    grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
+                    config.clone(),
+                )
+            }),
         }
     }
 
@@ -284,13 +300,19 @@ impl SearchService {
         Self {
             cache: Arc::new(Mutex::new(SourceCache::new(256))),
             default_model: resolve_default_model(&config),
-            config,
+            config: config.clone(),
             ai: ai.unwrap_or_else(|| Arc::new(FakeAiProvider)),
             sources: Some(primary),
             fallback_sources: fallback,
             http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
+            academic: config.academic_enabled.then(|| {
+                AcademicService::new(
+                    grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
+                    config.clone(),
+                )
+            }),
         }
     }
 
@@ -316,13 +338,19 @@ impl SearchService {
         Self {
             cache: Arc::new(Mutex::new(SourceCache::new(256))),
             default_model: resolve_default_model(&config),
-            config,
+            config: config.clone(),
             ai: Arc::new(FakeAiProvider),
             sources: Some(primary),
             fallback_sources: fallback,
             http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(router),
             proxy_diagnostics: ProxyDiagnostics::default(),
+            academic: config.academic_enabled.then(|| {
+                AcademicService::new(
+                    grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
+                    config.clone(),
+                )
+            }),
         }
     }
 
@@ -686,6 +714,52 @@ impl SearchService {
             .await
     }
 
+    pub async fn academic_search(
+        &self,
+        input: AcademicSearchInput,
+    ) -> Result<AcademicSearchOutput> {
+        self.academic_service()?.search(input).await
+    }
+
+    pub async fn academic_get(
+        &self,
+        identifier: &str,
+        include_citations: bool,
+        include_open_access: bool,
+    ) -> Result<AcademicGetOutput> {
+        self.academic_service()
+            .map(|service| service.get(identifier, include_citations, include_open_access))?
+            .await
+    }
+
+    pub async fn academic_citations(
+        &self,
+        identifier: &str,
+        limit: Option<usize>,
+    ) -> Result<AcademicCitationsOutput> {
+        self.academic_service()?
+            .citations(identifier, limit.unwrap_or(10))
+            .await
+    }
+
+    pub async fn academic_read(
+        &self,
+        identifier: Option<String>,
+        url: Option<String>,
+        max_chars: Option<usize>,
+        output_format: Option<String>,
+    ) -> Result<AcademicReadOutput> {
+        self.academic_service()?
+            .read(identifier, url, max_chars, output_format)
+            .await
+    }
+
+    fn academic_service(&self) -> Result<&AcademicService> {
+        self.academic.as_ref().ok_or(GrokSearchError::MissingConfig(
+            "GROK_SEARCH_ACADEMIC_ENABLED",
+        ))
+    }
+
     /// Runtime diagnostics with live connectivity probes against each configured backend.
     /// Returns provider availability flags, masked config, and per-provider reachability.
     pub async fn doctor(&self) -> serde_json::Value {
@@ -764,6 +838,11 @@ impl SearchService {
             "timeout_seconds": self.config.timeout.as_secs(),
             "github_token": self.config.github_token_status(),
             "proxy": self.proxy_diagnostics.to_json(),
+            "academic": self
+                .academic
+                .as_ref()
+                .map(AcademicService::diagnostics)
+                .unwrap_or_else(|| serde_json::json!({ "enabled": false })),
             "redacted": self.config.redacted_diagnostics()
         })
     }
@@ -1364,6 +1443,7 @@ mod transport_dispatch_tests {
             http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
+            academic: None,
         };
 
         let report = svc.doctor().await;
@@ -1392,6 +1472,7 @@ mod transport_dispatch_tests {
             http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
+            academic: None,
         };
 
         let report = svc.doctor().await;
@@ -1416,6 +1497,7 @@ mod transport_dispatch_tests {
             http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
+            academic: None,
         };
         let report = svc.doctor().await;
         assert_eq!(report["github_token"], "set");
@@ -1437,6 +1519,7 @@ mod transport_dispatch_tests {
             http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(grok_search_sources::sources::SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
+            academic: None,
         };
         let report_unset = svc_unset.doctor().await;
         assert_eq!(report_unset["github_token"], "unset");
@@ -1467,6 +1550,7 @@ mod transport_dispatch_tests {
                 detail: "ok".to_string(),
                 checked_urls: vec!["https://api.x.ai/v1".to_string()],
             },
+            academic: None,
         };
 
         let report = svc.doctor().await;
@@ -1638,6 +1722,7 @@ mod enrich_tests {
             http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
             source_router: Arc::new(router),
             proxy_diagnostics: ProxyDiagnostics::default(),
+            academic: None,
         }
     }
 
