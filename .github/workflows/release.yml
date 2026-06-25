@@ -253,6 +253,8 @@ jobs:
     needs: create-release
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -306,16 +308,17 @@ jobs:
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Publish platform package
+        if: env.NODE_AUTH_TOKEN != ''
         run: npm publish --access public --provenance
         working-directory: npm/platforms/${{ matrix.platform }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-npm:
     name: Publish main npm package
     needs: publish-npm-platforms
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -346,10 +349,9 @@ jobs:
           VERSION: ${{ github.ref_name }}
 
       - name: Publish main package
+        if: env.NODE_AUTH_TOKEN != ''
         run: npm publish --access public --provenance
         working-directory: npm/grok-search-rs
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-pypi:
     name: Publish PyPI wheels
