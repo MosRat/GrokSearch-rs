@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use grok_search_net::http::{get_json, get_text};
+use grok_search_net::key_pool::{is_key_scoped_status, KeyPool};
 use grok_search_parse::{clean_html_title, extract_arxiv_id_from_path, openalex_abstract};
 use grok_search_provider_core::{
     AcademicIdentifier as Identifier, AcademicProvider, FullTextLocation,
@@ -531,21 +532,105 @@ pub(crate) fn parse_arxiv_atom(xml: &str) -> Result<Vec<AcademicPaper>> {
     Ok(papers)
 }
 
+struct GetJsonFailure {
+    status: Option<u16>,
+    error: GrokSearchError,
+}
+
+async fn get_json_with_status(
+    client: &reqwest::Client,
+    url: &str,
+    label: &str,
+) -> std::result::Result<Value, GetJsonFailure> {
+    let response = client
+        .get(url)
+        .header(USER_AGENT, UA)
+        .send()
+        .await
+        .map_err(|err| GetJsonFailure {
+            status: None,
+            error: if err.is_timeout() {
+                GrokSearchError::Timeout(format!("{label} GET timed out: {err}"))
+            } else {
+                GrokSearchError::Provider(format!("{label} GET failed: {err}"))
+            },
+        })?;
+    let status = response.status();
+    let bytes = response.bytes().await.map_err(|err| GetJsonFailure {
+        status: None,
+        error: GrokSearchError::Provider(format!("{label} body read failed: {err}")),
+    })?;
+    if !status.is_success() {
+        return Err(GetJsonFailure {
+            status: Some(status.as_u16()),
+            error: GrokSearchError::Provider(format!(
+                "{label} returned HTTP {status}: {}",
+                String::from_utf8_lossy(&bytes)
+            )),
+        });
+    }
+    serde_json::from_slice(&bytes).map_err(|err| GetJsonFailure {
+        status: None,
+        error: GrokSearchError::Parse(format!("invalid {label} JSON: {err}")),
+    })
+}
+
 #[derive(Clone)]
 pub(crate) struct OpenAlexProvider {
     client: reqwest::Client,
     email: Option<String>,
+    keys: Option<KeyPool>,
 }
 
 impl OpenAlexProvider {
-    pub(crate) fn new(client: reqwest::Client, email: Option<String>) -> Self {
-        Self { client, email }
+    pub(crate) fn new(
+        client: reqwest::Client,
+        email: Option<String>,
+        api_key: Option<String>,
+    ) -> Self {
+        Self {
+            client,
+            email,
+            keys: api_key.map(|key| KeyPool::parse(&key)),
+        }
     }
 
     fn add_mailto(&self, url: &mut Url) {
         if let Some(email) = &self.email {
             url.query_pairs_mut().append_pair("mailto", email);
         }
+    }
+
+    fn add_key(&self, url: &mut Url, index: usize) {
+        if let Some(keys) = &self.keys {
+            url.query_pairs_mut()
+                .append_pair("api_key", keys.key(index));
+        }
+    }
+
+    async fn get_json(&self, base_url: &Url, label: &str) -> Result<Value> {
+        let Some(keys) = &self.keys else {
+            return get_json(&self.client, base_url.as_str(), &[(USER_AGENT, UA)], label).await;
+        };
+        let start = keys.start();
+        let mut last_key_error = None;
+        for offset in 0..keys.len() {
+            let mut url = base_url.clone();
+            self.add_key(&mut url, start + offset);
+            match get_json_with_status(&self.client, url.as_str(), label).await {
+                Ok(value) => return Ok(value),
+                Err(failure) => {
+                    if failure.status.is_some_and(is_key_scoped_status) && offset + 1 < keys.len() {
+                        last_key_error = Some(failure.error);
+                        continue;
+                    }
+                    return Err(failure.error);
+                }
+            }
+        }
+        Err(last_key_error.unwrap_or_else(|| {
+            GrokSearchError::Provider(format!("{label} request failed with no configured key"))
+        }))
     }
 }
 
@@ -569,7 +654,7 @@ impl AcademicProvider for OpenAlexProvider {
                 .append_pair("filter", &format!("from_publication_date:{from}-01-01"));
         }
         self.add_mailto(&mut url);
-        let value = get_json(&self.client, url.as_str(), &[(USER_AGENT, UA)], "openalex").await?;
+        let value = self.get_json(&url, "openalex").await?;
         Ok(value
             .get("results")
             .and_then(Value::as_array)
@@ -587,7 +672,7 @@ impl AcademicProvider for OpenAlexProvider {
         };
         let mut url = Url::parse(&format!("https://api.openalex.org/works/{id}")).unwrap();
         self.add_mailto(&mut url);
-        let value = get_json(&self.client, url.as_str(), &[(USER_AGENT, UA)], "openalex").await?;
+        let value = self.get_json(&url, "openalex").await?;
         Ok(Some(parse_openalex_work(&value)))
     }
 
@@ -607,14 +692,7 @@ impl AcademicProvider for OpenAlexProvider {
                 .append_pair("filter", &format!("cites:{openalex_id}"))
                 .append_pair("per-page", &limit.to_string());
             self.add_mailto(&mut cited_by);
-            if let Ok(value) = get_json(
-                &self.client,
-                cited_by.as_str(),
-                &[(USER_AGENT, UA)],
-                "openalex citations",
-            )
-            .await
-            {
+            if let Ok(value) = self.get_json(&cited_by, "openalex citations").await {
                 summary.citations = value
                     .get("results")
                     .and_then(Value::as_array)
@@ -653,7 +731,7 @@ impl AcademicProvider for OpenAlexProvider {
         };
         let mut url = Url::parse(&format!("https://api.openalex.org/works/{id}")).unwrap();
         self.add_mailto(&mut url);
-        let value = get_json(&self.client, url.as_str(), &[(USER_AGENT, UA)], "openalex").await?;
+        let value = self.get_json(&url, "openalex").await?;
         Ok(value
             .pointer("/best_oa_location/pdf_url")
             .or_else(|| value.pointer("/primary_location/pdf_url"))
@@ -926,4 +1004,29 @@ impl AcademicProvider for SciHubProvider {
 
 fn clean_title(title: &str) -> String {
     clean_html_title(title)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openalex_adds_rotated_api_key_query_parameter() {
+        let provider = OpenAlexProvider::new(
+            reqwest::Client::new(),
+            Some("person@example.com".to_string()),
+            Some("oa-a, oa-b".to_string()),
+        );
+        let mut first = Url::parse("https://api.openalex.org/works").unwrap();
+        provider.add_mailto(&mut first);
+        provider.add_key(&mut first, 0);
+        assert_eq!(
+            first.query(),
+            Some("mailto=person%40example.com&api_key=oa-a")
+        );
+
+        let mut second = Url::parse("https://api.openalex.org/works").unwrap();
+        provider.add_key(&mut second, 1);
+        assert_eq!(second.query(), Some("api_key=oa-b"));
+    }
 }

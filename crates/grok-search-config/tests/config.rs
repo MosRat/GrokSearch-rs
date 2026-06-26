@@ -192,6 +192,7 @@ fn config_file_supplies_values_when_env_absent() {
 grok_api_key = "xai-from-file"
 grok_model   = "grok-5-test"
 tavily_api_key = "tvly-from-file"
+openalex_api_key = "oa-file-a,oa-file-b"
 default_extra_sources = 7
 timeout_seconds = 42
 proxy = "http://file-user:file-pass@127.0.0.1:7890"
@@ -204,6 +205,7 @@ proxy = "http://file-user:file-pass@127.0.0.1:7890"
     assert_eq!(cfg.grok_api_key.as_deref(), Some("xai-from-file"));
     assert_eq!(cfg.grok_model, "grok-5-test");
     assert_eq!(cfg.tavily_api_key.as_deref(), Some("tvly-from-file"));
+    assert_eq!(cfg.openalex_api_key.as_deref(), Some("oa-file-a,oa-file-b"));
     assert_eq!(cfg.default_extra_sources, 7);
     assert_eq!(cfg.timeout.as_secs(), 42);
     assert_eq!(cfg.proxy, "http://file-user:file-pass@127.0.0.1:7890");
@@ -274,6 +276,9 @@ tavily_enabled        = false
 firecrawl_api_url     = "https://firecrawl.example"
 firecrawl_api_key     = "fc-full"
 firecrawl_enabled     = false
+academic_email        = "person@example.com"
+semantic_scholar_api_key = "s2-full"
+openalex_api_key      = "oa-full-a,oa-full-b"
 default_extra_sources = 4
 fallback_sources      = 9
 fetch_max_chars       = 12345
@@ -303,6 +308,9 @@ timeout_seconds       = 30
     assert_eq!(cfg.firecrawl_api_url, "https://firecrawl.example/v1");
     assert_eq!(cfg.firecrawl_api_key.as_deref(), Some("fc-full"));
     assert!(!cfg.firecrawl_enabled);
+    assert_eq!(cfg.academic_email.as_deref(), Some("person@example.com"));
+    assert_eq!(cfg.semantic_scholar_api_key.as_deref(), Some("s2-full"));
+    assert_eq!(cfg.openalex_api_key.as_deref(), Some("oa-full-a,oa-full-b"));
     assert_eq!(cfg.default_extra_sources, 4);
     assert_eq!(cfg.fallback_sources, 9);
     assert_eq!(cfg.fetch_max_chars, Some(12345));

@@ -51,6 +51,7 @@ pub struct Config {
     pub academic_enabled: bool,
     pub academic_email: Option<String>,
     pub semantic_scholar_api_key: Option<String>,
+    pub openalex_api_key: Option<String>,
     pub academic_scihub_enabled: bool,
     pub academic_scihub_base_url: Option<String>,
     pub academic_max_pdf_bytes: usize,
@@ -110,6 +111,7 @@ impl std::fmt::Debug for Config {
                 "semantic_scholar_api_key",
                 &mask(&self.semantic_scholar_api_key),
             )
+            .field("openalex_api_key", &mask(&self.openalex_api_key))
             .field("academic_scihub_enabled", &self.academic_scihub_enabled)
             .field(
                 "academic_scihub_base_url",
@@ -158,6 +160,7 @@ struct ConfigFile {
     academic_enabled: Option<bool>,
     academic_email: Option<String>,
     semantic_scholar_api_key: Option<String>,
+    openalex_api_key: Option<String>,
     academic_scihub_enabled: Option<bool>,
     academic_scihub_base_url: Option<String>,
     academic_max_pdf_bytes: Option<usize>,
@@ -251,6 +254,7 @@ impl ConfigFile {
         );
         insert("GROK_SEARCH_ACADEMIC_EMAIL", self.academic_email);
         insert("SEMANTIC_SCHOLAR_API_KEY", self.semantic_scholar_api_key);
+        insert("OPENALEX_API_KEY", self.openalex_api_key);
         insert(
             "GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED",
             self.academic_scihub_enabled.map(|b| b.to_string()),
@@ -377,6 +381,11 @@ impl Config {
                 .get("SEMANTIC_SCHOLAR_API_KEY")
                 .cloned()
                 .filter(|v| !v.is_empty()),
+            openalex_api_key: map
+                .get("OPENALEX_API_KEY")
+                .or_else(|| map.get("GROK_SEARCH_OPENALEX_API_KEY"))
+                .cloned()
+                .filter(|v| !v.is_empty()),
             academic_scihub_enabled: bool_value(&map, "GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED", false),
             academic_scihub_base_url: map
                 .get("GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL")
@@ -420,13 +429,21 @@ impl Config {
         }
     }
 
+    pub fn openalex_key_status(&self) -> &'static str {
+        if self.openalex_api_key.is_some() {
+            "set"
+        } else {
+            "unset"
+        }
+    }
+
     pub fn redacted_scihub_base_url(&self) -> Option<String> {
         redact_optional_url(&self.academic_scihub_base_url)
     }
 
     pub fn redacted_diagnostics(&self) -> String {
         format!(
-            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} proxy={} github_token={} academic_enabled={} academic_email={} semantic_scholar_api_key={} academic_scihub_enabled={} academic_scihub_base_url={}",
+            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} proxy={} github_token={} academic_enabled={} academic_email={} semantic_scholar_api_key={} openalex_api_key={} academic_scihub_enabled={} academic_scihub_base_url={}",
             self.grok_api_url,
             redact(self.grok_api_key.as_deref()),
             self.grok_auth_mode,
@@ -447,6 +464,7 @@ impl Config {
             self.academic_enabled,
             self.academic_email_status(),
             redact(self.semantic_scholar_api_key.as_deref()),
+            redact(self.openalex_api_key.as_deref()),
             self.academic_scihub_enabled,
             self.redacted_scihub_base_url().unwrap_or_else(|| "unset".to_string())
         )
@@ -613,6 +631,7 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 # academic_enabled          = true
 # academic_email            = "you@example.com" # Unpaywall email; also polite API contact
 # semantic_scholar_api_key  = "..."             # optional; anonymous mode works with lower limits
+# openalex_api_key          = "..."             # comma-separated list rotates keys round-robin
 # academic_scihub_enabled   = false             # explicit opt-in only; legal risk varies
 # academic_scihub_base_url  = "https://..."     # only read when academic_scihub_enabled=true
 # academic_max_pdf_bytes    = 52428800          # max PDF download size for academic_read
@@ -885,10 +904,12 @@ mod source_config_tests {
         assert!(!cfg.academic_scihub_enabled);
         assert_eq!(cfg.academic_email_status(), "unset");
         assert_eq!(cfg.semantic_scholar_key_status(), "unset");
+        assert_eq!(cfg.openalex_key_status(), "unset");
 
         let cfg = Config::from_env_map([
             ("GROK_SEARCH_ACADEMIC_EMAIL", "person@example.com"),
             ("SEMANTIC_SCHOLAR_API_KEY", "s2-secret"),
+            ("OPENALEX_API_KEY", "oa-secret-a,oa-secret-b"),
             ("GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED", "true"),
             (
                 "GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL",
@@ -897,11 +918,25 @@ mod source_config_tests {
         ]);
         assert_eq!(cfg.academic_email_status(), "set");
         assert_eq!(cfg.semantic_scholar_key_status(), "set");
+        assert_eq!(cfg.openalex_key_status(), "set");
+        assert_eq!(
+            cfg.openalex_api_key.as_deref(),
+            Some("oa-secret-a,oa-secret-b")
+        );
         let dbg = format!("{cfg:?}");
         assert!(!dbg.contains("s2-secret"));
+        assert!(!dbg.contains("oa-secret"));
         assert!(!dbg.contains("user:pass"));
         assert!(!cfg.redacted_diagnostics().contains("s2-secret"));
+        assert!(!cfg.redacted_diagnostics().contains("oa-secret"));
         assert!(cfg.redacted_scihub_base_url().unwrap().contains("***:***"));
+    }
+
+    #[test]
+    fn openalex_api_key_reads_legacy_prefixed_env_alias() {
+        let cfg = Config::from_env_map([("GROK_SEARCH_OPENALEX_API_KEY", "oa-prefixed")]);
+        assert_eq!(cfg.openalex_api_key.as_deref(), Some("oa-prefixed"));
+        assert_eq!(cfg.openalex_key_status(), "set");
     }
 }
 

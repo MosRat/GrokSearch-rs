@@ -52,7 +52,11 @@ impl AcademicService {
                     config.semantic_scholar_api_key.clone(),
                 ),
                 arxiv: ArxivProvider::new(client.clone()),
-                openalex: OpenAlexProvider::new(client.clone(), config.academic_email.clone()),
+                openalex: OpenAlexProvider::new(
+                    client.clone(),
+                    config.academic_email.clone(),
+                    config.openalex_api_key.clone(),
+                ),
                 crossref: CrossrefProvider::new(client.clone(), config.academic_email.clone()),
                 unpaywall: UnpaywallProvider::new(client.clone(), config.academic_email.clone()),
                 scihub: SciHubProvider::new(
@@ -278,6 +282,7 @@ impl AcademicService {
         serde_json::json!({
             "enabled": self.config.academic_enabled,
             "semantic_scholar_api_key": self.config.semantic_scholar_key_status(),
+            "openalex_api_key": self.config.openalex_key_status(),
             "unpaywall_email": self.config.academic_email_status(),
             "scihub_enabled": self.config.academic_scihub_enabled,
             "scihub_base_url": self.config.redacted_scihub_base_url(),
