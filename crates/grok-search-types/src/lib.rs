@@ -18,6 +18,7 @@ pub use model::tool::{GetSourcesOutput, WebFetchOutput, WebSearchInput, WebSearc
 pub enum SourceType {
     GithubIssue,
     GithubPull,
+    GithubRepo,
     Stackexchange,
     Arxiv,
     Wikipedia,
@@ -31,6 +32,7 @@ impl SourceType {
         match self {
             SourceType::GithubIssue => "github_issue",
             SourceType::GithubPull => "github_pull",
+            SourceType::GithubRepo => "github_repo",
             SourceType::Stackexchange => "stackexchange",
             SourceType::Arxiv => "arxiv",
             SourceType::Wikipedia => "wikipedia",

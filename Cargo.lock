@@ -1046,6 +1046,7 @@ name = "grok-search-sources"
 version = "0.1.26"
 dependencies = [
  "async-trait",
+ "base64",
  "grok-search-config",
  "grok-search-source-core",
  "grok-search-types",

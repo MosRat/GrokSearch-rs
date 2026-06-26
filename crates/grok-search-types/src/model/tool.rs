@@ -99,4 +99,19 @@ mod tests {
         let value = serde_json::to_value(&output).unwrap();
         assert_eq!(value["fallback_reason"], "github_issue empty render");
     }
+
+    #[test]
+    fn web_fetch_output_serializes_github_repo_source_type() {
+        let output = WebFetchOutput {
+            url: "https://github.com/owner/repo".to_string(),
+            content: "# owner/repo".to_string(),
+            original_length: 12,
+            truncated: false,
+            source_type: SourceType::GithubRepo,
+            fallback_reason: None,
+        };
+        let value = serde_json::to_value(&output).unwrap();
+        assert_eq!(value["source_type"], "github_repo");
+        assert_eq!(SourceType::GithubRepo.as_str(), "github_repo");
+    }
 }

@@ -1,6 +1,7 @@
 use grok_search_sources::sources::arxiv::{render as arxiv_render, ArxivExtractor};
 use grok_search_sources::sources::github::{
-    render as gh_render, GithubIssueExtractor, GithubPrExtractor, GithubRaw,
+    render as gh_render, render_repo as gh_repo_render, GithubIssueExtractor, GithubPrExtractor,
+    GithubRaw, GithubRepoExtractor, GithubRepoRaw,
 };
 use grok_search_sources::sources::stackexchange::{
     render as se_render, SeRaw, StackExchangeExtractor,
@@ -9,6 +10,7 @@ use grok_search_sources::sources::wikipedia::{
     parse_page as wiki_parse_page, render as wiki_render, WikiRaw, WikipediaExtractor,
 };
 use grok_search_sources::sources::{SourceCaps, SourceExtractor};
+use grok_search_sources::SourceType;
 use url::Url;
 
 fn issue_fixture() -> GithubRaw {
@@ -53,10 +55,14 @@ fn github_pr_render_shows_merged_state() {
 fn github_matcher_strict_positive_and_negative() {
     let issue = GithubIssueExtractor { token: None };
     let pr = GithubPrExtractor { token: None };
+    let repo = GithubRepoExtractor { token: None };
     let m = |u: &str| Url::parse(u).unwrap();
 
     assert!(issue.matches(&m("https://github.com/owner/repo/issues/42")));
     assert!(pr.matches(&m("https://github.com/owner/repo/pull/7")));
+    assert!(repo.matches(&m("https://github.com/owner/repo")));
+    assert!(repo.matches(&m("https://github.com/owner/repo/")));
+    assert_eq!(repo.kind(), SourceType::GithubRepo);
 
     for neg in [
         "https://github.com/",
@@ -65,10 +71,39 @@ fn github_matcher_strict_positive_and_negative() {
         "https://gist.github.com/user/abc",
         "https://github.com/owner/repo/discussions/1",
         "https://github.com/owner/repo/blob/main/README.md",
+        "https://github.com/owner/repo/tree/main",
+        "https://github.com/owner/repo/releases",
     ] {
         assert!(!issue.matches(&m(neg)), "issue should reject {neg}");
         assert!(!pr.matches(&m(neg)), "pr should reject {neg}");
+        assert!(!repo.matches(&m(neg)), "repo should reject {neg}");
     }
+    for neg in [
+        "https://github.com/owner/repo/issues/42",
+        "https://github.com/owner/repo/pull/7",
+    ] {
+        assert!(!repo.matches(&m(neg)), "repo should reject {neg}");
+    }
+}
+
+#[test]
+fn github_repo_render_is_readme_focused() {
+    let raw = GithubRepoRaw {
+        full_name: "owner/repo".into(),
+        description: Some("Useful library".into()),
+        default_branch: "main".into(),
+        stars: 42,
+        forks: 7,
+        license: Some("MIT".into()),
+        readme: "# Repo\n\nInstall with cargo.".into(),
+    };
+    let out = gh_repo_render(&raw, &SourceCaps::default());
+    assert!(out.contains("# owner/repo"));
+    assert!(out.contains("Useful library"));
+    assert!(out.contains("## README"));
+    assert!(out.contains("Install with cargo."));
+    assert!(!out.contains("Navigation Menu"));
+    assert!(!out.contains("Search code, repositories"));
 }
 
 fn se_fixture() -> SeRaw {

@@ -21,6 +21,9 @@ pub fn router_from_config(config: &Config) -> SourceRouter {
         Box::new(github::GithubPrExtractor {
             token: config.github_token.clone(),
         }),
+        Box::new(github::GithubRepoExtractor {
+            token: config.github_token.clone(),
+        }),
         Box::new(stackexchange::StackExchangeExtractor),
         Box::new(arxiv::ArxivExtractor),
         Box::new(wikipedia::WikipediaExtractor),

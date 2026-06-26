@@ -4,6 +4,29 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.1.27 - 2026-06-26
+
+### Fixed
+
+- Improved academic canonical resolution for title-like `academic_get` queries
+  by preferring stronger Semantic Scholar, arXiv, and DBLP metadata over
+  lower-confidence OpenAlex/Crossref fallbacks.
+- Made `academic_citations` resolve papers canonically before fetching citation
+  graphs, and removed noisy `openalex_reference` source entries from returned
+  citation summaries.
+- Made `academic_read` try multiple full-text PDF candidates before failing,
+  so one timed-out or broken PDF URL does not end the read path.
+- Rejected malformed `web_fetch` and `web_map` URLs at the service boundary with
+  `invalid params` instead of forwarding them to Tavily or Firecrawl.
+
+### Added
+
+- Added a GitHub repository README specialist for `web_fetch`, returning clean
+  repository metadata and README Markdown with `source_type: "github_repo"`.
+- Expanded regression tests for academic canonical ranking, citation cleanup,
+  URL validation, GitHub repo fallback behavior, README decoding, and source
+  type serialization.
+
 ## 0.1.25 - 2026-06-26
 
 ### Fixed

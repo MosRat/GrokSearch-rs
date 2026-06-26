@@ -45,6 +45,8 @@ async fn web_search_returns_content_and_caches_sources() {
 #[derive(Default)]
 struct CountingSourceProvider {
     search_calls: Arc<Mutex<usize>>,
+    fetch_calls: Arc<Mutex<usize>>,
+    map_calls: Arc<Mutex<usize>>,
 }
 
 #[async_trait]
@@ -62,10 +64,12 @@ impl SourceProvider for CountingSourceProvider {
     }
 
     async fn fetch(&self, _url: &str) -> Result<String> {
+        *self.fetch_calls.lock().expect("fetch call lock") += 1;
         Ok("fetched".to_string())
     }
 
     async fn map(&self, _url: &str, _max_results: usize) -> Result<Vec<Source>> {
+        *self.map_calls.lock().expect("map call lock") += 1;
         Ok(Vec::new())
     }
 }
@@ -443,6 +447,54 @@ async fn web_fetch_source_type_present_on_normal_fetch() {
 }
 
 #[tokio::test]
+async fn web_fetch_rejects_invalid_urls_before_providers() {
+    let provider = Arc::new(CountingSourceProvider::default());
+    let service = SearchService::fake_custom(None, provider.clone(), None, [] as [(&str, &str); 0]);
+
+    for url in ["not-a-url", "ftp://example.com/a", "https://"] {
+        let err = service
+            .web_fetch(url, None)
+            .await
+            .expect_err("invalid URL should fail before provider");
+        assert!(
+            matches!(err, GrokSearchError::InvalidParams(_)),
+            "got: {err:?}"
+        );
+    }
+    assert_eq!(*provider.fetch_calls.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn web_map_rejects_invalid_urls_before_providers() {
+    let provider = Arc::new(CountingSourceProvider::default());
+    let service = SearchService::fake_custom(None, provider.clone(), None, [] as [(&str, &str); 0]);
+
+    let err = service
+        .web_map("not-a-url", 1)
+        .await
+        .expect_err("invalid URL should fail before provider");
+    assert!(
+        matches!(err, GrokSearchError::InvalidParams(_)),
+        "got: {err:?}"
+    );
+    assert_eq!(*provider.map_calls.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn web_map_accepts_valid_http_urls_and_calls_provider() {
+    let provider = Arc::new(CountingSourceProvider::default());
+    let service = SearchService::fake_custom(None, provider.clone(), None, [] as [(&str, &str); 0]);
+
+    let output = service
+        .web_map("https://example.com/docs", 3)
+        .await
+        .expect("valid URL should call provider");
+
+    assert!(output.is_empty());
+    assert_eq!(*provider.map_calls.lock().unwrap(), 1);
+}
+
+#[tokio::test]
 async fn web_fetch_uses_firecrawl_when_tavily_fetch_fails() {
     let service = SearchService::fake_custom(
         None,
@@ -585,4 +637,47 @@ async fn web_search_speculation_serves_enrichment_with_one_source_call() {
         .sources
         .iter()
         .any(|s| s.provider == "tavily_enrichment"));
+}
+
+struct GithubRepoFailingExtractor;
+
+#[async_trait]
+impl SourceExtractor for GithubRepoFailingExtractor {
+    fn matches(&self, url: &Url) -> bool {
+        url.host_str() == Some("github.com")
+            && url
+                .path_segments()
+                .map(|segments| segments.filter(|s| !s.is_empty()).count() == 2)
+                .unwrap_or(false)
+    }
+
+    fn kind(&self) -> SourceType {
+        SourceType::GithubRepo
+    }
+
+    async fn fetch_render(&self, _c: &Client, _u: &Url, _caps: &SourceCaps) -> Result<String> {
+        Err(GrokSearchError::Provider("repo readme missing".into()))
+    }
+}
+
+#[tokio::test]
+async fn web_fetch_github_repo_specialist_failure_falls_back_to_generic() {
+    let service = SearchService::fake_with_router(
+        Arc::new(FailingSourceProvider),
+        Some(Arc::new(FirecrawlLikeSourceProvider)),
+        SourceRouter::with_extractors(vec![Box::new(GithubRepoFailingExtractor)]),
+    );
+
+    let output = service
+        .web_fetch("https://github.com/owner/repo", None)
+        .await
+        .expect("repo fetch should fall back");
+
+    assert_eq!(output.source_type, SourceType::Generic);
+    assert!(output.content.contains("firecrawl fallback content"));
+    assert!(output
+        .fallback_reason
+        .as_deref()
+        .unwrap_or_default()
+        .contains("github_repo"));
 }

@@ -56,6 +56,11 @@ struct ProviderSet {
     scihub: SciHubProvider,
 }
 
+struct ResolvedPaper {
+    paper: AcademicPaper,
+    chain: Vec<String>,
+}
+
 impl AcademicService {
     pub fn new(client: reqwest::Client, config: Config) -> Self {
         Self {
@@ -190,58 +195,25 @@ impl AcademicService {
         include_citations: bool,
         include_open_access: bool,
     ) -> Result<AcademicGetOutput> {
-        let id = parse_identifier(identifier);
-        let mut chain = Vec::new();
-        let mut paper: Option<AcademicPaper> = None;
-        for provider in self.get_providers() {
-            chain.push(provider.name().to_string());
-            match provider.get(&id).await {
-                Ok(Some(found)) => {
-                    if !resolved_paper_matches_identifier(&id, &found) {
-                        continue;
-                    }
-                    paper = Some(match paper {
-                        Some(mut existing) => {
-                            existing.merge_from(found);
-                            existing
-                        }
-                        None => found,
-                    });
-                }
-                Ok(None) => {}
-                Err(_) => {}
-            }
-        }
-        let mut paper = match paper {
-            Some(paper) => paper,
-            None => {
-                if matches!(id, Identifier::Query(_)) {
-                    let fallback = self.title_query_fallback(identifier).await?;
-                    chain.extend(fallback.resolver_chain);
-                    fallback.paper
-                } else {
-                    return Err(GrokSearchError::NotFound(format!(
-                        "academic identifier not found: {identifier}"
-                    )));
-                }
-            }
-        };
+        let mut resolved = self.resolve_canonical_paper(identifier).await?;
+        resolved.paper = without_openalex_reference_sources(resolved.paper);
         if include_open_access {
-            if let Ok(Some(location)) = self.resolve_fulltext_location(&paper).await {
-                paper.pdf_url = paper.pdf_url.or(Some(location.url));
+            if let Ok(Some(location)) = self.resolve_fulltext_location(&resolved.paper).await {
+                resolved.paper.pdf_url = resolved.paper.pdf_url.or(Some(location.url));
             }
         }
         let citations = if include_citations {
-            self.citation_summary(&identifier_for_paper(&paper), 10)
+            self.citation_summary(&identifier_for_paper(&resolved.paper), 10)
                 .await
+                .map(clean_citation_summary)
                 .ok()
         } else {
             None
         };
         Ok(AcademicGetOutput {
-            paper,
+            paper: resolved.paper,
             citations,
-            resolver_chain: chain,
+            resolver_chain: resolved.chain,
         })
     }
 
@@ -250,7 +222,8 @@ impl AcademicService {
         identifier: &str,
         limit: usize,
     ) -> Result<AcademicCitationsOutput> {
-        let id = parse_identifier(identifier);
+        let resolved = self.resolve_canonical_paper(identifier).await?;
+        let id = identifier_for_paper(&resolved.paper);
         let limit = limit.clamp(1, 50);
         let mut sources_used = Vec::new();
         for provider in [
@@ -260,6 +233,7 @@ impl AcademicService {
             match provider.citations(&id, limit).await {
                 Ok(Some(summary)) => {
                     sources_used.push(provider.name().to_string());
+                    let summary = clean_citation_summary(summary);
                     return Ok(AcademicCitationsOutput {
                         identifier: identifier.to_string(),
                         citation_count: Some(summary.citations.len() as u32),
@@ -292,62 +266,61 @@ impl AcademicService {
             ));
         }
         let mut chain = Vec::new();
-        let location = if let Some(url) = url.clone() {
-            FullTextLocation {
+        let locations = if let Some(url) = url.clone() {
+            vec![FullTextLocation {
                 url,
                 source: "direct_url".to_string(),
                 status: "direct_url".to_string(),
-            }
+            }]
         } else {
             let identifier = identifier.as_deref().ok_or_else(|| {
                 GrokSearchError::InvalidParams("academic_read requires identifier or url".into())
             })?;
             let get = self.get(identifier, false, true).await?;
             chain.extend(get.resolver_chain);
-            self.resolve_fulltext_location(&get.paper)
-                .await?
-                .ok_or_else(|| GrokSearchError::NotFound("no full-text PDF URL found".into()))?
+            let locations = self.resolve_fulltext_locations(&get.paper).await?;
+            if locations.is_empty() {
+                return Err(GrokSearchError::NotFound(
+                    "no full-text PDF URL found".into(),
+                ));
+            }
+            locations
         };
 
-        chain.push(location.source.clone());
-        let bytes = tokio::time::timeout(
-            self.config.timeout,
-            download_pdf_bytes(
-                &self.client,
-                &location.url,
-                self.config.academic_max_pdf_bytes,
-            ),
-        )
-        .await
-        .map_err(|_| {
-            GrokSearchError::Timeout(format!(
-                "academic_read PDF download timed out for {}",
-                location.url
-            ))
-        })??;
         let limit = max_chars
             .or(self.config.academic_pdf_max_chars)
             .or(self.config.fetch_max_chars)
             .unwrap_or(200_000);
-        let parsed = parse_pdf_bytes_with_timeout(
-            bytes,
-            format.clone(),
-            limit,
-            self.config.timeout,
-            &location.url,
-        )
-        .await?;
-        Ok(AcademicReadOutput {
-            identifier,
-            url,
-            pdf_url: location.url,
-            content: parsed.content,
-            original_length: parsed.original_length,
-            truncated: parsed.truncated,
-            source: location.source,
-            fulltext_status: location.status,
-            resolver_chain: chain,
-        })
+        let mut failures = Vec::new();
+        for location in locations {
+            match self
+                .download_and_parse_pdf(&location, format.clone(), limit)
+                .await
+            {
+                Ok(parsed) => {
+                    chain.push(location.source.clone());
+                    return Ok(AcademicReadOutput {
+                        identifier,
+                        url,
+                        pdf_url: location.url,
+                        content: parsed.content,
+                        original_length: parsed.original_length,
+                        truncated: parsed.truncated,
+                        source: location.source,
+                        fulltext_status: location.status,
+                        resolver_chain: chain,
+                    });
+                }
+                Err(err) => failures.push(format!("{}: {err}", location.url)),
+            }
+        }
+        let message = failures.join("; ");
+        let is_timeout = message.contains("timed out");
+        let err = format!("academic_read PDF fetch failed for all candidates: {message}");
+        if is_timeout {
+            return Err(GrokSearchError::Timeout(err));
+        }
+        Err(GrokSearchError::Provider(err))
     }
 
     pub fn diagnostics(&self) -> serde_json::Value {
@@ -379,10 +352,74 @@ impl AcademicService {
         ))
     }
 
+    async fn resolve_canonical_paper(&self, identifier: &str) -> Result<ResolvedPaper> {
+        let id = parse_identifier(identifier);
+        let mut chain = Vec::new();
+        let mut candidates = Vec::new();
+        for provider in self.get_providers() {
+            chain.push(provider.name().to_string());
+            match provider.get(&id).await {
+                Ok(Some(found)) if resolved_paper_matches_identifier(&id, &found) => {
+                    candidates.push(found);
+                }
+                Ok(_) | Err(_) => {}
+            }
+        }
+        if !candidates.is_empty() {
+            let paper = if matches!(id, Identifier::Query(_)) {
+                select_best_title_match(identifier, candidates).ok_or_else(|| {
+                    GrokSearchError::NotFound(format!(
+                        "academic identifier not found: {identifier}"
+                    ))
+                })?
+            } else {
+                merge_canonical_candidates(candidates)
+            };
+            return Ok(ResolvedPaper { paper, chain });
+        }
+        if matches!(id, Identifier::Query(_)) {
+            let fallback = self.title_query_fallback(identifier).await?;
+            chain.extend(fallback.resolver_chain);
+            return Ok(ResolvedPaper {
+                paper: fallback.paper,
+                chain,
+            });
+        }
+        Err(GrokSearchError::NotFound(format!(
+            "academic identifier not found: {identifier}"
+        )))
+    }
+
     async fn resolve_fulltext_location(
         &self,
         paper: &AcademicPaper,
     ) -> Result<Option<FullTextLocation>> {
+        Ok(self
+            .resolve_fulltext_locations(paper)
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    async fn resolve_fulltext_locations(
+        &self,
+        paper: &AcademicPaper,
+    ) -> Result<Vec<FullTextLocation>> {
+        let mut locations = Vec::new();
+        if let Some(url) = &paper.pdf_url {
+            locations.push(FullTextLocation {
+                url: url.clone(),
+                source: "paper".to_string(),
+                status: "paper_pdf_url".to_string(),
+            });
+        }
+        if let Some(arxiv_id) = &paper.arxiv_id {
+            locations.push(FullTextLocation {
+                url: format!("https://arxiv.org/pdf/{arxiv_id}"),
+                source: "arxiv".to_string(),
+                status: "arxiv_pdf".to_string(),
+            });
+        }
         for provider in [
             &self.providers.arxiv as &dyn AcademicProvider,
             &self.providers.semantic,
@@ -391,10 +428,43 @@ impl AcademicService {
             &self.providers.scihub,
         ] {
             if let Some(location) = provider.resolve_fulltext(paper).await? {
-                return Ok(Some(location));
+                locations.push(location);
             }
         }
-        Ok(None)
+        let mut unique = Vec::new();
+        for location in locations {
+            if !unique
+                .iter()
+                .any(|existing: &FullTextLocation| existing.url == location.url)
+            {
+                unique.push(location);
+            }
+        }
+        Ok(unique)
+    }
+
+    async fn download_and_parse_pdf(
+        &self,
+        location: &FullTextLocation,
+        format: String,
+        limit: usize,
+    ) -> Result<ParsedContent> {
+        let bytes = tokio::time::timeout(
+            self.config.timeout,
+            download_pdf_bytes(
+                &self.client,
+                &location.url,
+                self.config.academic_max_pdf_bytes,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            GrokSearchError::Timeout(format!(
+                "academic_read PDF download timed out for {}",
+                location.url
+            ))
+        })??;
+        parse_pdf_bytes_with_timeout(bytes, format, limit, self.config.timeout, &location.url).await
     }
 
     fn get_providers(&self) -> Vec<&dyn AcademicProvider> {
@@ -421,7 +491,7 @@ impl AcademicService {
                 ..Default::default()
             })
             .await?;
-        let paper = select_exact_title_match(identifier, search.papers).ok_or_else(|| {
+        let paper = select_best_title_match(identifier, search.papers).ok_or_else(|| {
             GrokSearchError::NotFound(format!("academic identifier not found: {identifier}"))
         })?;
         Ok(AcademicGetOutput {
@@ -589,14 +659,138 @@ fn resolved_paper_matches_identifier(id: &Identifier, paper: &AcademicPaper) -> 
     }
 }
 
-fn select_exact_title_match(
+fn select_best_title_match(
     query: &str,
     papers: impl IntoIterator<Item = AcademicPaper>,
 ) -> Option<AcademicPaper> {
     let expected = normalize_title(query);
-    papers
+    let mut matches: Vec<AcademicPaper> = papers
         .into_iter()
-        .find(|paper| normalize_title(&paper.title) == expected)
+        .filter(|paper| normalize_title(&paper.title) == expected)
+        .collect();
+    matches.sort_by(|a, b| canonical_title_score(query, b).cmp(&canonical_title_score(query, a)));
+    matches.into_iter().next()
+}
+
+fn merge_canonical_candidates(mut candidates: Vec<AcademicPaper>) -> AcademicPaper {
+    candidates.sort_by(|a, b| canonical_identifier_score(b).cmp(&canonical_identifier_score(a)));
+    let mut merged = candidates.remove(0);
+    for candidate in candidates {
+        merged.merge_from(candidate);
+    }
+    merged
+}
+
+fn canonical_title_score(query: &str, paper: &AcademicPaper) -> u32 {
+    let exact_title = (normalize_title(&paper.title) == normalize_title(query)) as u32;
+    exact_title * 10_000
+        + canonical_identifier_score(paper)
+        + canonical_source_score(paper)
+        + author_signal_score(paper)
+        + venue_signal_score(paper)
+        + stable_year_score(paper)
+        + citation_signal_score(paper)
+        + suspicious_doi_penalty(paper)
+}
+
+fn canonical_identifier_score(paper: &AcademicPaper) -> u32 {
+    paper.semantic_scholar_id.is_some() as u32 * 2_000
+        + paper.arxiv_id.is_some() as u32 * 1_600
+        + paper
+            .doi
+            .as_ref()
+            .map_or(0, |doi| if suspicious_doi(doi, paper) { 100 } else { 700 })
+        + paper.openalex_id.is_some() as u32 * 300
+}
+
+fn canonical_source_score(paper: &AcademicPaper) -> u32 {
+    paper
+        .sources
+        .iter()
+        .map(|source| match source.provider.as_ref() {
+            "semantic" => 900,
+            "arxiv" => 800,
+            "dblp" => 700,
+            "openalex" => 250,
+            "crossref" => 150,
+            _ => 0,
+        })
+        .sum::<u32>()
+        .min(2_400)
+}
+
+fn author_signal_score(paper: &AcademicPaper) -> u32 {
+    (paper.authors.len().min(8) as u32) * 25
+}
+
+fn venue_signal_score(paper: &AcademicPaper) -> u32 {
+    match paper.venue.as_deref().map(|v| v.to_ascii_lowercase()) {
+        Some(venue)
+            if venue.contains("arxiv")
+                || venue.contains("neural information processing")
+                || venue.contains("conference")
+                || venue.contains("journal") =>
+        {
+            250
+        }
+        Some(_) => 120,
+        None => 0,
+    }
+}
+
+fn stable_year_score(paper: &AcademicPaper) -> u32 {
+    match paper.year {
+        Some(1900..=2026) => 200,
+        Some(_) => 0,
+        None => 50,
+    }
+}
+
+fn citation_signal_score(paper: &AcademicPaper) -> u32 {
+    let citations = paper.citation_count.unwrap_or(0).min(100_000);
+    if citations == 0 {
+        0
+    } else {
+        citations.ilog10() * 120 + citations.min(10_000) / 20
+    }
+}
+
+fn suspicious_doi_penalty(paper: &AcademicPaper) -> u32 {
+    paper
+        .doi
+        .as_ref()
+        .filter(|doi| suspicious_doi(doi, paper))
+        .map_or(0, |_| 0)
+}
+
+fn suspicious_doi(doi: &str, paper: &AcademicPaper) -> bool {
+    let doi = doi.to_ascii_lowercase();
+    let source_only_crossref_or_openalex = !paper.sources.is_empty()
+        && paper.sources.iter().all(|source| {
+            matches!(
+                source.provider.as_ref(),
+                "crossref" | "openalex" | "openalex_reference"
+            )
+        });
+    doi.contains("10.65215")
+        || (source_only_crossref_or_openalex
+            && paper.semantic_scholar_id.is_none()
+            && paper.arxiv_id.is_none()
+            && paper.venue.is_none())
+}
+
+fn clean_citation_summary(mut summary: AcademicCitationSummary) -> AcademicCitationSummary {
+    summary.citations = summary
+        .citations
+        .into_iter()
+        .map(without_openalex_reference_sources)
+        .collect();
+    summary.references = summary
+        .references
+        .into_iter()
+        .map(without_openalex_reference_sources)
+        .collect();
+    summary
 }
 
 async fn parse_pdf_bytes_with_timeout(
@@ -1132,13 +1326,126 @@ mod tests {
             title: "Attention Is Almost All You Need".into(),
             ..Default::default()
         };
-        let found = select_exact_title_match(
+        let found = select_best_title_match(
             "attention is all you need",
             vec![near_miss.clone(), exact.clone()],
         )
         .expect("exact title");
         assert_eq!(found.title, exact.title);
-        assert!(select_exact_title_match("attention is all you need", vec![near_miss]).is_none());
+        assert!(select_best_title_match("attention is all you need", vec![near_miss]).is_none());
+    }
+
+    #[test]
+    fn title_query_selector_prefers_canonical_scholarly_metadata() {
+        let query = "Canonical Systems Paper";
+        let low_confidence = AcademicPaper {
+            title: query.into(),
+            year: Some(2025),
+            doi: Some("10.65215/example".into()),
+            sources: vec![
+                Source::new("https://openalex.org/W1", "openalex"),
+                Source::new("https://doi.org/10.65215/example", "crossref"),
+            ],
+            ..Default::default()
+        };
+        let canonical = AcademicPaper {
+            title: query.into(),
+            authors: vec!["Ada Lovelace".into(), "Grace Hopper".into()],
+            year: Some(2017),
+            venue: Some("Conference on Systems".into()),
+            arxiv_id: Some("1701.00001".into()),
+            semantic_scholar_id: Some("semantic-paper".into()),
+            citation_count: Some(10_000),
+            sources: vec![
+                Source::new(
+                    "https://semanticscholar.org/paper/semantic-paper",
+                    "semantic",
+                ),
+                Source::new("https://arxiv.org/abs/1701.00001", "arxiv"),
+            ],
+            ..Default::default()
+        };
+        let found = select_best_title_match(query, vec![low_confidence, canonical.clone()])
+            .expect("canonical match");
+        assert_eq!(found.semantic_scholar_id, canonical.semantic_scholar_id);
+    }
+
+    #[test]
+    fn title_query_selector_rejects_near_title_even_when_highly_cited() {
+        let near = AcademicPaper {
+            title: "Canonical Systems Paper Extended".into(),
+            citation_count: Some(100_000),
+            semantic_scholar_id: Some("near".into()),
+            sources: vec![Source::new(
+                "https://semanticscholar.org/paper/near",
+                "semantic",
+            )],
+            ..Default::default()
+        };
+        assert!(select_best_title_match("Canonical Systems Paper", vec![near]).is_none());
+    }
+
+    #[test]
+    fn title_query_selector_allows_low_confidence_provider_when_only_exact_candidate() {
+        let query = "Niche Exact Paper";
+        let crossref_only = AcademicPaper {
+            title: query.into(),
+            year: Some(2024),
+            doi: Some("10.1234/niche".into()),
+            sources: vec![Source::new("https://doi.org/10.1234/niche", "crossref")],
+            ..Default::default()
+        };
+        let found = select_best_title_match(query, vec![crossref_only.clone()])
+            .expect("single exact candidate should still be usable");
+        assert_eq!(found.doi, crossref_only.doi);
+    }
+
+    #[test]
+    fn canonical_merge_starts_from_best_candidate() {
+        let weak = AcademicPaper {
+            title: "Same Paper".into(),
+            doi: Some("10.65215/weak".into()),
+            sources: vec![Source::new("https://doi.org/10.65215/weak", "crossref")],
+            ..Default::default()
+        };
+        let strong = AcademicPaper {
+            title: "Same Paper".into(),
+            semantic_scholar_id: Some("sem".into()),
+            arxiv_id: Some("2401.00001".into()),
+            citation_count: Some(500),
+            sources: vec![Source::new(
+                "https://semanticscholar.org/paper/sem",
+                "semantic",
+            )],
+            ..Default::default()
+        };
+        let merged = merge_canonical_candidates(vec![weak, strong]);
+        assert_eq!(merged.semantic_scholar_id.as_deref(), Some("sem"));
+        assert_eq!(merged.arxiv_id.as_deref(), Some("2401.00001"));
+    }
+
+    #[test]
+    fn citation_summary_cleanup_removes_openalex_reference_sources() {
+        let relation = AcademicPaper {
+            title: "Related".into(),
+            sources: vec![
+                Source::new("https://openalex.org/W0", "openalex"),
+                Source::new("https://openalex.org/W1", "openalex_reference"),
+            ],
+            ..Default::default()
+        };
+        let cleaned = clean_citation_summary(AcademicCitationSummary {
+            citations: vec![relation.clone()],
+            references: vec![relation],
+        });
+        assert!(cleaned.citations[0]
+            .sources
+            .iter()
+            .all(|source| source.provider.as_ref() != "openalex_reference"));
+        assert!(cleaned.references[0]
+            .sources
+            .iter()
+            .all(|source| source.provider.as_ref() != "openalex_reference"));
     }
 
     #[tokio::test]
@@ -1218,5 +1525,36 @@ mod tests {
             matches!(err, GrokSearchError::InvalidParams(_)),
             "expected invalid params, got {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn academic_read_fulltext_locations_include_deduped_fallback_candidates() {
+        let service = AcademicService::new(
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("test client"),
+            Config::from_env_map(Vec::<(String, String)>::new()),
+        );
+        let paper = AcademicPaper {
+            title: "Paper".into(),
+            arxiv_id: Some("2401.00001".into()),
+            pdf_url: Some("https://arxiv.org/pdf/2401.00001".into()),
+            ..Default::default()
+        };
+        let locations = service
+            .resolve_fulltext_locations(&paper)
+            .await
+            .expect("locations");
+        assert_eq!(
+            locations
+                .iter()
+                .filter(|location| location.url == "https://arxiv.org/pdf/2401.00001")
+                .count(),
+            1
+        );
+        assert!(locations
+            .iter()
+            .any(|location| location.source == "paper" || location.source == "arxiv"));
     }
 }

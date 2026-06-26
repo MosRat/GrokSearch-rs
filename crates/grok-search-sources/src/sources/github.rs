@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use base64::Engine;
 use reqwest::header::{AUTHORIZATION, USER_AGENT};
 use reqwest::Client;
 use url::Url;
@@ -27,11 +28,26 @@ pub struct GithubComment {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct GithubRepoRaw {
+    pub full_name: String,
+    pub description: Option<String>,
+    pub default_branch: String,
+    pub stars: u64,
+    pub forks: u64,
+    pub license: Option<String>,
+    pub readme: String,
+}
+
 pub struct GithubIssueExtractor {
     pub token: Option<String>,
 }
 
 pub struct GithubPrExtractor {
+    pub token: Option<String>,
+}
+
+pub struct GithubRepoExtractor {
     pub token: Option<String>,
 }
 
@@ -44,6 +60,17 @@ fn matches_github(url: &Url, segment_kind: &str) -> bool {
         None => return false,
     };
     segs.len() == 4 && segs[2] == segment_kind && segs[3].parse::<u64>().is_ok()
+}
+
+fn matches_github_repo(url: &Url) -> bool {
+    if url.host_str() != Some("github.com") {
+        return false;
+    }
+    let segs: Vec<&str> = match url.path_segments() {
+        Some(it) => it.filter(|s| !s.is_empty()).collect(),
+        None => return false,
+    };
+    segs.len() == 2
 }
 
 /// Page size for any comment list. `/comments` endpoints default to 30 results
@@ -223,6 +250,84 @@ pub(crate) async fn fetch(
     })
 }
 
+pub(crate) async fn fetch_repo(
+    client: &Client,
+    url: &Url,
+    token: Option<&str>,
+) -> Result<GithubRepoRaw> {
+    let segs: Vec<String> = url
+        .path_segments()
+        .map(|it| it.filter(|s| !s.is_empty()).map(String::from).collect())
+        .unwrap_or_default();
+    if segs.len() != 2 {
+        return Err(GrokSearchError::Parse(
+            "github repo: unexpected URL shape".into(),
+        ));
+    }
+    let (owner, repo) = (&segs[0], &segs[1]);
+    let auth = token.map(|t| format!("Bearer {t}"));
+    let mut headers: Vec<(reqwest::header::HeaderName, &str)> = vec![(USER_AGENT, UA)];
+    if let Some(ref a) = auth {
+        headers.push((AUTHORIZATION, a.as_str()));
+    }
+
+    let repo_url = format!("https://api.github.com/repos/{owner}/{repo}");
+    let readme_url = format!("https://api.github.com/repos/{owner}/{repo}/readme");
+    let (repo_json, readme_json) = tokio::join!(
+        get_json(client, &repo_url, &headers, "github_repo"),
+        get_json(client, &readme_url, &headers, "github_readme"),
+    );
+    let repo_json = repo_json?;
+    let readme_json = readme_json?;
+    let readme = decode_readme(&readme_json)?;
+    if readme.trim().is_empty() {
+        return Err(GrokSearchError::Parse("github readme empty".into()));
+    }
+    Ok(GithubRepoRaw {
+        full_name: str_field(&repo_json, "full_name"),
+        description: repo_json
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        default_branch: str_field(&repo_json, "default_branch"),
+        stars: repo_json
+            .get("stargazers_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        forks: repo_json
+            .get("forks_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        license: repo_json
+            .pointer("/license/spdx_id")
+            .and_then(|v| v.as_str())
+            .filter(|v| *v != "NOASSERTION")
+            .map(str::to_string),
+        readme,
+    })
+}
+
+fn decode_readme(json: &serde_json::Value) -> Result<String> {
+    let content = json
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| GrokSearchError::Parse("github readme missing content".into()))?;
+    let encoding = json
+        .get("encoding")
+        .and_then(|v| v.as_str())
+        .unwrap_or("base64");
+    if encoding != "base64" {
+        return Err(GrokSearchError::Parse(format!(
+            "github readme unsupported encoding: {encoding}"
+        )));
+    }
+    let compact: String = content.chars().filter(|c| !c.is_whitespace()).collect();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(compact)
+        .map_err(|err| GrokSearchError::Parse(format!("github readme base64 decode: {err}")))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 pub fn render(raw: &GithubRaw, caps: &SourceCaps) -> String {
     let mut out = format!("# {}\n\n", raw.title);
     let merged_suffix = if raw.is_pr {
@@ -253,6 +358,24 @@ pub fn render(raw: &GithubRaw, caps: &SourceCaps) -> String {
     out
 }
 
+pub fn render_repo(raw: &GithubRepoRaw, _caps: &SourceCaps) -> String {
+    let mut out = format!("# {}\n\n", raw.full_name);
+    if let Some(description) = raw.description.as_deref().filter(|v| !v.trim().is_empty()) {
+        out.push_str(description);
+        out.push_str("\n\n");
+    }
+    out.push_str(&format!("**Default branch:** {}\n", raw.default_branch));
+    out.push_str(&format!("**Stars:** {}\n", raw.stars));
+    out.push_str(&format!("**Forks:** {}\n", raw.forks));
+    if let Some(license) = raw.license.as_deref() {
+        out.push_str(&format!("**License:** {license}\n"));
+    }
+    out.push_str("\n## README\n\n");
+    out.push_str(raw.readme.trim());
+    out.push('\n');
+    out
+}
+
 #[async_trait]
 impl SourceExtractor for GithubIssueExtractor {
     fn matches(&self, url: &Url) -> bool {
@@ -278,6 +401,20 @@ impl SourceExtractor for GithubPrExtractor {
     async fn fetch_render(&self, client: &Client, url: &Url, caps: &SourceCaps) -> Result<String> {
         let raw = fetch(client, url, self.token.as_deref(), true, caps.max_comments).await?;
         Ok(render(&raw, caps))
+    }
+}
+
+#[async_trait]
+impl SourceExtractor for GithubRepoExtractor {
+    fn matches(&self, url: &Url) -> bool {
+        matches_github_repo(url)
+    }
+    fn kind(&self) -> SourceType {
+        SourceType::GithubRepo
+    }
+    async fn fetch_render(&self, client: &Client, url: &Url, caps: &SourceCaps) -> Result<String> {
+        let raw = fetch_repo(client, url, self.token.as_deref()).await?;
+        Ok(render_repo(&raw, caps))
     }
 }
 
@@ -332,5 +469,25 @@ mod tests {
         assert_eq!(out[0].author, "dave");
         assert_eq!(out[0].body, "hi");
         assert_eq!(out[0].created_at, "2024-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn decode_readme_accepts_wrapped_base64() {
+        let json = serde_json::json!({
+            "encoding": "base64",
+            "content": "IyBSZXBvCg==\n"
+        });
+        let out = decode_readme(&json).expect("readme");
+        assert_eq!(out, "# Repo\n");
+    }
+
+    #[test]
+    fn decode_readme_rejects_unknown_encoding() {
+        let json = serde_json::json!({
+            "encoding": "utf-8",
+            "content": "# Repo\n"
+        });
+        let err = decode_readme(&json).expect_err("unknown encoding should fail");
+        assert!(err.to_string().contains("unsupported encoding"));
     }
 }

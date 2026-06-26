@@ -474,6 +474,7 @@ impl SearchService {
     }
 
     pub async fn web_fetch(&self, url: &str, max_chars: Option<usize>) -> Result<WebFetchOutput> {
+        validate_http_url(url)?;
         let effective_limit = max_chars.or(self.config.fetch_max_chars);
 
         let (content, source_type, fallback_reason) = match url::Url::parse(url) {
@@ -524,6 +525,7 @@ impl SearchService {
     }
 
     pub async fn web_map(&self, url: &str, max_results: usize) -> Result<Vec<Source>> {
+        validate_http_url(url)?;
         self.sources
             .as_ref()
             .ok_or(GrokSearchError::MissingConfig("TAVILY_API_KEY"))?
@@ -886,6 +888,20 @@ fn normalize_host(host: &str) -> String {
         .trim_end_matches('.')
         .trim_start_matches("www.")
         .to_ascii_lowercase()
+}
+
+fn validate_http_url(raw: &str) -> Result<url::Url> {
+    let parsed = url::Url::parse(raw).map_err(|_| {
+        GrokSearchError::InvalidParams(
+            "url must be an absolute http or https URL with a host".to_string(),
+        )
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(GrokSearchError::InvalidParams(
+            "url must be an absolute http or https URL with a host".to_string(),
+        ));
+    }
+    Ok(parsed)
 }
 
 fn apply_fetch_limit(
