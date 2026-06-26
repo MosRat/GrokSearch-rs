@@ -19,8 +19,4 @@ path = "src/main.rs"
 anyhow.workspace = true
 mimalloc.workspace = true
 tokio.workspace = true
-grok-search-auth = { path = "../grok-search-auth" }
-grok-search-config = { path = "../grok-search-config" }
-grok-search-mcp = { path = "../grok-search-mcp" }
-grok-search-net = { path = "../grok-search-net" }
-grok-search-runtime = { path = "../grok-search-runtime" }
+grok-search-cli = { path = "../grok-search-cli" }

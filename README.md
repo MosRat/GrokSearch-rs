@@ -78,6 +78,20 @@ The npm and PyPI packages ship a native Rust binary; the `grok-search-rs` comman
 
    Successful output shows `reachable: true` for each enabled upstream and `transport: Responses` (or `ChatCompletions`).
 
+You can also call the same tools directly from the CLI. CLI calls use the same
+global config, proxy bootstrap, providers, cache behavior, and output JSON shape
+as MCP tool calls:
+
+```bash
+grok-search-rs doctor
+grok-search-rs web-search "latest Rust MCP SDK changes" --response-format concise
+grok-search-rs web-fetch https://github.com/modelcontextprotocol/rust-sdk --max-chars 8000
+grok-search-rs academic search "retrieval augmented generation" --source dblp --source arxiv
+```
+
+Direct CLI output is pretty JSON by default; pass `--compact` on tool commands
+for single-line JSON.
+
 ---
 
 ## Configuration
@@ -209,6 +223,28 @@ Tired of duplicating `env` blocks across clients? Run `grok-search-rs --init` on
 | `academic_get` | Resolve one paper by DOI, arXiv ID/URL, Semantic Scholar ID, OpenAlex ID/URL, dblp URL/key, or title-like query. |
 | `academic_citations` | Citation/reference summary for one paper, using Semantic Scholar first and OpenAlex as fallback. |
 | `academic_read` | Resolve an academic PDF and return `pdf_oxide` parsed Markdown/text; Sci-Hub is used only when explicitly configured and only as last fallback. |
+
+---
+
+## CLI Commands
+
+`grok-search-rs` with no arguments starts the MCP stdio server for existing
+agent configs. `grok-search-rs mcp` does the same explicitly.
+
+| Command | Purpose |
+|---|---|
+| `grok-search-rs init [--target all|codex|claude-code|snippets] [--dry-run]` | Create shared config if missing and maintain thin agent MCP entries. |
+| `grok-search-rs login\|status\|logout` | Manage local xAI OAuth tokens. |
+| `grok-search-rs doctor [--compact]` | Print diagnostic JSON. |
+| `grok-search-rs web-search <query> ...` | Run `web_search` once and print JSON. |
+| `grok-search-rs get-sources <session_id> ...` | Page cached sources from a prior CLI/MCP `web_search`. |
+| `grok-search-rs web-fetch <url> ...` | Fetch one page as structured content. |
+| `grok-search-rs web-map <url> ...` | Discover URLs on a site/domain. |
+| `grok-search-rs academic search|get|citations|read ...` | Run the academic tools from the shell. |
+
+Use `--help` on any command for the full flag list. Kebab-case and underscore
+aliases are accepted for web tool command names, for example `web-search` and
+`web_search`.
 
 ---
 

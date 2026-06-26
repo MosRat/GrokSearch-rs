@@ -13,6 +13,11 @@ Run `grok-search-rs init` to create the shared config if it is missing and keep 
 - Global config: provider URLs, models, source limits, proxy settings, and API keys.
 - Agent config: only `type = "stdio"` and `command = "grok-search-rs"`; add `GROK_SEARCH_CONFIG` only when you intentionally use a non-default config path.
 
+The same global config is used by both MCP mode and direct CLI tool calls such
+as `grok-search-rs doctor`, `grok-search-rs web-search "query"`, and
+`grok-search-rs academic search "query"`. Direct CLI tool calls print pretty
+JSON by default; pass `--compact` for single-line JSON.
+
 ## Grok Responses
 
 | Variable | Default | Description |
@@ -160,6 +165,10 @@ The same command also keeps thin MCP entries/snippets in sync:
 - Other MCP clients: writes reusable snippets in `<home>/.config/grok-search-rs/agent-snippets/` (`mcp.json`, `cursor.json`, `vscode.json`, `windsurf.json`, `codex.toml`, `claude-code.json`).
 
 The generated agent entries intentionally do not include API keys or model/provider settings. Re-running `init` is idempotent: it refreshes the managed thin entries and leaves an existing global config untouched.
+
+Use `--target codex`, `--target claude-code`, or `--target snippets` to refresh
+only one integration. Use `--dry-run` to preview paths and commands without
+writing files or invoking the Claude Code CLI.
 
 Minimal generated Codex entry:
 

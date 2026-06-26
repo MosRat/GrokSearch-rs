@@ -322,6 +322,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap"
+version = "4.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ddb117e43bbf7dacf0a4190fef4d345b9bad68dfc649cb349e7d17d28428e51"
+dependencies = [
+ "clap_builder",
+ "clap_derive",
+]
+
+[[package]]
+name = "clap_builder"
+version = "4.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "714a53001bf66416adb0e2ef5ac857140e7dc3a0c48fb28b2f10762fc4b5069f"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "clap_lex",
+ "strsim",
+]
+
+[[package]]
+name = "clap_derive"
+version = "4.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2ce8604710f6733aa641a2b3731eaa1e8b3d9973d5e3565da11800813f997a9"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "clap_lex"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -815,6 +855,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "grok-search-apps"
+version = "0.1.23"
+dependencies = [
+ "anyhow",
+ "grok-search-config",
+ "tempfile",
+]
+
+[[package]]
 name = "grok-search-auth"
 version = "0.1.23"
 dependencies = [
@@ -831,6 +880,25 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "grok-search-cli"
+version = "0.1.23"
+dependencies = [
+ "anyhow",
+ "clap",
+ "grok-search-apps",
+ "grok-search-auth",
+ "grok-search-config",
+ "grok-search-mcp",
+ "grok-search-net",
+ "grok-search-runtime",
+ "grok-search-service",
+ "grok-search-tools",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -861,10 +929,9 @@ version = "0.1.23"
 dependencies = [
  "anyhow",
  "grok-search-service",
+ "grok-search-tools",
  "grok-search-types",
  "rmcp",
- "schemars",
- "serde",
  "serde_json",
  "tokio",
 ]
@@ -922,11 +989,7 @@ name = "grok-search-rs"
 version = "0.1.23"
 dependencies = [
  "anyhow",
- "grok-search-auth",
- "grok-search-config",
- "grok-search-mcp",
- "grok-search-net",
- "grok-search-runtime",
+ "grok-search-cli",
  "mimalloc",
  "tokio",
 ]
@@ -993,6 +1056,18 @@ dependencies = [
  "serde_json",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "grok-search-tools"
+version = "0.1.23"
+dependencies = [
+ "grok-search-service",
+ "grok-search-types",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

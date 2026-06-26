@@ -1,0 +1,24 @@
+[package]
+name = "grok-search-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Command-line interface for GrokSearch-rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+grok-search-apps = { path = "../grok-search-apps" }
+grok-search-auth = { path = "../grok-search-auth" }
+grok-search-config = { path = "../grok-search-config" }
+grok-search-mcp = { path = "../grok-search-mcp" }
+grok-search-net = { path = "../grok-search-net" }
+grok-search-runtime = { path = "../grok-search-runtime" }
+grok-search-service = { path = "../grok-search-service" }
+grok-search-tools = { path = "../grok-search-tools" }

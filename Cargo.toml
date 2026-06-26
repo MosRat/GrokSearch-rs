@@ -1,7 +1,9 @@
 [workspace]
 members = [
     "crates/grok-search-academic",
+    "crates/grok-search-apps",
     "crates/grok-search-auth",
+    "crates/grok-search-cli",
     "crates/grok-search-config",
     "crates/grok-search-content",
     "crates/grok-search-mcp",
@@ -14,6 +16,7 @@ members = [
     "crates/grok-search-service",
     "crates/grok-search-source-core",
     "crates/grok-search-sources",
+    "crates/grok-search-tools",
     "crates/grok-search-types",
 ]
 default-members = ["crates/grok-search-rs"]
@@ -31,6 +34,7 @@ homepage = "https://github.com/MosRat/GrokSearch-rs"
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
 getrandom = "0.3"
 lru = "0.12"
 mimalloc = { version = "0.1", default-features = false }

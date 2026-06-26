@@ -1,0 +1,16 @@
+[package]
+name = "grok-search-apps"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Agent application config helpers for GrokSearch-rs"
+
+[dependencies]
+anyhow.workspace = true
+grok-search-config = { path = "../grok-search-config" }
+
+[dev-dependencies]
+tempfile.workspace = true
