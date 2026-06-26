@@ -8,6 +8,11 @@ GrokSearch-rs reads configuration from two sources, merged with the following pr
 
 The config file is optional; missing files are skipped silently. See the [Config file](#config-file) section below for the TOML schema. The AI provider contract is intentionally narrow: configure a Grok/OpenAI-compatible root URL and the server calls `/v1/responses`.
 
+Run `grok-search-rs init` to create the shared config if it is missing and keep agent-specific MCP entries thin. The recommended split is:
+
+- Global config: provider URLs, models, source limits, proxy settings, and API keys.
+- Agent config: only `type = "stdio"` and `command = "grok-search-rs"`; add `GROK_SEARCH_CONFIG` only when you intentionally use a non-default config path.
+
 ## Grok Responses
 
 | Variable | Default | Description |
@@ -47,16 +52,12 @@ grok-search-rs logout
 
 OAuth mode reuses Hermes' xAI OAuth client id. This may violate xAI terms or create account risk, and Windows stores the token as a normal local file. Do not share the token file.
 
-Minimal Codex config:
+Minimal Codex config. Put OAuth mode and model selection in the global config:
 
 ```toml
 [mcp_servers.grok-search-rs]
+type = "stdio"
 command = "grok-search-rs"
-
-[mcp_servers.grok-search-rs.env]
-GROK_SEARCH_AUTH_MODE = "oauth"
-GROK_SEARCH_MODEL = "grok-4.3"
-GROK_SEARCH_WEB_SEARCH = "true"
 ```
 
 ## Tavily
@@ -142,15 +143,38 @@ Resolved per platform:
 - **Windows (PowerShell / cmd)**: `%USERPROFILE%\.config\grok-search-rs\config.toml` — e.g. `C:\Users\chen\.config\grok-search-rs\config.toml`.
 - **Windows (Git Bash / MSYS)**: same as Unix — `$HOME/.config/grok-search-rs/config.toml`.
 
-`grok-search-rs --init` picks the right path automatically; no platform-specific shell setup required.
+`grok-search-rs init` picks the right path automatically; no platform-specific shell setup required.
 
-### Scaffolding the file — `--init`
+### Scaffolding config and agent entries - `init`
 
 ```bash
-grok-search-rs --init
+grok-search-rs init
 ```
 
-This writes an annotated template at the resolved config path with **every key commented out**. The scaffold is identical in behavior to "no config file" until you uncomment lines, so it never silently changes runtime behavior. Re-running `--init` is a no-op when the file already exists; delete the file first to regenerate.
+This writes an annotated template at the resolved config path with **every key commented out** when the file does not exist. The scaffold is identical in behavior to "no config file" until you uncomment lines, so it never silently changes runtime behavior.
+
+The same command also keeps thin MCP entries/snippets in sync:
+
+- Codex: updates `$CODEX_HOME/config.toml` or `<home>/.codex/config.toml`.
+- Claude Code: runs `claude mcp add-json grok-search-rs --scope user ...` when the `claude` CLI is available, otherwise prints the command to run.
+- Other MCP clients: writes reusable snippets in `<home>/.config/grok-search-rs/agent-snippets/` (`mcp.json`, `cursor.json`, `vscode.json`, `windsurf.json`, `codex.toml`, `claude-code.json`).
+
+The generated agent entries intentionally do not include API keys or model/provider settings. Re-running `init` is idempotent: it refreshes the managed thin entries and leaves an existing global config untouched.
+
+Minimal generated Codex entry:
+
+```toml
+[mcp_servers.grok-search-rs]
+type = "stdio"
+command = "grok-search-rs"
+```
+
+If you launch `init` with `GROK_SEARCH_CONFIG` pointing at a custom path, the generated agent entries include only that forwarding env var:
+
+```toml
+[mcp_servers.grok-search-rs.env]
+GROK_SEARCH_CONFIG = "/absolute/path/to/config.toml"
+```
 
 ### Why two casings?
 
@@ -189,6 +213,7 @@ Unknown keys are rejected by the loader — typos surface as parse errors instea
 | `academic_enabled` | `GROK_SEARCH_ACADEMIC_ENABLED` |
 | `academic_email` | `GROK_SEARCH_ACADEMIC_EMAIL` |
 | `semantic_scholar_api_key` | `SEMANTIC_SCHOLAR_API_KEY` |
+| `openalex_api_key` | `OPENALEX_API_KEY` or `GROK_SEARCH_OPENALEX_API_KEY` |
 | `academic_scihub_enabled` | `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` |
 | `academic_scihub_base_url` | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` |
 | `academic_max_pdf_bytes` | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` |

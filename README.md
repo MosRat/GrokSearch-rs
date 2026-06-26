@@ -38,48 +38,36 @@ The npm and PyPI packages ship a native Rust binary; the `grok-search-rs` comman
 
 ## Quick Start
 
-1. After `npm install -g grok-search-rs` or `uv tool install grok-search-rs`, add this MCP server entry to your client config:
+1. After `npm install -g grok-search-rs` or `uv tool install grok-search-rs`, initialize shared config and thin MCP client entries:
 
-   ```json
-   {
-     "grok-search-rs": {
-       "command": "grok-search-rs",
-       "args": [],
-       "env": {
-         "GROK_SEARCH_API_KEY": "",
-         "GROK_SEARCH_URL": "",
-         "GROK_SEARCH_MODEL": "grok-4.20-fast",
-         "TAVILY_API_KEY": "",
-         "TAVILY_API_URL": "https://api.tavily.com",
-         "FIRECRAWL_API_KEY": ""
-       }
-     }
-   }
+   ```bash
+   grok-search-rs init
+   $EDITOR ~/.config/grok-search-rs/config.toml
    ```
 
-   For Codex TOML config:
+   `init` creates the full annotated global config when it is missing, updates Codex `~/.codex/config.toml`, tries `claude mcp add-json`, and writes reusable snippets under `~/.config/grok-search-rs/agent-snippets/`.
+
+2. Keep agent configs thin. Put provider URLs, models, source settings, and API keys in the global config, not in every MCP client's `env` block.
+
+   Minimal Codex TOML:
 
    ```toml
    [mcp_servers.grok-search-rs]
    type = "stdio"
    command = "grok-search-rs"
-
-   [mcp_servers.grok-search-rs.env]
-   FIRECRAWL_API_KEY = ""
-   GROK_SEARCH_API_KEY = ""
-   GROK_SEARCH_MODEL = "grok-4.20-fast"
-   GROK_SEARCH_URL = ""
-   TAVILY_API_KEY = ""
-   TAVILY_API_URL = "https://api.tavily.com"
    ```
 
-   Put your real keys in the empty values. If your client expects a top-level `mcpServers` / `mcp_servers` object, place the `grok-search-rs` entry under that section.
+   Generic MCP JSON:
 
-2. Optional: scaffold a shared global config file instead of duplicating env blocks in every MCP client:
-
-   ```bash
-   grok-search-rs --init
-   $EDITOR ~/.config/grok-search-rs/config.toml
+   ```json
+   {
+     "mcpServers": {
+       "grok-search-rs": {
+         "type": "stdio",
+         "command": "grok-search-rs"
+       }
+     }
+   }
    ```
 
 3. Verify:
@@ -118,16 +106,12 @@ grok-search-rs status
 grok-search-rs logout
 ```
 
-Then configure your MCP client with:
+Then set `grok_auth_mode = "oauth"` in the global config and keep your MCP client entry thin:
 
 ```toml
 [mcp_servers.grok-search-rs]
+type = "stdio"
 command = "grok-search-rs"
-
-[mcp_servers.grok-search-rs.env]
-GROK_SEARCH_AUTH_MODE = "oauth"
-GROK_SEARCH_MODEL = "grok-4.3"
-GROK_SEARCH_WEB_SEARCH = "true"
 ```
 
 OAuth mode reuses Hermes' xAI OAuth client id and stores `auth.json` locally. That may violate xAI terms or affect your account; do not share the token file. If xAI changes or blocks that OAuth flow, switch back to `api_key` mode.
