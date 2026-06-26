@@ -167,7 +167,7 @@ Notes:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GITHUB_TOKEN` | unset | Authenticates GitHub issue/PR fetches (higher API rate limit; private repos). Specialist works unauthenticated but is rate‑limited. |
+| `GITHUB_TOKEN` | unset | Authenticates GitHub issue/PR fetches (higher API rate limit; private repos). If unset, GrokSearch-rs tries `gh auth token`; otherwise it works unauthenticated but is rate‑limited. |
 | `GROK_SEARCH_SOURCE_MAX_ANSWERS` | `5` | StackExchange answers rendered before folding. |
 | `GROK_SEARCH_SOURCE_MAX_COMMENTS` | `30` | GitHub / StackExchange comments rendered before folding. |
 | `GROK_SEARCH_ENRICH_CONCURRENCY` | `3` | Parallel source enrichments for `web_search` `include_content` (clamped 1..5). |

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use grok_search_config::Config;
 use grok_search_content::download_pdf_bytes;
 use grok_search_parse::{
-    parse_academic_identifier as parse_identifier, rrf_merge_papers as rrf_merge,
+    normalize_title, parse_academic_identifier as parse_identifier, rrf_merge_papers as rrf_merge,
 };
 use grok_search_provider_core::{
     AcademicIdentifier as Identifier, AcademicProvider, AcademicServiceProvider, FullTextLocation,
@@ -76,6 +76,16 @@ impl AcademicService {
                 "academic_search.query is required".to_string(),
             ));
         }
+        if input.max_results == Some(0) {
+            return Ok(AcademicSearchOutput {
+                session_id: short_session_id(),
+                papers_count: 0,
+                papers: Vec::new(),
+                sources_used: Vec::new(),
+                errors: BTreeMap::new(),
+                truncated: false,
+            });
+        }
         let limit = input.max_results.unwrap_or(10).clamp(1, 50);
         let selected = selected_sources(&input.sources);
         let mut errors = BTreeMap::new();
@@ -102,6 +112,7 @@ impl AcademicService {
 
         let sources_used = ranked.iter().map(|(name, _)| name.clone()).collect();
         let mut papers = rrf_merge(ranked);
+        papers.retain(|paper| search_result_is_relevant(&input.query, paper));
         if input.open_access_only.unwrap_or(false) {
             papers.retain(|paper| paper.open_access.unwrap_or(false) || paper.pdf_url.is_some());
         }
@@ -155,6 +166,9 @@ impl AcademicService {
             chain.push(provider.name().to_string());
             match provider.get(&id).await {
                 Ok(Some(found)) => {
+                    if !resolved_paper_matches_identifier(&id, &found) {
+                        continue;
+                    }
                     paper = Some(match paper {
                         Some(mut existing) => {
                             existing.merge_from(found);
@@ -417,6 +431,42 @@ fn identifier_for_paper(paper: &AcademicPaper) -> Identifier {
         .unwrap_or_else(|| Identifier::Query(paper.title.clone()))
 }
 
+fn resolved_paper_matches_identifier(id: &Identifier, paper: &AcademicPaper) -> bool {
+    match id {
+        Identifier::Query(query) => normalize_title(&paper.title) == normalize_title(query),
+        _ => true,
+    }
+}
+
+fn search_result_is_relevant(query: &str, paper: &AcademicPaper) -> bool {
+    let query_tokens = meaningful_tokens(query);
+    if query_tokens.is_empty() {
+        return true;
+    }
+    let haystack = format!(
+        "{} {}",
+        paper.title,
+        paper.abstract_text.as_deref().unwrap_or_default()
+    );
+    let haystack_tokens = meaningful_tokens(&haystack);
+    query_tokens
+        .iter()
+        .any(|token| haystack_tokens.iter().any(|candidate| candidate == token))
+}
+
+fn meaningful_tokens(text: &str) -> Vec<String> {
+    normalize_title(text)
+        .split_whitespace()
+        .filter(|token| token.len() >= 3 && !ACADEMIC_STOPWORDS.contains(token))
+        .map(str::to_string)
+        .collect()
+}
+
+const ACADEMIC_STOPWORDS: &[&str] = &[
+    "a", "an", "and", "are", "for", "from", "how", "into", "not", "of", "on", "or", "the", "this",
+    "to", "with", "paper",
+];
+
 pub(crate) fn source(
     url: impl Into<String>,
     provider: &'static str,
@@ -538,5 +588,58 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].citation_count, Some(10));
         assert_eq!(merged[0].sources.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn academic_search_zero_max_results_returns_empty_without_providers() {
+        let service = AcademicService::new(
+            reqwest::Client::new(),
+            Config::from_env_map(Vec::<(String, String)>::new()),
+        );
+        let output = service
+            .search(AcademicSearchInput {
+                query: "transformer".into(),
+                max_results: Some(0),
+                ..Default::default()
+            })
+            .await
+            .expect("zero max_results should be valid");
+        assert_eq!(output.papers_count, 0);
+        assert!(output.papers.is_empty());
+        assert!(output.sources_used.is_empty());
+    }
+
+    #[test]
+    fn title_like_get_rejects_dblp_near_miss() {
+        let id = Identifier::Query("Attention Is All You Need".into());
+        let near_miss = AcademicPaper {
+            title:
+                "Attentional Transfer is All You Need: Technology-aware Layout Pattern Generation."
+                    .into(),
+            ..Default::default()
+        };
+        let exact = AcademicPaper {
+            title: "Attention Is All You Need".into(),
+            ..Default::default()
+        };
+        assert!(!resolved_paper_matches_identifier(&id, &near_miss));
+        assert!(resolved_paper_matches_identifier(&id, &exact));
+    }
+
+    #[test]
+    fn nonsense_query_filters_unrelated_papers() {
+        let paper = AcademicPaper {
+            title: "Spectroscopic Needs for Calibration of LSST Photometric Redshifts".into(),
+            abstract_text: Some("Dark energy survey calibration".into()),
+            ..Default::default()
+        };
+        assert!(!search_result_is_relevant(
+            "zzzxxy nonexistent paper qwertyuiopasdf",
+            &paper
+        ));
+        assert!(search_result_is_relevant(
+            "photometric redshifts calibration",
+            &paper
+        ));
     }
 }

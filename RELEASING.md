@@ -8,12 +8,18 @@ $EDITOR CHANGELOG.md
 git commit -am "docs: changelog for 0.1.5"
 git push
 
-# 2. Tag and push
-git tag v0.1.5
-git push origin v0.1.5
+# 2. Let GitHub Actions bump, commit, and tag; then dispatch release for that tag
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-via-workflows.ps1 0.1.5
 ```
 
-That's all. Pushing the tag triggers `release.yml`, which then:
+That's all. The script triggers `bump.yml`, waits for it to commit the version
+bump and push `v0.1.5`, then manually triggers `release.yml` on that tag.
+
+Do not create release tags locally by hand. Tags created by the manually
+dispatched bump workflow do not reliably trigger the tag-push release workflow,
+so the release dispatch is an explicit second step in the script.
+
+The release workflow then:
 
 1. Injects `0.1.5` into `Cargo.toml` in the CI working tree and builds cross-platform binaries.
    Linux assets are static musl binaries built with Zig and `cargo zigbuild`.
@@ -24,12 +30,18 @@ That's all. Pushing the tag triggers `release.yml`, which then:
 
 ## Manual fallback
 
-If CI is unavailable and you want to bump manifests by hand:
+If the orchestrating script is unavailable:
+
+- GitHub UI: Actions -> Bump Version -> Run workflow
+- Wait for the `vX.Y.Z` tag from the bump workflow
+- GitHub UI: Actions -> Release -> Run workflow -> select the new tag
+
+If CI is unavailable and you truly need to bump manifests locally:
 
 - Local script: `scripts/bump-version.sh 0.1.5 --push`
-- GitHub UI: Actions -> Bump Version -> Run workflow
 
-Both predate the tag-triggered auto-sync and remain for offline use.
+The local script predates the workflow-orchestrated release path and remains
+for offline use only.
 
 ## Where version numbers live
 

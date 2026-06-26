@@ -106,7 +106,7 @@ Tavily/Firecrawl key required.
 
 | Variable | Default | Description |
 |---|---|---|
-| `GITHUB_TOKEN` | unset | GitHub token for issue/PR fetches. Anonymous works but is capped at ~60 req/hr; a token raises the limit and allows private repos. |
+| `GITHUB_TOKEN` | unset | GitHub token for issue/PR fetches. If unset, GrokSearch-rs tries `gh auth token`; otherwise anonymous works but is capped at ~60 req/hr. |
 | `GROK_SEARCH_SOURCE_MAX_ANSWERS` | `5` | StackExchange answers rendered before the "more answers" fold. |
 | `GROK_SEARCH_SOURCE_MAX_COMMENTS` | `30` | GitHub / StackExchange comments rendered before folding. |
 | `GROK_SEARCH_ENRICH_CONCURRENCY` | `3` | Parallel source enrichments when `web_search` is called with `include_content: true`. Clamped to `1..=5`. |
@@ -227,6 +227,11 @@ Unknown keys are rejected by the loader — typos surface as parse errors instea
 | `academic_scihub_base_url` | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` |
 | `academic_max_pdf_bytes` | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` |
 | `academic_pdf_max_chars` | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` |
+
+`semantic_scholar_api_key` is sent to Semantic Scholar as the `x-api-key`
+header. Semantic Scholar allows 1 request per second per key across all
+endpoints; GrokSearch-rs serializes Semantic Scholar calls with a built-in
+1.1 second minimum interval to stay below that threshold.
 
 Example — minimum useful file:
 

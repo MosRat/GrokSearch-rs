@@ -2,7 +2,7 @@ use std::io::Write;
 
 use grok_search_net::http::get_bytes;
 use grok_search_types::{GrokSearchError, Result};
-use reqwest::header::{ACCEPT, USER_AGENT};
+use reqwest::header::{ACCEPT, ACCEPT_ENCODING, USER_AGENT};
 
 const UA: &str = "grok-search-rs/0.1 (https://github.com/MosRat/GrokSearch-rs)";
 
@@ -17,15 +17,40 @@ pub async fn download_pdf_bytes(
     url: &str,
     max_bytes: usize,
 ) -> Result<Vec<u8>> {
-    let bytes = get_bytes(
+    let first = download_pdf_bytes_with_accept(client, url, "application/pdf").await;
+    let bytes = match first {
+        Ok(bytes) => bytes,
+        Err(first_err) => match download_pdf_bytes_with_accept(client, url, "*/*").await {
+            Ok(bytes) => bytes,
+            Err(second_err) => {
+                return Err(GrokSearchError::Provider(format!(
+                    "academic pdf download failed for {url}: first attempt: {first_err}; retry with broad Accept: {second_err}"
+                )))
+            }
+        },
+    };
+    validate_pdf_bytes(&bytes, max_bytes).map_err(|err| {
+        GrokSearchError::Provider(format!("academic pdf validation failed for {url}: {err}"))
+    })?;
+    Ok(bytes)
+}
+
+async fn download_pdf_bytes_with_accept(
+    client: &reqwest::Client,
+    url: &str,
+    accept: &str,
+) -> Result<Vec<u8>> {
+    get_bytes(
         client,
         url,
-        &[(USER_AGENT, UA), (ACCEPT, "application/pdf")],
+        &[
+            (USER_AGENT, UA),
+            (ACCEPT, accept),
+            (ACCEPT_ENCODING, "identity"),
+        ],
         "academic pdf",
     )
-    .await?;
-    validate_pdf_bytes(&bytes, max_bytes)?;
-    Ok(bytes)
+    .await
 }
 
 pub fn validate_pdf_bytes(bytes: &[u8], max_bytes: usize) -> Result<()> {

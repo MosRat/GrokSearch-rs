@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -300,11 +301,15 @@ impl Config {
         let file_map = resolve_config_path(&env_map)
             .and_then(|path| load_file_map(&path))
             .unwrap_or_default();
-        Self::from_env_map(merge_env_over_file(file_map, env_map))
+        let mut config = Self::from_env_map(merge_env_over_file(file_map, env_map));
+        config.apply_github_cli_token_fallback();
+        config
     }
 
     pub fn from_env() -> Self {
-        Self::from_env_map(std::env::vars())
+        let mut config = Self::from_env_map(std::env::vars());
+        config.apply_github_cli_token_fallback();
+        config
     }
 
     pub fn from_env_map<I, K, V>(vars: I) -> Self
@@ -411,6 +416,13 @@ impl Config {
         } else {
             "unset"
         }
+    }
+
+    fn apply_github_cli_token_fallback(&mut self) {
+        if self.github_token.is_some() {
+            return;
+        }
+        self.github_token = github_token_from_gh_cli();
     }
 
     pub fn academic_email_status(&self) -> &'static str {
@@ -726,6 +738,27 @@ fn bool_literal(value: &str) -> bool {
     matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
 }
 
+fn github_token_from_gh_cli() -> Option<String> {
+    let output = Command::new("gh")
+        .args(["auth", "token"])
+        .env("GH_PROMPT_DISABLED", "1")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    github_token_from_gh_stdout(&output.stdout)
+}
+
+fn github_token_from_gh_stdout(stdout: &[u8]) -> Option<String> {
+    let token = String::from_utf8_lossy(stdout).trim().to_string();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
+    }
+}
+
 fn auth_mode_value(map: &HashMap<String, String>) -> AuthMode {
     match map
         .get("GROK_SEARCH_AUTH_MODE")
@@ -848,6 +881,15 @@ mod source_config_tests {
             diag_unset.contains("github_token=unset"),
             "expected github_token=unset in: {diag_unset}"
         );
+    }
+
+    #[test]
+    fn github_cli_token_stdout_is_trimmed_and_filtered() {
+        assert_eq!(
+            github_token_from_gh_stdout(b"gho_from_cli\r\n").as_deref(),
+            Some("gho_from_cli")
+        );
+        assert_eq!(github_token_from_gh_stdout(b" \n\t "), None);
     }
 
     #[test]

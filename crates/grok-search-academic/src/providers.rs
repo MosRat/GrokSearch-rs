@@ -1,3 +1,8 @@
+use std::fs::{self, OpenOptions};
+use std::sync::Arc;
+use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use async_trait::async_trait;
 use grok_search_net::http::{get_json, get_text};
 use grok_search_net::key_pool::{is_key_scoped_status, KeyPool};
@@ -10,8 +15,10 @@ use grok_search_types::{
 };
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
-use reqwest::header::USER_AGENT;
+use reqwest::header::{RETRY_AFTER, USER_AGENT};
 use serde_json::Value;
+use tokio::sync::Mutex;
+use tokio::time::{sleep_until, Instant};
 use url::Url;
 
 use crate::service::{as_u32, source, UA};
@@ -124,38 +131,144 @@ fn parse_dblp_authors(value: Option<&Value>) -> Vec<String> {
 pub(crate) struct SemanticProvider {
     client: reqwest::Client,
     api_key: Option<String>,
+    limiter: Arc<Mutex<Option<Instant>>>,
 }
 
 impl SemanticProvider {
     pub(crate) fn new(client: reqwest::Client, api_key: Option<String>) -> Self {
-        Self { client, api_key }
+        Self {
+            client,
+            api_key,
+            limiter: Arc::new(Mutex::new(None)),
+        }
     }
 
     async fn get_json_with_optional_key(&self, url: &str, label: &str) -> Result<Value> {
-        let mut builder = self.client.get(url).header(USER_AGENT, UA);
-        if let Some(key) = &self.api_key {
-            builder = builder.header("x-api-key", key);
-        }
-        let response = builder
-            .send()
-            .await
-            .map_err(|err| GrokSearchError::Provider(format!("{label} request failed: {err}")))?;
-        let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|err| GrokSearchError::Provider(format!("{label} body read failed: {err}")))?;
-        if !status.is_success() {
-            if self.api_key.is_some() && matches!(status.as_u16(), 401 | 403) {
-                return get_json(&self.client, url, &[(USER_AGENT, UA)], label).await;
+        let mut last_rate_limit = None;
+        for attempt in 0..3 {
+            self.wait_for_rate_limit().await;
+            let mut builder = self.client.get(url).header(USER_AGENT, UA);
+            if let Some(key) = &self.api_key {
+                builder = builder.header("x-api-key", key);
             }
-            return Err(GrokSearchError::Provider(format!(
-                "{label} returned HTTP {status}: {}",
-                String::from_utf8_lossy(&bytes)
-            )));
+            let response = builder.send().await.map_err(|err| {
+                GrokSearchError::Provider(format!("{label} request failed: {err}"))
+            })?;
+            let status = response.status();
+            let retry_after = retry_after_delay(&response);
+            let bytes = response.bytes().await.map_err(|err| {
+                GrokSearchError::Provider(format!("{label} body read failed: {err}"))
+            })?;
+            if !status.is_success() {
+                if self.api_key.is_some() && matches!(status.as_u16(), 401 | 403) {
+                    return get_json(&self.client, url, &[(USER_AGENT, UA)], label).await;
+                }
+                if status.as_u16() == 429 && attempt < 2 {
+                    last_rate_limit = Some(String::from_utf8_lossy(&bytes).into_owned());
+                    tokio::time::sleep(
+                        retry_after.unwrap_or_else(|| {
+                            Duration::from_millis(2500 + (attempt as u64 * 2500))
+                        }),
+                    )
+                    .await;
+                    continue;
+                }
+                return Err(GrokSearchError::Provider(format!(
+                    "{label} returned HTTP {status}: {}",
+                    String::from_utf8_lossy(&bytes)
+                )));
+            }
+            return serde_json::from_slice(&bytes)
+                .map_err(|err| GrokSearchError::Parse(format!("invalid {label} JSON: {err}")));
         }
-        serde_json::from_slice(&bytes)
-            .map_err(|err| GrokSearchError::Parse(format!("invalid {label} JSON: {err}")))
+        Err(GrokSearchError::Provider(format!(
+            "{label} returned HTTP 429 after retries: {}",
+            last_rate_limit.unwrap_or_else(|| "rate limited".to_string())
+        )))
+    }
+
+    async fn wait_for_rate_limit(&self) {
+        const SEMANTIC_MIN_INTERVAL: Duration = Duration::from_millis(1100);
+
+        let mut last_request = self.limiter.lock().await;
+        if let Some(last) = *last_request {
+            let next = last + SEMANTIC_MIN_INTERVAL;
+            let now = Instant::now();
+            if next > now {
+                sleep_until(next).await;
+            }
+        }
+        *last_request = Some(Instant::now());
+        wait_for_global_semantic_rate_limit(SEMANTIC_MIN_INTERVAL).await;
+    }
+}
+
+fn retry_after_delay(response: &reqwest::Response) -> Option<Duration> {
+    response
+        .headers()
+        .get(RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+}
+
+async fn wait_for_global_semantic_rate_limit(min_interval: Duration) {
+    let base = std::env::temp_dir();
+    let stamp_path = base.join("grok-search-rs-semantic-scholar.timestamp");
+    let lock_path = base.join("grok-search-rs-semantic-scholar.lock");
+
+    loop {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_lock) => {
+                let _guard = SemanticRateLimitLock { path: lock_path };
+                if let Ok(last) = fs::read_to_string(&stamp_path)
+                    .ok()
+                    .and_then(|raw| raw.trim().parse::<u128>().ok())
+                    .ok_or(())
+                {
+                    let now = unix_millis();
+                    let elapsed = now.saturating_sub(last);
+                    let min = min_interval.as_millis();
+                    if elapsed < min {
+                        tokio::time::sleep(Duration::from_millis((min - elapsed) as u64)).await;
+                    }
+                }
+                let _ = fs::write(stamp_path, unix_millis().to_string());
+                return;
+            }
+            Err(_) => {
+                if fs::metadata(&lock_path)
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|modified| modified.elapsed().ok())
+                    .is_some_and(|age| age > Duration::from_secs(10))
+                {
+                    let _ = fs::remove_file(&lock_path);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+}
+
+fn unix_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+struct SemanticRateLimitLock {
+    path: std::path::PathBuf,
+}
+
+impl Drop for SemanticRateLimitLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -293,6 +406,7 @@ pub(crate) fn parse_semantic_paper(value: &Value) -> AcademicPaper {
     let pdf_url = value
         .pointer("/openAccessPdf/url")
         .and_then(Value::as_str)
+        .filter(|url| !url.trim().is_empty())
         .map(str::to_string);
     let mut paper = AcademicPaper {
         id: doi
@@ -392,12 +506,24 @@ impl AcademicProvider for ArxivProvider {
     }
 
     async fn resolve_fulltext(&self, paper: &AcademicPaper) -> Result<Option<FullTextLocation>> {
-        Ok(paper.arxiv_id.as_ref().map(|id| FullTextLocation {
-            url: format!("https://arxiv.org/pdf/{id}.pdf"),
+        let url = paper
+            .pdf_url
+            .clone()
+            .filter(|url| !url.trim().is_empty())
+            .or_else(|| paper.arxiv_id.as_deref().map(arxiv_pdf_url));
+        Ok(url.map(|url| FullTextLocation {
+            url,
             source: "arxiv".to_string(),
             status: "arxiv_pdf".to_string(),
         }))
     }
+}
+
+pub(crate) fn arxiv_pdf_url(id: &str) -> String {
+    let id = id.trim();
+    let id = id.strip_prefix("arXiv:").unwrap_or(id);
+    let id = id.strip_suffix(".pdf").unwrap_or(id);
+    format!("https://arxiv.org/pdf/{id}")
 }
 
 pub(crate) fn parse_arxiv_atom(xml: &str) -> Result<Vec<AcademicPaper>> {
@@ -1009,6 +1135,10 @@ fn clean_title(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::Duration as StdDuration;
 
     #[test]
     fn openalex_adds_rotated_api_key_query_parameter() {
@@ -1028,5 +1158,65 @@ mod tests {
         let mut second = Url::parse("https://api.openalex.org/works").unwrap();
         provider.add_key(&mut second, 1);
         assert_eq!(second.query(), Some("api_key=oa-b"));
+    }
+
+    #[test]
+    fn arxiv_pdf_url_normalizes_common_ids() {
+        assert_eq!(
+            arxiv_pdf_url("1706.03762"),
+            "https://arxiv.org/pdf/1706.03762"
+        );
+        assert_eq!(
+            arxiv_pdf_url("1706.03762v7"),
+            "https://arxiv.org/pdf/1706.03762v7"
+        );
+        assert_eq!(
+            arxiv_pdf_url("arXiv:1706.03762.pdf"),
+            "https://arxiv.org/pdf/1706.03762"
+        );
+    }
+
+    #[tokio::test]
+    async fn semantic_request_sends_api_key_header() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let url = format!("http://{}/paper", listener.local_addr().unwrap());
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut buf = [0u8; 4096];
+            let read = stream.read(&mut buf).expect("read request");
+            let request = String::from_utf8_lossy(&buf[..read]).into_owned();
+            let body = r#"{"data":[]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write response");
+            request
+        });
+
+        let provider = SemanticProvider::new(reqwest::Client::new(), Some("s2-test".into()));
+        provider
+            .get_json_with_optional_key(&url, "semantic scholar")
+            .await
+            .expect("mock semantic response");
+        let request = handle.join().expect("server thread");
+        assert!(
+            request.to_ascii_lowercase().contains("x-api-key: s2-test"),
+            "{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn semantic_rate_limit_serializes_consecutive_requests() {
+        let provider = SemanticProvider::new(reqwest::Client::new(), Some("s2-test".into()));
+        let start = Instant::now();
+        provider.wait_for_rate_limit().await;
+        provider.wait_for_rate_limit().await;
+        assert!(
+            start.elapsed() >= StdDuration::from_millis(1000),
+            "second S2 request should be delayed below the 1 rps threshold"
+        );
     }
 }

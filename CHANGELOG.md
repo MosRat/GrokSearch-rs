@@ -4,6 +4,27 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.1.25 - 2026-06-26
+
+### Fixed
+
+- Added Semantic Scholar request throttling across endpoints, process-local and
+  CLI process boundaries, plus conservative 429 backoff for the official 1 rps
+  API key limit.
+- Tightened academic search/get quality edges: `max_results=0` now returns an
+  empty result, noisy arXiv matches are filtered, and title-like `academic get`
+  rejects near-miss DBLP results.
+- Improved academic PDF handling by ignoring empty PDF URLs, normalizing arXiv
+  PDF links, retrying PDF downloads with a broader `Accept` header, and
+  reporting clearer download/validation errors.
+- Added GitHub token fallback through `gh auth token` when `GITHUB_TOKEN` is
+  not configured, without leaking token values in diagnostics.
+
+### Docs
+
+- Documented Semantic Scholar `x-api-key` usage and throttling behavior.
+- Documented GitHub CLI token fallback for GitHub issue/PR fetches.
+
 ## 0.1.17 - 2026-06-12
 
 ### Added
