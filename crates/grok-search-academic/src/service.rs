@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use grok_search_config::Config;
 use grok_search_content::download_pdf_bytes;
+use grok_search_content::ParsedContent;
 use grok_search_parse::{
     normalize_title, parse_academic_identifier as parse_identifier, rrf_merge_papers as rrf_merge,
 };
@@ -16,13 +17,26 @@ use grok_search_types::{
 use uuid::Uuid;
 
 use crate::providers::{
-    ArxivProvider, CrossrefProvider, DblpProvider, OpenAlexProvider, SciHubProvider,
-    SemanticProvider, UnpaywallProvider,
+    without_openalex_reference_sources, ArxivProvider, CrossrefProvider, DblpProvider,
+    OpenAlexProvider, SciHubProvider, SemanticProvider, UnpaywallProvider,
 };
 
 pub(crate) const UA: &str = "grok-search-rs/0.1 (https://github.com/MosRat/GrokSearch-rs)";
 const DEFAULT_SOURCES: &[&str] = &["dblp", "semantic", "arxiv"];
 const ALL_SOURCES: &[&str] = &["dblp", "semantic", "arxiv", "openalex", "crossref"];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AcademicSearchMode {
+    Balanced,
+    Broad,
+    Precise,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AcademicSortBy {
+    Relevance,
+    Citations,
+    Date,
+}
 
 #[derive(Clone)]
 pub struct AcademicService {
@@ -87,7 +101,9 @@ impl AcademicService {
             });
         }
         let limit = input.max_results.unwrap_or(10).clamp(1, 50);
-        let selected = selected_sources(&input.sources);
+        let mode = search_mode(input.search_mode.as_deref())?;
+        let sort_by = academic_sort_by(input.sort_by.as_deref())?;
+        let selected = selected_sources(&input.sources, mode);
         let mut errors = BTreeMap::new();
         let mut ranked: Vec<(String, Vec<AcademicPaper>)> = Vec::new();
 
@@ -112,10 +128,25 @@ impl AcademicService {
 
         let sources_used = ranked.iter().map(|(name, _)| name.clone()).collect();
         let mut papers = rrf_merge(ranked);
+        if matches!(
+            mode,
+            AcademicSearchMode::Balanced | AcademicSearchMode::Precise
+        ) {
+            self.enrich_search_results(&mut papers, limit.saturating_mul(2), &mut errors)
+                .await;
+        }
         papers.retain(|paper| search_result_is_relevant(&input.query, paper));
+        if matches!(sort_by, AcademicSortBy::Citations | AcademicSortBy::Date) {
+            papers.retain(|paper| search_result_has_strong_overlap(&input.query, paper));
+        }
+        if mode == AcademicSearchMode::Precise {
+            papers.retain(|paper| precise_search_result_is_relevant(&input.query, paper));
+        }
+        papers.retain(|paper| paper_matches_year_filter(paper, input.year_from, input.year_to));
         if input.open_access_only.unwrap_or(false) {
             papers.retain(|paper| paper.open_access.unwrap_or(false) || paper.pdf_url.is_some());
         }
+        rank_academic_results(&input.query, sort_by, &mut papers);
         if input.include_abstract == Some(false) {
             for paper in &mut papers {
                 paper.abstract_text = None;
@@ -181,9 +212,20 @@ impl AcademicService {
                 Err(_) => {}
             }
         }
-        let mut paper = paper.ok_or_else(|| {
-            GrokSearchError::NotFound(format!("academic identifier not found: {identifier}"))
-        })?;
+        let mut paper = match paper {
+            Some(paper) => paper,
+            None => {
+                if matches!(id, Identifier::Query(_)) {
+                    let fallback = self.title_query_fallback(identifier).await?;
+                    chain.extend(fallback.resolver_chain);
+                    fallback.paper
+                } else {
+                    return Err(GrokSearchError::NotFound(format!(
+                        "academic identifier not found: {identifier}"
+                    )));
+                }
+            }
+        };
         if include_open_access {
             if let Ok(Some(location)) = self.resolve_fulltext_location(&paper).await {
                 paper.pdf_url = paper.pdf_url.or(Some(location.url));
@@ -268,17 +310,33 @@ impl AcademicService {
         };
 
         chain.push(location.source.clone());
-        let bytes = download_pdf_bytes(
-            &self.client,
-            &location.url,
-            self.config.academic_max_pdf_bytes,
+        let bytes = tokio::time::timeout(
+            self.config.timeout,
+            download_pdf_bytes(
+                &self.client,
+                &location.url,
+                self.config.academic_max_pdf_bytes,
+            ),
         )
-        .await?;
+        .await
+        .map_err(|_| {
+            GrokSearchError::Timeout(format!(
+                "academic_read PDF download timed out for {}",
+                location.url
+            ))
+        })??;
         let limit = max_chars
             .or(self.config.academic_pdf_max_chars)
             .or(self.config.fetch_max_chars)
             .unwrap_or(200_000);
-        let parsed = grok_search_content::parse_pdf_bytes(&bytes, &format, Some(limit))?;
+        let parsed = parse_pdf_bytes_with_timeout(
+            bytes,
+            format.clone(),
+            limit,
+            self.config.timeout,
+            &location.url,
+        )
+        .await?;
         Ok(AcademicReadOutput {
             identifier,
             url,
@@ -348,6 +406,63 @@ impl AcademicService {
             &self.providers.crossref,
         ]
     }
+
+    async fn title_query_fallback(&self, identifier: &str) -> Result<AcademicGetOutput> {
+        let search = self
+            .search(AcademicSearchInput {
+                query: identifier.to_string(),
+                sources: ALL_SOURCES
+                    .iter()
+                    .map(|source| source.to_string())
+                    .collect(),
+                search_mode: Some("precise".to_string()),
+                sort_by: Some("relevance".to_string()),
+                max_results: Some(10),
+                ..Default::default()
+            })
+            .await?;
+        let paper = select_exact_title_match(identifier, search.papers).ok_or_else(|| {
+            GrokSearchError::NotFound(format!("academic identifier not found: {identifier}"))
+        })?;
+        Ok(AcademicGetOutput {
+            paper,
+            citations: None,
+            resolver_chain: vec!["search_fallback".to_string()],
+        })
+    }
+
+    async fn enrich_search_results(
+        &self,
+        papers: &mut [AcademicPaper],
+        max_papers: usize,
+        errors: &mut BTreeMap<String, String>,
+    ) {
+        for paper in papers.iter_mut().take(max_papers) {
+            let id = identifier_for_paper(paper);
+            for provider in [
+                &self.providers.semantic as &dyn AcademicProvider,
+                &self.providers.openalex,
+                &self.providers.crossref,
+            ] {
+                match provider.get(&id).await {
+                    Ok(Some(enriched)) => {
+                        let enriched = if provider.name() == "openalex" {
+                            without_openalex_reference_sources(enriched)
+                        } else {
+                            enriched
+                        };
+                        paper.merge_from(enriched);
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        errors
+                            .entry(format!("{}_enrichment", provider.name()))
+                            .or_insert_with(|| err.to_string());
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -384,9 +499,45 @@ impl AcademicServiceProvider for AcademicService {
     }
 }
 
-fn selected_sources(raw: &[String]) -> Vec<String> {
+fn search_mode(raw: Option<&str>) -> Result<AcademicSearchMode> {
+    match raw
+        .unwrap_or("balanced")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "" | "balanced" => Ok(AcademicSearchMode::Balanced),
+        "broad" => Ok(AcademicSearchMode::Broad),
+        "precise" => Ok(AcademicSearchMode::Precise),
+        other => Err(GrokSearchError::InvalidParams(format!(
+            "search_mode must be \"balanced\", \"broad\", or \"precise\", got \"{other}\""
+        ))),
+    }
+}
+
+fn academic_sort_by(raw: Option<&str>) -> Result<AcademicSortBy> {
+    match raw
+        .unwrap_or("relevance")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "" | "relevance" => Ok(AcademicSortBy::Relevance),
+        "citations" => Ok(AcademicSortBy::Citations),
+        "date" => Ok(AcademicSortBy::Date),
+        other => Err(GrokSearchError::InvalidParams(format!(
+            "sort_by must be \"relevance\", \"citations\", or \"date\", got \"{other}\""
+        ))),
+    }
+}
+
+fn selected_sources(raw: &[String], mode: AcademicSearchMode) -> Vec<String> {
     let requested: Vec<String> = if raw.is_empty() {
-        DEFAULT_SOURCES.iter().map(|s| s.to_string()).collect()
+        let defaults = match mode {
+            AcademicSearchMode::Balanced | AcademicSearchMode::Precise => DEFAULT_SOURCES,
+            AcademicSearchMode::Broad => ALL_SOURCES,
+        };
+        defaults.iter().map(|s| s.to_string()).collect()
     } else {
         raw.iter()
             .flat_map(|s| s.split(','))
@@ -438,6 +589,51 @@ fn resolved_paper_matches_identifier(id: &Identifier, paper: &AcademicPaper) -> 
     }
 }
 
+fn select_exact_title_match(
+    query: &str,
+    papers: impl IntoIterator<Item = AcademicPaper>,
+) -> Option<AcademicPaper> {
+    let expected = normalize_title(query);
+    papers
+        .into_iter()
+        .find(|paper| normalize_title(&paper.title) == expected)
+}
+
+async fn parse_pdf_bytes_with_timeout(
+    bytes: Vec<u8>,
+    format: String,
+    limit: usize,
+    timeout: std::time::Duration,
+    url: &str,
+) -> Result<ParsedContent> {
+    let url = url.to_string();
+    if timeout.is_zero() {
+        return Err(GrokSearchError::Timeout(format!(
+            "academic_read PDF parse timed out for {url}"
+        )));
+    }
+    tokio::time::timeout(
+        timeout,
+        tokio::task::spawn_blocking(move || {
+            grok_search_content::parse_pdf_bytes(&bytes, &format, Some(limit))
+        }),
+    )
+    .await
+    .map_err(|_| GrokSearchError::Timeout(format!("academic_read PDF parse timed out for {url}")))?
+    .map_err(|err| GrokSearchError::Provider(format!("academic_read parse task failed: {err}")))?
+}
+
+fn paper_matches_year_filter(
+    paper: &AcademicPaper,
+    year_from: Option<u32>,
+    year_to: Option<u32>,
+) -> bool {
+    let Some(year) = paper.year else {
+        return true;
+    };
+    year_from.map_or(true, |from| year >= from) && year_to.map_or(true, |to| year <= to)
+}
+
 fn search_result_is_relevant(query: &str, paper: &AcademicPaper) -> bool {
     let query_tokens = meaningful_tokens(query);
     if query_tokens.is_empty() {
@@ -449,9 +645,102 @@ fn search_result_is_relevant(query: &str, paper: &AcademicPaper) -> bool {
         paper.abstract_text.as_deref().unwrap_or_default()
     );
     let haystack_tokens = meaningful_tokens(&haystack);
+    let matches = matching_query_tokens(&query_tokens, &haystack_tokens);
+    matches >= min_required_query_token_matches(query_tokens.len())
+}
+
+fn search_result_has_strong_overlap(query: &str, paper: &AcademicPaper) -> bool {
+    let query_tokens = meaningful_tokens(query);
+    if query_tokens.len() <= 2 {
+        return search_result_is_relevant(query, paper);
+    }
+    let haystack = format!(
+        "{} {}",
+        paper.title,
+        paper.abstract_text.as_deref().unwrap_or_default()
+    );
+    let haystack_tokens = meaningful_tokens(&haystack);
+    let matches = matching_query_tokens(&query_tokens, &haystack_tokens);
+    matches >= strong_required_query_token_matches(query_tokens.len())
+}
+
+fn precise_search_result_is_relevant(query: &str, paper: &AcademicPaper) -> bool {
+    let query_tokens = meaningful_tokens(query);
+    if query_tokens.is_empty() {
+        return true;
+    }
+    let title_tokens = meaningful_tokens(&paper.title);
+    let title_matches = matching_query_tokens(&query_tokens, &title_tokens);
+    title_matches >= min_required_query_token_matches(query_tokens.len())
+        || normalize_title(&paper.title).contains(&normalize_title(query))
+}
+
+fn rank_academic_results(query: &str, sort_by: AcademicSortBy, papers: &mut [AcademicPaper]) {
+    let query_tokens = meaningful_tokens(query);
+    papers.sort_by(|a, b| {
+        academic_result_score(query, &query_tokens, sort_by, b).cmp(&academic_result_score(
+            query,
+            &query_tokens,
+            sort_by,
+            a,
+        ))
+    });
+}
+
+fn academic_result_score(
+    query: &str,
+    query_tokens: &[String],
+    sort_by: AcademicSortBy,
+    paper: &AcademicPaper,
+) -> u32 {
+    let title_tokens = meaningful_tokens(&paper.title);
+    let abstract_tokens = meaningful_tokens(paper.abstract_text.as_deref().unwrap_or_default());
+    let title_matches = matching_query_tokens(query_tokens, &title_tokens) as u32;
+    let abstract_matches = matching_query_tokens(query_tokens, &abstract_tokens) as u32;
+    let exact_title = (normalize_title(&paper.title) == normalize_title(query)) as u32;
+    let pdf = paper.pdf_url.is_some() as u32;
+    let oa = paper.open_access.unwrap_or(false) as u32;
+    let citations = paper.citation_count.unwrap_or(0).min(10_000);
+    let citation_score = if citations == 0 {
+        0
+    } else {
+        citations.ilog10()
+    };
+    let citation_preference = match sort_by {
+        AcademicSortBy::Citations => citation_score * 40 + citations.min(1_000) / 25,
+        _ => citation_score,
+    };
+    let date_preference = match sort_by {
+        AcademicSortBy::Date => paper.year.unwrap_or(0).saturating_sub(1900).min(200),
+        _ => 0,
+    };
+
+    exact_title * 1_000
+        + title_matches * 100
+        + abstract_matches * 20
+        + citation_preference
+        + date_preference
+        + pdf * 3
+        + oa
+}
+
+fn matching_query_tokens(query_tokens: &[String], haystack_tokens: &[String]) -> usize {
     query_tokens
         .iter()
-        .any(|token| haystack_tokens.iter().any(|candidate| candidate == token))
+        .filter(|token| haystack_tokens.iter().any(|candidate| candidate == *token))
+        .count()
+}
+
+fn min_required_query_token_matches(query_token_count: usize) -> usize {
+    if query_token_count <= 2 {
+        1
+    } else {
+        2
+    }
+}
+
+fn strong_required_query_token_matches(query_token_count: usize) -> usize {
+    query_token_count.min(3)
 }
 
 fn meaningful_tokens(text: &str) -> Vec<String> {
@@ -484,7 +773,10 @@ pub(crate) fn as_u32(value: Option<u64>) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::{parse_dblp_search, parse_openalex_work, parse_semantic_paper};
+    use crate::providers::{
+        parse_dblp_search, parse_openalex_work, parse_semantic_paper,
+        without_openalex_reference_sources,
+    };
     use serde_json::json;
 
     #[test]
@@ -565,6 +857,15 @@ mod tests {
         assert_eq!(paper.citation_count, Some(42));
         assert_eq!(paper.reference_count, Some(1));
         assert_eq!(paper.pdf_url.as_deref(), Some("https://example.com/oa.pdf"));
+        assert!(paper
+            .sources
+            .iter()
+            .any(|source| source.provider.as_ref() == "openalex_reference"));
+        let search_paper = without_openalex_reference_sources(paper);
+        assert!(!search_paper
+            .sources
+            .iter()
+            .any(|source| source.provider.as_ref() == "openalex_reference"));
     }
 
     #[test]
@@ -641,5 +942,281 @@ mod tests {
             "photometric redshifts calibration",
             &paper
         ));
+    }
+
+    #[test]
+    fn academic_search_modes_select_expected_default_sources() {
+        assert_eq!(
+            selected_sources(&[], AcademicSearchMode::Balanced),
+            vec!["dblp", "semantic", "arxiv"]
+        );
+        assert_eq!(
+            selected_sources(&[], AcademicSearchMode::Precise),
+            vec!["dblp", "semantic", "arxiv"]
+        );
+        assert_eq!(
+            selected_sources(&[], AcademicSearchMode::Broad),
+            vec!["dblp", "semantic", "arxiv", "openalex", "crossref"]
+        );
+    }
+
+    #[test]
+    fn academic_search_mode_rejects_unknown_values() {
+        let err = search_mode(Some("exploratory")).expect_err("unknown mode should fail");
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+    }
+
+    #[test]
+    fn academic_sort_by_rejects_unknown_values() {
+        assert_eq!(
+            academic_sort_by(Some("citations")).expect("valid sort"),
+            AcademicSortBy::Citations
+        );
+        let err = academic_sort_by(Some("impact")).expect_err("unknown sort should fail");
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+    }
+
+    #[test]
+    fn precise_relevance_requires_title_overlap() {
+        let abstract_only = AcademicPaper {
+            title: "Generic Systems Paper".into(),
+            abstract_text: Some("large language model evaluation".into()),
+            ..Default::default()
+        };
+        let title_match = AcademicPaper {
+            title: "A Survey on Evaluation of Large Language Models".into(),
+            ..Default::default()
+        };
+        assert!(!precise_search_result_is_relevant(
+            "large language model evaluation",
+            &abstract_only
+        ));
+        assert!(precise_search_result_is_relevant(
+            "large language model evaluation",
+            &title_match
+        ));
+    }
+
+    #[test]
+    fn strong_overlap_rejects_sort_boosted_partial_matches() {
+        let partial = AcademicPaper {
+            title: "A comprehensive survey of loss functions and metrics in deep learning".into(),
+            abstract_text: Some("survey methods for deep learning".into()),
+            ..Default::default()
+        };
+        let relevant = AcademicPaper {
+            title: "Retrieval-Augmented Generation for Large Language Models: A Survey".into(),
+            ..Default::default()
+        };
+        assert!(!search_result_has_strong_overlap(
+            "retrieval augmented generation survey",
+            &partial
+        ));
+        assert!(search_result_has_strong_overlap(
+            "retrieval augmented generation survey",
+            &relevant
+        ));
+    }
+
+    #[test]
+    fn multi_token_relevance_rejects_single_generic_token_match() {
+        let generic = AcademicPaper {
+            title: "R: A Language and Environment for Statistical Computing".into(),
+            abstract_text: Some("A statistical programming environment".into()),
+            ..Default::default()
+        };
+        let relevant = AcademicPaper {
+            title: "A Survey on Evaluation of Large Language Models".into(),
+            abstract_text: Some("Evaluation methods for large language model systems".into()),
+            ..Default::default()
+        };
+        assert!(!search_result_is_relevant(
+            "large language model evaluation",
+            &generic
+        ));
+        assert!(search_result_is_relevant(
+            "large language model evaluation",
+            &relevant
+        ));
+    }
+
+    #[test]
+    fn academic_ranking_prioritizes_exact_title_then_overlap() {
+        let mut papers = vec![
+            AcademicPaper {
+                title: "Large Models in General".into(),
+                abstract_text: Some("large language model evaluation".into()),
+                citation_count: Some(10_000),
+                ..Default::default()
+            },
+            AcademicPaper {
+                title: "A Survey on Evaluation of Large Language Models".into(),
+                citation_count: Some(10),
+                ..Default::default()
+            },
+        ];
+        rank_academic_results(
+            "A Survey on Evaluation of Large Language Models",
+            AcademicSortBy::Relevance,
+            &mut papers,
+        );
+        assert_eq!(
+            papers[0].title,
+            "A Survey on Evaluation of Large Language Models"
+        );
+    }
+
+    #[test]
+    fn citation_sort_boosts_cited_relevant_papers_without_beating_exact_title() {
+        let mut papers = vec![
+            AcademicPaper {
+                title: "Large Language Model Evaluation Notes".into(),
+                citation_count: Some(5),
+                ..Default::default()
+            },
+            AcademicPaper {
+                title: "Large Language Model Evaluation Survey".into(),
+                citation_count: Some(5_000),
+                ..Default::default()
+            },
+            AcademicPaper {
+                title: "Large Language Model Evaluation".into(),
+                citation_count: Some(1),
+                ..Default::default()
+            },
+        ];
+        rank_academic_results(
+            "Large Language Model Evaluation",
+            AcademicSortBy::Citations,
+            &mut papers,
+        );
+        assert_eq!(papers[0].title, "Large Language Model Evaluation");
+        assert_eq!(papers[1].title, "Large Language Model Evaluation Survey");
+    }
+
+    #[test]
+    fn year_filter_keeps_unknown_years_and_bounds_known_years() {
+        let unknown = AcademicPaper {
+            title: "Unknown".into(),
+            year: None,
+            ..Default::default()
+        };
+        let old = AcademicPaper {
+            title: "Old".into(),
+            year: Some(2023),
+            ..Default::default()
+        };
+        let current = AcademicPaper {
+            title: "Current".into(),
+            year: Some(2024),
+            ..Default::default()
+        };
+        let future = AcademicPaper {
+            title: "Future".into(),
+            year: Some(2025),
+            ..Default::default()
+        };
+        assert!(paper_matches_year_filter(&unknown, Some(2024), Some(2024)));
+        assert!(!paper_matches_year_filter(&old, Some(2024), Some(2024)));
+        assert!(paper_matches_year_filter(&current, Some(2024), Some(2024)));
+        assert!(!paper_matches_year_filter(&future, Some(2024), Some(2024)));
+    }
+
+    #[test]
+    fn title_query_fallback_selector_requires_exact_normalized_title() {
+        let exact = AcademicPaper {
+            title: "Attention Is All You Need".into(),
+            ..Default::default()
+        };
+        let near_miss = AcademicPaper {
+            title: "Attention Is Almost All You Need".into(),
+            ..Default::default()
+        };
+        let found = select_exact_title_match(
+            "attention is all you need",
+            vec![near_miss.clone(), exact.clone()],
+        )
+        .expect("exact title");
+        assert_eq!(found.title, exact.title);
+        assert!(select_exact_title_match("attention is all you need", vec![near_miss]).is_none());
+    }
+
+    #[tokio::test]
+    async fn academic_read_download_timeout_returns_tool_error_promptly() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::thread;
+        use std::time::Duration as StdDuration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let url = format!("http://{}/slow.pdf", listener.local_addr().unwrap());
+        let _handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut buf = [0u8; 512];
+            let _ = stream.read(&mut buf);
+            thread::sleep(StdDuration::from_millis(500));
+        });
+
+        let mut config = Config::from_env_map([("GROK_SEARCH_TIMEOUT_SECONDS", "60")]);
+        config.timeout = std::time::Duration::from_millis(50);
+        let service = AcademicService::new(
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("test client"),
+            config,
+        );
+        let err = service
+            .read(None, Some(url), Some(10), Some("text".to_string()))
+            .await
+            .expect_err("download should time out");
+        assert!(
+            matches!(err, GrokSearchError::Timeout(_)),
+            "expected timeout, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn academic_read_parse_timeout_is_mapped_to_timeout_error() {
+        let err = match parse_pdf_bytes_with_timeout(
+            b"%PDF-1.7\n".to_vec(),
+            "text".to_string(),
+            10,
+            std::time::Duration::from_secs(0),
+            "https://example.com/paper.pdf",
+        )
+        .await
+        {
+            Ok(_) => panic!("parse should time out before the blocking task completes"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, GrokSearchError::Timeout(_)),
+            "expected timeout, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn academic_read_rejects_invalid_output_format_before_fetching() {
+        let service = AcademicService::new(
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("test client"),
+            Config::from_env_map(Vec::<(String, String)>::new()),
+        );
+        let err = service
+            .read(
+                None,
+                Some("http://127.0.0.1:1/paper.pdf".to_string()),
+                Some(10),
+                Some("html".to_string()),
+            )
+            .await
+            .expect_err("invalid format should fail before network fetch");
+        assert!(
+            matches!(err, GrokSearchError::InvalidParams(_)),
+            "expected invalid params, got {err:?}"
+        );
     }
 }

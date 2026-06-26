@@ -163,6 +163,10 @@ struct AcademicSearchCommand {
     #[arg(long = "source")]
     sources: Vec<String>,
     #[arg(long)]
+    search_mode: Option<String>,
+    #[arg(long)]
+    sort_by: Option<String>,
+    #[arg(long)]
     max_results: Option<usize>,
     #[arg(long)]
     year_from: Option<u32>,
@@ -332,6 +336,8 @@ async fn run_academic(command: AcademicCommand) -> anyhow::Result<()> {
                 AcademicSearchParams {
                     query: command.query,
                     sources: command.sources,
+                    search_mode: command.search_mode,
+                    sort_by: command.sort_by,
                     max_results: command.max_results,
                     year_from: command.year_from,
                     year_to: command.year_to,

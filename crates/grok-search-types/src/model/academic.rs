@@ -9,6 +9,8 @@ pub struct AcademicSearchInput {
     pub query: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<String>,
+    pub search_mode: Option<String>,
+    pub sort_by: Option<String>,
     pub max_results: Option<usize>,
     pub year_from: Option<u32>,
     pub year_to: Option<u32>,

@@ -639,3 +639,231 @@ mod enrich_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod domain_filter_tests {
+    use super::*;
+
+    struct MixedDomainAiProvider {
+        sources: Vec<Source>,
+    }
+
+    #[async_trait]
+    impl AiProvider for MixedDomainAiProvider {
+        async fn search(&self, _request: &SearchRequest) -> Result<SearchResponse> {
+            Ok(SearchResponse {
+                content: "verified answer".to_string(),
+                sources: self.sources.clone(),
+            })
+        }
+    }
+
+    struct MixedDomainSourceProvider;
+
+    #[async_trait]
+    impl SourceProvider for MixedDomainSourceProvider {
+        async fn search_sources(
+            &self,
+            _query: &str,
+            _max_results: usize,
+            _filters: &SearchFilters,
+        ) -> Result<Vec<Source>> {
+            Ok(vec![
+                Source::new("https://excluded.example/search", "tavily"),
+                Source::new("https://allowed.example/search", "tavily"),
+                Source::new("https://docs.allowed.example/search", "tavily"),
+            ])
+        }
+
+        async fn fetch(&self, url: &str) -> Result<String> {
+            Ok(format!("fetched {url}"))
+        }
+
+        async fn map(&self, _url: &str, _max_results: usize) -> Result<Vec<Source>> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn service(ai_sources: Vec<Source>) -> SearchService {
+        SearchService::fake_custom(
+            Some(Arc::new(MixedDomainAiProvider {
+                sources: ai_sources,
+            })),
+            Arc::new(MixedDomainSourceProvider),
+            None,
+            [("GROK_SEARCH_EXTRA_SOURCES", "3")],
+        )
+    }
+
+    #[tokio::test]
+    async fn web_search_exclude_domains_filters_grok_enrichment_and_cache() {
+        let svc = service(vec![
+            Source::new("https://openai.com/news", "grok_responses"),
+            Source::new("https://excluded.example/grok", "grok_responses"),
+        ]);
+        let out = svc
+            .web_search(WebSearchInput {
+                query: "q".to_string(),
+                include_content: Some(false),
+                exclude_domains: vec!["https://excluded.example/path".to_string()],
+                ..Default::default()
+            })
+            .await
+            .expect("web_search");
+
+        assert!(!out.fallback_used);
+        assert!(out
+            .sources
+            .iter()
+            .all(|source| { !source.url.to_ascii_lowercase().contains("excluded.example") }));
+        assert!(out
+            .sources
+            .iter()
+            .any(|source| source.url.contains("openai.com")));
+        assert!(out
+            .sources
+            .iter()
+            .any(|source| source.url.contains("allowed.example")));
+
+        let cached = svc
+            .get_sources(&out.session_id, 0, None)
+            .await
+            .expect("get_sources");
+        assert!(cached
+            .sources
+            .iter()
+            .all(|source| { !source.url.to_ascii_lowercase().contains("excluded.example") }));
+    }
+
+    #[tokio::test]
+    async fn web_search_include_domains_keeps_domain_and_subdomains_only() {
+        let svc = service(vec![
+            Source::new("https://allowed.example/grok", "grok_responses"),
+            Source::new("https://other.example/grok", "grok_responses"),
+        ]);
+        let out = svc
+            .web_search(WebSearchInput {
+                query: "q".to_string(),
+                include_content: Some(false),
+                include_domains: vec!["allowed.example".to_string()],
+                ..Default::default()
+            })
+            .await
+            .expect("web_search");
+
+        assert!(!out.fallback_used);
+        assert!(!out.sources.is_empty());
+        assert!(out.sources.iter().all(|source| {
+            source.url.contains("allowed.example") || source.url.contains("docs.allowed.example")
+        }));
+        assert!(out
+            .sources
+            .iter()
+            .any(|source| source.url.contains("docs.allowed.example")));
+    }
+
+    #[tokio::test]
+    async fn web_search_all_grok_sources_filtered_falls_back_with_stable_reason() {
+        let svc = service(vec![Source::new(
+            "https://blocked.example/grok",
+            "grok_responses",
+        )]);
+        let out = svc
+            .web_search(WebSearchInput {
+                query: "q".to_string(),
+                include_content: Some(false),
+                exclude_domains: vec!["blocked.example".to_string()],
+                ..Default::default()
+            })
+            .await
+            .expect("web_search");
+
+        assert!(out.fallback_used);
+        assert_eq!(
+            out.fallback_reason,
+            Some("grok_sources_filtered".to_string())
+        );
+        assert!(out
+            .sources
+            .iter()
+            .all(|source| !source.url.contains("blocked.example")));
+
+        let cached = svc
+            .get_sources(&out.session_id, 100, Some(5))
+            .await
+            .expect("get_sources");
+        assert!(cached.sources.is_empty());
+        assert_eq!(cached.next_offset, None);
+    }
+
+    #[test]
+    fn domain_filter_normalizes_urls_case_www_and_subdomains() {
+        let filters = SearchFilters {
+            recency_days: None,
+            include_domains: vec!["https://WWW.OpenAI.com/docs".to_string()],
+            exclude_domains: Vec::new(),
+        };
+        let sources = vec![
+            Source::new("https://openai.com/news", "grok_responses"),
+            Source::new("https://community.openai.com/t/1", "grok_responses"),
+            Source::new("https://evilopenai.com", "grok_responses"),
+            Source::new("https://openai.com.evil.test", "grok_responses"),
+        ];
+        let filtered = filter_sources_by_domains(sources, &filters);
+        let urls: Vec<_> = filtered.iter().map(|source| source.url.as_str()).collect();
+
+        assert_eq!(
+            urls,
+            vec![
+                "https://openai.com/news",
+                "https://community.openai.com/t/1"
+            ]
+        );
+    }
+
+    #[test]
+    fn domain_filter_excludes_subdomains_but_not_suffix_impersonators() {
+        let filters = SearchFilters {
+            recency_days: None,
+            include_domains: Vec::new(),
+            exclude_domains: vec!["rust-lang.org".to_string()],
+        };
+        let sources = vec![
+            Source::new("https://docs.rust-lang.org/book", "grok_responses"),
+            Source::new("https://rust-lang.org/install", "grok_responses"),
+            Source::new("https://rust-lang.org.evil.example", "grok_responses"),
+            Source::new("https://notrust-lang.org", "grok_responses"),
+        ];
+        let filtered = filter_sources_by_domains(sources, &filters);
+        let urls: Vec<_> = filtered.iter().map(|source| source.url.as_str()).collect();
+
+        assert_eq!(
+            urls,
+            vec![
+                "https://rust-lang.org.evil.example",
+                "https://notrust-lang.org"
+            ]
+        );
+    }
+
+    #[test]
+    fn domain_filter_handles_invalid_source_urls_conservatively() {
+        let invalid = Source::new("not a url", "grok_responses");
+        let exclude_only = SearchFilters {
+            recency_days: None,
+            include_domains: Vec::new(),
+            exclude_domains: vec!["example.com".to_string()],
+        };
+        assert_eq!(
+            filter_sources_by_domains(vec![invalid.clone()], &exclude_only).len(),
+            1
+        );
+
+        let include_only = SearchFilters {
+            recency_days: None,
+            include_domains: vec!["example.com".to_string()],
+            exclude_domains: Vec::new(),
+        };
+        assert!(filter_sources_by_domains(vec![invalid], &include_only).is_empty());
+    }
+}

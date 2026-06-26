@@ -288,6 +288,15 @@ impl AcademicProvider for SemanticProvider {
             .append_pair("query", &input.query)
             .append_pair("limit", &limit.to_string())
             .append_pair("fields", SEMANTIC_FIELDS);
+        if let Some(sort) = semantic_sort(input.sort_by.as_deref()) {
+            url.query_pairs_mut().append_pair("sort", sort);
+        }
+        if let Some(year) = semantic_year_filter(input.year_from, input.year_to) {
+            url.query_pairs_mut().append_pair("year", &year);
+        }
+        if input.open_access_only.unwrap_or(false) {
+            url.query_pairs_mut().append_pair("openAccessPdf", "");
+        }
         let value = self
             .get_json_with_optional_key(url.as_str(), "semantic scholar")
             .await?;
@@ -383,6 +392,26 @@ impl AcademicProvider for SemanticProvider {
 }
 
 const SEMANTIC_FIELDS: &str = "paperId,title,authors,year,venue,abstract,url,externalIds,citationCount,referenceCount,openAccessPdf";
+
+pub(crate) fn semantic_year_filter(year_from: Option<u32>, year_to: Option<u32>) -> Option<String> {
+    match (year_from, year_to) {
+        (Some(from), Some(to)) if from == to => Some(from.to_string()),
+        (Some(from), Some(to)) => Some(format!("{from}-{to}")),
+        (Some(from), None) => Some(format!("{from}-")),
+        (None, Some(to)) => Some(format!("-{to}")),
+        (None, None) => None,
+    }
+}
+
+pub(crate) fn semantic_sort(sort_by: Option<&str>) -> Option<&'static str> {
+    if sort_is(sort_by, "citations") {
+        Some("citationCount:desc")
+    } else if sort_is(sort_by, "date") {
+        Some("publicationDate:desc")
+    } else {
+        None
+    }
+}
 
 pub(crate) fn parse_semantic_paper(value: &Value) -> AcademicPaper {
     let title = value
@@ -486,10 +515,10 @@ impl AcademicProvider for ArxivProvider {
     ) -> Result<Vec<AcademicPaper>> {
         let mut url = Url::parse("https://export.arxiv.org/api/query").unwrap();
         url.query_pairs_mut()
-            .append_pair("search_query", &input.query)
+            .append_pair("search_query", &arxiv_search_query(&input.query))
             .append_pair("start", "0")
             .append_pair("max_results", &limit.to_string())
-            .append_pair("sortBy", "relevance")
+            .append_pair("sortBy", arxiv_sort_by(input.sort_by.as_deref()))
             .append_pair("sortOrder", "descending");
         let xml = get_text(&self.client, url.as_str(), &[(USER_AGENT, UA)], "arxiv").await?;
         parse_arxiv_atom(&xml)
@@ -524,6 +553,43 @@ pub(crate) fn arxiv_pdf_url(id: &str) -> String {
     let id = id.strip_prefix("arXiv:").unwrap_or(id);
     let id = id.strip_suffix(".pdf").unwrap_or(id);
     format!("https://arxiv.org/pdf/{id}")
+}
+
+pub(crate) fn arxiv_search_query(query: &str) -> String {
+    let trimmed = query.trim();
+    if trimmed.is_empty()
+        || trimmed.contains(':')
+        || trimmed.contains('"')
+        || trimmed.to_ascii_uppercase().contains(" AND ")
+        || trimmed.to_ascii_uppercase().contains(" OR ")
+    {
+        return trimmed.to_string();
+    }
+    let terms: Vec<String> = trimmed
+        .split(|c: char| !c.is_alphanumeric())
+        .map(str::to_ascii_lowercase)
+        .filter(|token| token.len() >= 3 && !ARXIV_QUERY_STOPWORDS.contains(&token.as_str()))
+        .take(8)
+        .map(|token| format!("all:{token}"))
+        .collect();
+    if terms.is_empty() {
+        trimmed.to_string()
+    } else {
+        terms.join(" AND ")
+    }
+}
+
+const ARXIV_QUERY_STOPWORDS: &[&str] = &[
+    "a", "all", "an", "and", "are", "for", "from", "how", "into", "is", "not", "of", "on", "or",
+    "the", "this", "to", "with", "you",
+];
+
+pub(crate) fn arxiv_sort_by(sort_by: Option<&str>) -> &'static str {
+    if sort_is(sort_by, "date") {
+        "submittedDate"
+    } else {
+        "relevance"
+    }
 }
 
 pub(crate) fn parse_arxiv_atom(xml: &str) -> Result<Vec<AcademicPaper>> {
@@ -773,11 +839,13 @@ impl AcademicProvider for OpenAlexProvider {
     ) -> Result<Vec<AcademicPaper>> {
         let mut url = Url::parse("https://api.openalex.org/works").unwrap();
         url.query_pairs_mut()
-            .append_pair("search", &input.query)
+            .append_pair("search.title_and_abstract", &input.query)
             .append_pair("per-page", &limit.to_string());
-        if let Some(from) = input.year_from {
-            url.query_pairs_mut()
-                .append_pair("filter", &format!("from_publication_date:{from}-01-01"));
+        if let Some(filter) = openalex_filter(input) {
+            url.query_pairs_mut().append_pair("filter", &filter);
+        }
+        if let Some(sort) = openalex_sort(input.sort_by.as_deref()) {
+            url.query_pairs_mut().append_pair("sort", sort);
         }
         self.add_mailto(&mut url);
         let value = self.get_json(&url, "openalex").await?;
@@ -787,6 +855,7 @@ impl AcademicProvider for OpenAlexProvider {
             .into_iter()
             .flatten()
             .map(parse_openalex_work)
+            .map(without_openalex_reference_sources)
             .collect())
     }
 
@@ -870,6 +939,30 @@ impl AcademicProvider for OpenAlexProvider {
     }
 }
 
+pub(crate) fn openalex_filter(input: &AcademicSearchInput) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(from) = input.year_from {
+        parts.push(format!("from_publication_date:{from}-01-01"));
+    }
+    if let Some(to) = input.year_to {
+        parts.push(format!("to_publication_date:{to}-12-31"));
+    }
+    if input.open_access_only.unwrap_or(false) {
+        parts.push("is_oa:true".to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join(","))
+}
+
+pub(crate) fn openalex_sort(sort_by: Option<&str>) -> Option<&'static str> {
+    if sort_is(sort_by, "citations") {
+        Some("cited_by_count:desc")
+    } else if sort_is(sort_by, "date") {
+        Some("publication_date:desc")
+    } else {
+        None
+    }
+}
+
 pub(crate) fn parse_openalex_work(value: &Value) -> AcademicPaper {
     let title = value
         .get("title")
@@ -944,6 +1037,13 @@ pub(crate) fn parse_openalex_work(value: &Value) -> AcademicPaper {
     paper
 }
 
+pub(crate) fn without_openalex_reference_sources(mut paper: AcademicPaper) -> AcademicPaper {
+    paper
+        .sources
+        .retain(|source| source.provider.as_ref() != "openalex_reference");
+    paper
+}
+
 #[derive(Clone)]
 pub(crate) struct CrossrefProvider {
     client: reqwest::Client,
@@ -971,6 +1071,14 @@ impl AcademicProvider for CrossrefProvider {
         url.query_pairs_mut()
             .append_pair("query.bibliographic", &input.query)
             .append_pair("rows", &limit.to_string());
+        if let Some(filter) = crossref_filter(input.year_from, input.year_to) {
+            url.query_pairs_mut().append_pair("filter", &filter);
+        }
+        if let Some((sort, order)) = crossref_sort(input.sort_by.as_deref()) {
+            url.query_pairs_mut()
+                .append_pair("sort", sort)
+                .append_pair("order", order);
+        }
         if let Some(email) = &self.email {
             url.query_pairs_mut().append_pair("mailto", email);
         }
@@ -1052,6 +1160,34 @@ pub(crate) fn parse_crossref_work(value: &Value) -> AcademicPaper {
             .push(source(url, "crossref", Some(paper.title.clone())));
     }
     paper
+}
+
+pub(crate) fn crossref_filter(year_from: Option<u32>, year_to: Option<u32>) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(from) = year_from {
+        parts.push(format!("from-pub-date:{from}-01-01"));
+    }
+    if let Some(to) = year_to {
+        parts.push(format!("until-pub-date:{to}-12-31"));
+    }
+    (!parts.is_empty()).then(|| parts.join(","))
+}
+
+pub(crate) fn crossref_sort(sort_by: Option<&str>) -> Option<(&'static str, &'static str)> {
+    if sort_is(sort_by, "citations") {
+        Some(("is-referenced-by-count", "desc"))
+    } else if sort_is(sort_by, "date") {
+        Some(("published", "desc"))
+    } else {
+        None
+    }
+}
+
+fn sort_is(sort_by: Option<&str>, expected: &str) -> bool {
+    sort_by
+        .unwrap_or("relevance")
+        .trim()
+        .eq_ignore_ascii_case(expected)
 }
 
 #[derive(Clone)]
@@ -1174,6 +1310,92 @@ mod tests {
             arxiv_pdf_url("arXiv:1706.03762.pdf"),
             "https://arxiv.org/pdf/1706.03762"
         );
+    }
+
+    #[test]
+    fn semantic_year_filter_supports_ranges_and_open_ends() {
+        assert_eq!(
+            semantic_year_filter(Some(2024), Some(2024)).as_deref(),
+            Some("2024")
+        );
+        assert_eq!(
+            semantic_year_filter(Some(2020), Some(2024)).as_deref(),
+            Some("2020-2024")
+        );
+        assert_eq!(
+            semantic_year_filter(Some(2020), None).as_deref(),
+            Some("2020-")
+        );
+        assert_eq!(
+            semantic_year_filter(None, Some(2024)).as_deref(),
+            Some("-2024")
+        );
+        assert!(semantic_year_filter(None, None).is_none());
+    }
+
+    #[test]
+    fn provider_sort_params_map_common_academic_preferences() {
+        assert_eq!(semantic_sort(Some("citations")), Some("citationCount:desc"));
+        assert_eq!(semantic_sort(Some("date")), Some("publicationDate:desc"));
+        assert_eq!(semantic_sort(Some("relevance")), None);
+        assert_eq!(arxiv_sort_by(Some("date")), "submittedDate");
+        assert_eq!(arxiv_sort_by(Some("citations")), "relevance");
+        assert_eq!(
+            openalex_sort(Some("citations")),
+            Some("cited_by_count:desc")
+        );
+        assert_eq!(openalex_sort(Some("date")), Some("publication_date:desc"));
+        assert_eq!(
+            crossref_sort(Some("citations")),
+            Some(("is-referenced-by-count", "desc"))
+        );
+        assert_eq!(crossref_sort(Some("date")), Some(("published", "desc")));
+    }
+
+    #[test]
+    fn arxiv_search_query_rewrites_plain_text_to_all_terms() {
+        assert_eq!(
+            arxiv_search_query("large language model evaluation"),
+            "all:large AND all:language AND all:model AND all:evaluation"
+        );
+        assert_eq!(
+            arxiv_search_query("Attention Is All You Need"),
+            "all:attention AND all:need"
+        );
+        assert_eq!(arxiv_search_query("ti:transformer"), "ti:transformer");
+    }
+
+    #[test]
+    fn openalex_filter_includes_dates_and_open_access() {
+        let mut input = AcademicSearchInput {
+            year_from: Some(2024),
+            year_to: Some(2025),
+            open_access_only: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(
+            openalex_filter(&input).as_deref(),
+            Some("from_publication_date:2024-01-01,to_publication_date:2025-12-31,is_oa:true")
+        );
+        input.year_from = None;
+        assert_eq!(
+            openalex_filter(&input).as_deref(),
+            Some("to_publication_date:2025-12-31,is_oa:true")
+        );
+        assert!(openalex_filter(&AcademicSearchInput::default()).is_none());
+    }
+
+    #[test]
+    fn crossref_filter_uses_publication_date_bounds() {
+        assert_eq!(
+            crossref_filter(Some(2024), Some(2025)).as_deref(),
+            Some("from-pub-date:2024-01-01,until-pub-date:2025-12-31")
+        );
+        assert_eq!(
+            crossref_filter(None, Some(2025)).as_deref(),
+            Some("until-pub-date:2025-12-31")
+        );
+        assert!(crossref_filter(None, None).is_none());
     }
 
     #[tokio::test]

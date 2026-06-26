@@ -204,6 +204,8 @@ pub struct AcademicSearchParams {
     pub query: String,
     #[serde(default)]
     pub sources: Vec<String>,
+    pub search_mode: Option<String>,
+    pub sort_by: Option<String>,
     pub max_results: Option<usize>,
     pub year_from: Option<u32>,
     pub year_to: Option<u32>,
@@ -217,6 +219,8 @@ impl From<AcademicSearchParams> for AcademicSearchInput {
         Self {
             query: params.query,
             sources: params.sources,
+            search_mode: params.search_mode,
+            sort_by: params.sort_by,
             max_results: params.max_results,
             year_from: params.year_from,
             year_to: params.year_to,
@@ -360,7 +364,19 @@ pub fn tools_list_json() -> Value {
                         "sources": {
                             "type": "array",
                             "items": { "type": "string", "enum": ["dblp", "semantic", "arxiv", "openalex", "crossref"] },
-                            "description": "Selected sources. Defaults to dblp, semantic, and arxiv."
+                            "description": "Selected sources. Defaults depend on search_mode; balanced uses dblp, Semantic Scholar, and arXiv as primary sources and enriches from OpenAlex/Crossref when possible."
+                        },
+                        "search_mode": {
+                            "type": "string",
+                            "enum": ["balanced", "broad", "precise"],
+                            "default": "balanced",
+                            "description": "balanced = stable CS discovery with metadata enrichment; broad = include all providers for maximum recall; precise = stricter title/query matching for known-paper lookups."
+                        },
+                        "sort_by": {
+                            "type": "string",
+                            "enum": ["relevance", "citations", "date"],
+                            "default": "relevance",
+                            "description": "Final ranking preference. relevance keeps query match first, citations boosts highly cited relevant papers, date boosts recent relevant papers. Provider APIs use matching native sort parameters when available."
                         },
                         "max_results": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 },
                         "year_from": { "type": "integer", "minimum": 1 },
@@ -463,6 +479,8 @@ mod tests {
         let params: AcademicSearchParams = serde_json::from_value(json!({
             "query": "retrieval augmented generation",
             "sources": ["dblp", "arxiv"],
+            "search_mode": "broad",
+            "sort_by": "citations",
             "max_results": 5,
             "year_from": 2020,
             "year_to": 2026,
@@ -475,6 +493,8 @@ mod tests {
         let input: AcademicSearchInput = params.into();
         assert_eq!(input.query, "retrieval augmented generation");
         assert_eq!(input.sources, vec!["dblp", "arxiv"]);
+        assert_eq!(input.search_mode.as_deref(), Some("broad"));
+        assert_eq!(input.sort_by.as_deref(), Some("citations"));
         assert_eq!(input.max_results, Some(5));
         assert_eq!(input.year_from, Some(2020));
     }

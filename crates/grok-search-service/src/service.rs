@@ -221,7 +221,7 @@ impl SearchService {
         let (grok_result, (raw_sources, raw_origin)) =
             tokio::join!(grok_future, speculative_future);
 
-        let response = match grok_result {
+        let mut response = match grok_result {
             Ok(response) => response,
             Err(err) => {
                 return self
@@ -236,12 +236,21 @@ impl SearchService {
                         raw_origin,
                         grok_error_reason(&err),
                         include_content,
+                        &filters,
                     )
                     .await;
             }
         };
 
+        let had_grok_sources = !response.sources.is_empty();
+        response.sources = filter_sources_by_domains(response.sources, &filters);
+
         if let Some(reason) = grok_unverifiable_reason(&response) {
+            let reason = if reason == "grok_sources_empty" && had_grok_sources {
+                "grok_sources_filtered"
+            } else {
+                reason
+            };
             return self
                 .finalize_fallback(
                     deadline,
@@ -251,11 +260,12 @@ impl SearchService {
                     raw_origin,
                     reason,
                     include_content,
+                    &filters,
                 )
                 .await;
         }
 
-        let mut enrichment = raw_sources;
+        let mut enrichment = filter_sources_by_domains(raw_sources, &filters);
         enrichment.truncate(effective_extra_sources);
         let enrichment = with_provider(enrichment, enrichment_label(raw_origin));
         let merged = merge_sources(response.sources, enrichment);
@@ -354,8 +364,9 @@ impl SearchService {
         raw_origin: RawSourceOrigin,
         reason: &str,
         include_content: bool,
+        filters: &SearchFilters,
     ) -> Result<WebSearchOutput> {
-        let mut fallback = raw_sources;
+        let mut fallback = filter_sources_by_domains(raw_sources, filters);
         fallback.truncate(self.config.fallback_sources);
         let fallback = with_provider(fallback, fallback_label(raw_origin));
 
@@ -791,6 +802,90 @@ fn grok_unverifiable_reason(response: &SearchResponse) -> Option<&'static str> {
         return Some("grok_sources_empty");
     }
     None
+}
+
+fn filter_sources_by_domains(sources: Vec<Source>, filters: &SearchFilters) -> Vec<Source> {
+    let include = DomainSet::new(&filters.include_domains);
+    let exclude = DomainSet::new(&filters.exclude_domains);
+    if include.is_empty() && exclude.is_empty() {
+        return sources;
+    }
+    sources
+        .into_iter()
+        .filter(|source| source_allowed_by_domains(&source.url, &include, &exclude))
+        .collect()
+}
+
+fn source_allowed_by_domains(url: &str, include: &DomainSet, exclude: &DomainSet) -> bool {
+    let Some(host) = host_for_match(url) else {
+        return include.is_empty();
+    };
+    (include.is_empty() || include.matches(&host)) && !exclude.matches(&host)
+}
+
+#[derive(Debug, Clone)]
+struct DomainSet {
+    domains: Vec<String>,
+}
+
+impl DomainSet {
+    fn new(raw: &[String]) -> Self {
+        let domains = raw
+            .iter()
+            .filter_map(|value| normalize_domain(value))
+            .collect();
+        Self { domains }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.domains.is_empty()
+    }
+
+    fn matches(&self, host: &str) -> bool {
+        self.domains
+            .iter()
+            .any(|domain| host == domain || host.ends_with(&format!(".{domain}")))
+    }
+}
+
+fn host_for_match(raw: &str) -> Option<String> {
+    url::Url::parse(raw)
+        .ok()
+        .and_then(|url| url.host_str().map(normalize_host))
+        .or_else(|| normalize_domain(raw))
+}
+
+fn normalize_domain(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(url) = url::Url::parse(trimmed) {
+        return url.host_str().map(normalize_host);
+    }
+    let without_scheme = trimmed
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(trimmed);
+    let host = without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .split('@')
+        .next_back()
+        .unwrap_or_default()
+        .split(':')
+        .next()
+        .unwrap_or_default();
+    let host = normalize_host(host);
+    (!host.is_empty()).then_some(host)
+}
+
+fn normalize_host(host: &str) -> String {
+    host.trim()
+        .trim_end_matches('.')
+        .trim_start_matches("www.")
+        .to_ascii_lowercase()
 }
 
 fn apply_fetch_limit(
