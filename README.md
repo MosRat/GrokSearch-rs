@@ -25,20 +25,18 @@
 ## Install
 
 ```bash
-npm install -g grok-search-rs
-# or
 uv tool install grok-search-rs
 # or run without installing
 uvx grok-search-rs --version
 ```
 
-The npm and PyPI packages ship a native Rust binary; the `grok-search-rs` command is what your MCP client launches.
+The PyPI package ships a native Rust binary; the `grok-search-rs` command is what your MCP client launches.
 
 ---
 
 ## Quick Start
 
-1. After `npm install -g grok-search-rs` or `uv tool install grok-search-rs`, initialize shared config and thin MCP client entries:
+1. After `uv tool install grok-search-rs`, initialize shared config and thin MCP client entries:
 
    ```bash
    grok-search-rs init
