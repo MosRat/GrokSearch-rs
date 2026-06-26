@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "grok-search-rs"
-version = "0.1.22"
+version = "0.1.23"
 description = "Rust MCP server for Grok web search and Tavily-backed source retrieval"
 readme = "README.md"
 requires-python = ">=3.8"
