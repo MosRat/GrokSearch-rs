@@ -4,6 +4,38 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.1.29 - 2026-06-27
+
+### Added
+
+- Added an opt-in JSONL debug log (`GROK_SEARCH_DEBUG_LOG_PATH` /
+  `debug_log_path`) with request/session IDs, operation timings, structured
+  errors, and recursive redaction for secrets, tokens, cookies, and passwords.
+- Added verbose `doctor` diagnostics for CLI and MCP, including response limits,
+  debug log status, provider wiring, proxy details, and URL policy summaries.
+- Added a global upstream response byte cap (`GROK_SEARCH_MAX_RESPONSE_BYTES` /
+  `max_response_bytes`) wired through Grok/OpenAI-compatible, Tavily,
+  Firecrawl, academic providers, content fetches, and SSE streams.
+
+### Changed
+
+- Restored TLS validation by default for IEEE/ACM institutional fallback routes;
+  HTTP and invalid TLS are only allowed for private/local institutional targets.
+- Split `SearchService` pure logic into domain filtering, response budgeting,
+  and URL policy helpers while preserving public tool output shapes.
+- Classified errors more precisely with structured `kind`, `retryable`, `hint`,
+  and MCP `error.data` diagnostics.
+
+### Fixed
+
+- Rejected private, localhost, link-local, multicast, unspecified, and
+  unique-local URLs in `web_fetch` and `web_map` before provider dispatch.
+- Failed fast on malformed explicit config files instead of silently falling
+  back to defaults.
+- Limited `web_map.max_results` to `1..=50` at the tool boundary.
+- Cleaned up local release/npm scratch artifacts from the working tree and
+  ignored future `/dist/` and root `/package.json` scratch output.
+
 ## 0.1.28 - 2026-06-27
 
 ### Added
