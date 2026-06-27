@@ -135,6 +135,9 @@ The `academic_*` MCP tools are independent of `web_*` and focus on computer-scie
 | `SEMANTIC_SCHOLAR_API_KEY` | unset | Optional Semantic Scholar key. When unset, anonymous Graph API requests are used. |
 | `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | `false` | Explicit opt-in for Sci-Hub fallback in `academic_read`. It is never used by default. |
 | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` | unset | Sci-Hub base URL, only used when Sci-Hub fallback is enabled. User/password components are redacted in Debug and doctor output. |
+| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED` | `true` | Enables IEEE/ACM institutional PDF fallback for `academic_read`; automatically disables itself when no usable route is found. |
+| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS` | `true` | Allows invalid TLS certificates only for the IEEE/ACM institutional fallback clients. |
+| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE` | `true` | Probes direct and discovered proxy routes for IEEE/ACM access before using the fallback. |
 | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF bytes downloaded for `academic_read`. |
 | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for parsed PDF output. Falls back to `GROK_SEARCH_FETCH_MAX_CHARS`, then `200000`. |
 

@@ -20,12 +20,36 @@ pub fn build_client_direct(timeout: Duration) -> Client {
         .unwrap_or_else(|_| Client::new())
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ClientOptions {
+    pub cookies: bool,
+    pub accept_invalid_certs: bool,
+}
+
+pub fn build_client_direct_with_options(timeout: Duration, options: ClientOptions) -> Client {
+    apply_options(base_builder(timeout).no_proxy(), options)
+        .build()
+        .unwrap_or_else(|_| Client::new())
+}
+
 pub fn build_client_with_proxy(timeout: Duration, proxy_url: &str) -> Result<Client> {
     let proxy = reqwest::Proxy::all(proxy_url)
         .map_err(|err| GrokSearchError::Provider(format!("invalid proxy URL: {err}")))?;
     base_builder(timeout)
         .no_proxy()
         .proxy(proxy)
+        .build()
+        .map_err(|err| GrokSearchError::Provider(format!("build proxied HTTP client: {err}")))
+}
+
+pub fn build_client_with_proxy_options(
+    timeout: Duration,
+    proxy_url: &str,
+    options: ClientOptions,
+) -> Result<Client> {
+    let proxy = reqwest::Proxy::all(proxy_url)
+        .map_err(|err| GrokSearchError::Provider(format!("invalid proxy URL: {err}")))?;
+    apply_options(base_builder(timeout).no_proxy().proxy(proxy), options)
         .build()
         .map_err(|err| GrokSearchError::Provider(format!("build proxied HTTP client: {err}")))
 }
@@ -37,6 +61,16 @@ fn base_builder(timeout: Duration) -> ClientBuilder {
         .pool_idle_timeout(Some(Duration::from_secs(90)))
         .tcp_keepalive(Some(Duration::from_secs(60)))
         .tcp_nodelay(true)
+}
+
+fn apply_options(mut builder: ClientBuilder, options: ClientOptions) -> ClientBuilder {
+    if options.cookies {
+        builder = builder.cookie_store(true);
+    }
+    if options.accept_invalid_certs {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    builder
 }
 
 /// Failure from [`post_json_with_status`]. `status` is the upstream HTTP

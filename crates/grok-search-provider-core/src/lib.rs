@@ -94,6 +94,12 @@ pub trait AcademicServiceProvider: Send + Sync {
     ) -> Result<AcademicReadOutput>;
 
     fn diagnostics(&self) -> serde_json::Value;
+
+    async fn diagnostics_live(&self) -> serde_json::Value {
+        self.diagnostics()
+    }
+
+    fn warm_institutional_access(&self) {}
 }
 
 #[cfg(test)]

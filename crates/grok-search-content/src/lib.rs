@@ -2,7 +2,7 @@ use std::io::Write;
 
 use grok_search_net::http::get_bytes;
 use grok_search_types::{GrokSearchError, Result};
-use reqwest::header::{ACCEPT, ACCEPT_ENCODING, USER_AGENT};
+use reqwest::header::{HeaderName, ACCEPT, ACCEPT_ENCODING, CONTENT_TYPE, USER_AGENT};
 
 const UA: &str = "grok-search-rs/0.1 (https://github.com/MosRat/GrokSearch-rs)";
 
@@ -35,6 +35,73 @@ pub async fn download_pdf_bytes(
     Ok(bytes)
 }
 
+pub struct PdfDownloadOptions<'a> {
+    pub label: &'a str,
+    pub warmup_url: Option<&'a str>,
+    pub headers: &'a [(HeaderName, &'a str)],
+}
+
+pub async fn download_pdf_bytes_with_options(
+    client: &reqwest::Client,
+    url: &str,
+    max_bytes: usize,
+    options: PdfDownloadOptions<'_>,
+) -> Result<Vec<u8>> {
+    if let Some(warmup_url) = options.warmup_url {
+        let mut builder = client.get(warmup_url);
+        for (name, value) in options.headers {
+            builder = builder.header(name.clone(), *value);
+        }
+        let _ = builder.send().await.map_err(|err| {
+            if err.is_timeout() {
+                GrokSearchError::Timeout(format!("{} warmup timed out: {err}", options.label))
+            } else {
+                GrokSearchError::Provider(format!("{} warmup failed: {err}", options.label))
+            }
+        })?;
+    }
+    let response = request_with_headers(client, url, options.headers, options.label).await?;
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| {
+            GrokSearchError::Provider(format!("{} body read failed: {err}", options.label))
+        })?
+        .to_vec();
+    if !status.is_success() {
+        return Err(GrokSearchError::Provider(format!(
+            "{} returned HTTP {status}: {}",
+            options.label,
+            String::from_utf8_lossy(&bytes)
+        )));
+    }
+    if !content_type.contains("application/pdf") && !bytes.starts_with(b"%PDF") {
+        return Err(GrokSearchError::Provider(format!(
+            "{} resolved content is not a PDF (content-type: {})",
+            options.label,
+            if content_type.is_empty() {
+                "unknown"
+            } else {
+                content_type.as_str()
+            }
+        )));
+    }
+    validate_pdf_bytes(&bytes, max_bytes).map_err(|err| {
+        GrokSearchError::Provider(format!(
+            "{} validation failed for {url}: {err}",
+            options.label
+        ))
+    })?;
+    Ok(bytes)
+}
+
 async fn download_pdf_bytes_with_accept(
     client: &reqwest::Client,
     url: &str,
@@ -51,6 +118,25 @@ async fn download_pdf_bytes_with_accept(
         "academic pdf",
     )
     .await
+}
+
+async fn request_with_headers(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &[(HeaderName, &str)],
+    label: &str,
+) -> Result<reqwest::Response> {
+    let mut builder = client.get(url);
+    for (name, value) in headers {
+        builder = builder.header(name.clone(), *value);
+    }
+    builder.send().await.map_err(|err| {
+        if err.is_timeout() {
+            GrokSearchError::Timeout(format!("{label} GET timed out: {err}"))
+        } else {
+            GrokSearchError::Provider(format!("{label} GET failed: {err}"))
+        }
+    })
 }
 
 pub fn validate_pdf_bytes(bytes: &[u8], max_bytes: usize) -> Result<()> {
@@ -130,6 +216,42 @@ mod tests {
     #[test]
     fn rejects_non_pdf_bytes() {
         assert!(validate_pdf_bytes(b"not-pdf", 100).is_err());
+    }
+
+    #[tokio::test]
+    async fn option_download_rejects_html_even_with_success_status() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let url = format!("http://{}/paper", listener.local_addr().unwrap());
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut buf = [0u8; 512];
+            let _ = stream.read(&mut buf);
+            let body = b"<html>challenge</html>";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body);
+        });
+
+        let err = download_pdf_bytes_with_options(
+            &reqwest::Client::new(),
+            &url,
+            1024,
+            PdfDownloadOptions {
+                label: "test pdf",
+                warmup_url: None,
+                headers: &[],
+            },
+        )
+        .await
+        .expect_err("html should be rejected");
+        assert!(err.to_string().contains("not a PDF"), "{err}");
     }
 
     #[test]

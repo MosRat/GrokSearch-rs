@@ -68,6 +68,26 @@ impl ProxyCandidate {
             url,
         })
     }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn redacted_url(&self) -> String {
+        redact_proxy_url(&self.url)
+    }
+}
+
+pub fn discover_all_candidates() -> Vec<ProxyCandidate> {
+    let urls = vec![
+        "https://ieeexplore.ieee.org".to_string(),
+        "https://dl.acm.org".to_string(),
+    ];
+    discover_candidates_for_urls(&urls)
 }
 
 pub async fn bootstrap(config: &Config) -> (Client, ProxyDiagnostics) {

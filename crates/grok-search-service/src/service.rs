@@ -573,6 +573,12 @@ impl SearchService {
             .await
     }
 
+    pub fn warm_academic_institutional_access(&self) {
+        if let Some(academic) = &self.academic {
+            academic.warm_institutional_access();
+        }
+    }
+
     fn academic_service(&self) -> Result<&dyn AcademicServiceProvider> {
         self.academic
             .as_ref()
@@ -660,11 +666,10 @@ impl SearchService {
             "timeout_seconds": self.config.timeout.as_secs(),
             "github_token": self.config.github_token_status(),
             "proxy": self.proxy_diagnostics.to_json(),
-            "academic": self
-                .academic
-                .as_ref()
-                .map(|academic| academic.diagnostics())
-                .unwrap_or_else(|| serde_json::json!({ "enabled": false })),
+            "academic": match &self.academic {
+                Some(academic) => academic.diagnostics_live().await,
+                None => serde_json::json!({ "enabled": false }),
+            },
             "redacted": self.config.redacted_diagnostics()
         })
     }

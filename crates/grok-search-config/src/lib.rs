@@ -55,6 +55,9 @@ pub struct Config {
     pub openalex_api_key: Option<String>,
     pub academic_scihub_enabled: bool,
     pub academic_scihub_base_url: Option<String>,
+    pub academic_institutional_enabled: bool,
+    pub academic_institutional_accept_invalid_certs: bool,
+    pub academic_institutional_probe: bool,
     pub academic_max_pdf_bytes: usize,
     pub academic_pdf_max_chars: Option<usize>,
 }
@@ -118,6 +121,18 @@ impl std::fmt::Debug for Config {
                 "academic_scihub_base_url",
                 &redact_optional_url(&self.academic_scihub_base_url),
             )
+            .field(
+                "academic_institutional_enabled",
+                &self.academic_institutional_enabled,
+            )
+            .field(
+                "academic_institutional_accept_invalid_certs",
+                &self.academic_institutional_accept_invalid_certs,
+            )
+            .field(
+                "academic_institutional_probe",
+                &self.academic_institutional_probe,
+            )
             .field("academic_max_pdf_bytes", &self.academic_max_pdf_bytes)
             .field("academic_pdf_max_chars", &self.academic_pdf_max_chars)
             .finish()
@@ -164,6 +179,9 @@ struct ConfigFile {
     openalex_api_key: Option<String>,
     academic_scihub_enabled: Option<bool>,
     academic_scihub_base_url: Option<String>,
+    academic_institutional_enabled: Option<bool>,
+    academic_institutional_accept_invalid_certs: Option<bool>,
+    academic_institutional_probe: Option<bool>,
     academic_max_pdf_bytes: Option<usize>,
     academic_pdf_max_chars: Option<usize>,
 }
@@ -263,6 +281,19 @@ impl ConfigFile {
         insert(
             "GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL",
             self.academic_scihub_base_url,
+        );
+        insert(
+            "GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED",
+            self.academic_institutional_enabled.map(|b| b.to_string()),
+        );
+        insert(
+            "GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS",
+            self.academic_institutional_accept_invalid_certs
+                .map(|b| b.to_string()),
+        );
+        insert(
+            "GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE",
+            self.academic_institutional_probe.map(|b| b.to_string()),
         );
         insert(
             "GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES",
@@ -396,6 +427,21 @@ impl Config {
                 .get("GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL")
                 .cloned()
                 .filter(|v| !v.is_empty()),
+            academic_institutional_enabled: bool_value(
+                &map,
+                "GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED",
+                true,
+            ),
+            academic_institutional_accept_invalid_certs: bool_value(
+                &map,
+                "GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS",
+                true,
+            ),
+            academic_institutional_probe: bool_value(
+                &map,
+                "GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE",
+                true,
+            ),
             academic_max_pdf_bytes: usize_value(
                 &map,
                 "GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES",
@@ -455,7 +501,7 @@ impl Config {
 
     pub fn redacted_diagnostics(&self) -> String {
         format!(
-            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} proxy={} github_token={} academic_enabled={} academic_email={} semantic_scholar_api_key={} openalex_api_key={} academic_scihub_enabled={} academic_scihub_base_url={}",
+            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} proxy={} github_token={} academic_enabled={} academic_email={} semantic_scholar_api_key={} openalex_api_key={} academic_scihub_enabled={} academic_scihub_base_url={} academic_institutional_enabled={} academic_institutional_accept_invalid_certs={} academic_institutional_probe={}",
             self.grok_api_url,
             redact(self.grok_api_key.as_deref()),
             self.grok_auth_mode,
@@ -478,7 +524,10 @@ impl Config {
             redact(self.semantic_scholar_api_key.as_deref()),
             redact(self.openalex_api_key.as_deref()),
             self.academic_scihub_enabled,
-            self.redacted_scihub_base_url().unwrap_or_else(|| "unset".to_string())
+            self.redacted_scihub_base_url().unwrap_or_else(|| "unset".to_string()),
+            self.academic_institutional_enabled,
+            self.academic_institutional_accept_invalid_certs,
+            self.academic_institutional_probe
         )
     }
 }
@@ -646,6 +695,9 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 # openalex_api_key          = "..."             # comma-separated list rotates keys round-robin
 # academic_scihub_enabled   = false             # explicit opt-in only; legal risk varies
 # academic_scihub_base_url  = "https://..."     # only read when academic_scihub_enabled=true
+# academic_institutional_enabled = true          # IEEE/ACM institutional PDF fallback
+# academic_institutional_accept_invalid_certs = true # applies only to IEEE/ACM fallback clients
+# academic_institutional_probe = true            # detect direct/proxy institutional access
 # academic_max_pdf_bytes    = 52428800          # max PDF download size for academic_read
 # academic_pdf_max_chars    = 200000            # text cap for parsed PDFs
 "#;
@@ -944,6 +996,9 @@ mod source_config_tests {
         let cfg = Config::from_env_map(Vec::<(String, String)>::new());
         assert!(cfg.academic_enabled);
         assert!(!cfg.academic_scihub_enabled);
+        assert!(cfg.academic_institutional_enabled);
+        assert!(cfg.academic_institutional_accept_invalid_certs);
+        assert!(cfg.academic_institutional_probe);
         assert_eq!(cfg.academic_email_status(), "unset");
         assert_eq!(cfg.semantic_scholar_key_status(), "unset");
         assert_eq!(cfg.openalex_key_status(), "unset");
@@ -957,6 +1012,12 @@ mod source_config_tests {
                 "GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL",
                 "https://user:pass@example.org",
             ),
+            ("GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED", "false"),
+            (
+                "GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS",
+                "false",
+            ),
+            ("GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE", "false"),
         ]);
         assert_eq!(cfg.academic_email_status(), "set");
         assert_eq!(cfg.semantic_scholar_key_status(), "set");
@@ -965,6 +1026,9 @@ mod source_config_tests {
             cfg.openalex_api_key.as_deref(),
             Some("oa-secret-a,oa-secret-b")
         );
+        assert!(!cfg.academic_institutional_enabled);
+        assert!(!cfg.academic_institutional_accept_invalid_certs);
+        assert!(!cfg.academic_institutional_probe);
         let dbg = format!("{cfg:?}");
         assert!(!dbg.contains("s2-secret"));
         assert!(!dbg.contains("oa-secret"));

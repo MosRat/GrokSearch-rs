@@ -4,6 +4,25 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.1.28 - 2026-06-27
+
+### Added
+
+- Added an IEEE/ACM institutional PDF fallback for `academic_read`, with
+  cookie-aware clients, direct/proxy route probing, PDF warmup requests, and
+  `doctor` diagnostics for discovered institutional access.
+- Added configuration toggles for the institutional fallback:
+  `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED`,
+  `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS`, and
+  `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE`.
+
+### Changed
+
+- Prefer institutional full-text locations ahead of Sci-Hub when matching
+  IEEE/ACM papers or direct IEEE/ACM URLs.
+- Speed up release workflow builds with target-scoped Rust build caches and
+  pip caching for Python wheel packaging.
+
 ## 0.1.27 - 2026-06-26
 
 ### Fixed

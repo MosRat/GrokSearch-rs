@@ -40,7 +40,7 @@ lru = "0.12"
 mimalloc = { version = "0.1", default-features = false }
 percent-encoding = "2"
 quick-xml = { version = "0.37", default-features = false, features = ["encoding"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "gzip", "socks"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "gzip", "socks", "cookies"], default-features = false }
 rmcp = { version = "0.8", features = ["server", "transport-io"] }
 ring = "0.17"
 schemars = "1"

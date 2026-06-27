@@ -184,6 +184,9 @@ for the generic fallback path.
 | `SEMANTIC_SCHOLAR_API_KEY` | unset | Optional Semantic Scholar Graph API key; anonymous mode is used when unset. |
 | `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | `false` | Explicit opt-in for Sci-Hub as the final `academic_read` fallback. Legal risk varies by jurisdiction and use. |
 | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` | unset | Sci-Hub base URL, only read when Sci-Hub fallback is enabled. Credentials are redacted in diagnostics. |
+| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED` | `true` | Enables IEEE/ACM institutional PDF fallback for `academic_read`; automatically disables itself when no usable route is found. |
+| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS` | `true` | Allows invalid TLS certificates only for the IEEE/ACM institutional fallback clients. |
+| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE` | `true` | Probes direct and discovered proxy routes for IEEE/ACM access before using the fallback. |
 | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF download size for `academic_read`. |
 | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for `pdf_oxide` PDF text extraction. Falls back to `GROK_SEARCH_FETCH_MAX_CHARS`, then `200000`. |
 

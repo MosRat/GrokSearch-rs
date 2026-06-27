@@ -313,6 +313,7 @@ async fn run_mcp() -> anyhow::Result<()> {
     }
     let (http, proxy_diagnostics) = grok_search_net::proxy::bootstrap(&cfg).await;
     let service = grok_search_runtime::new_with_http(cfg, http, proxy_diagnostics)?;
+    service.warm_academic_institutional_access();
     grok_search_mcp::run_stdio(service).await?;
     Ok(())
 }

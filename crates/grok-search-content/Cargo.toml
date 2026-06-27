@@ -14,3 +14,6 @@ reqwest.workspace = true
 tempfile.workspace = true
 grok-search-net = { path = "../grok-search-net" }
 grok-search-types = { path = "../grok-search-types" }
+
+[dev-dependencies]
+tokio.workspace = true

@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
@@ -16,6 +17,7 @@ use grok_search_types::{
 };
 use uuid::Uuid;
 
+use crate::institutional::InstitutionalAccessManager;
 use crate::providers::{
     without_openalex_reference_sources, ArxivProvider, CrossrefProvider, DblpProvider,
     OpenAlexProvider, SciHubProvider, SemanticProvider, UnpaywallProvider,
@@ -43,6 +45,7 @@ pub struct AcademicService {
     client: reqwest::Client,
     config: Config,
     providers: ProviderSet,
+    institutional: InstitutionalAccessManager,
 }
 
 #[derive(Clone)]
@@ -85,8 +88,13 @@ impl AcademicService {
                 ),
             },
             client,
+            institutional: InstitutionalAccessManager::new(config.clone()),
             config,
         }
+    }
+
+    pub fn warm_institutional_access(&self) {
+        self.institutional.warm();
     }
 
     pub async fn search(&self, input: AcademicSearchInput) -> Result<AcademicSearchOutput> {
@@ -267,11 +275,15 @@ impl AcademicService {
         }
         let mut chain = Vec::new();
         let locations = if let Some(url) = url.clone() {
-            vec![FullTextLocation {
-                url,
-                source: "direct_url".to_string(),
-                status: "direct_url".to_string(),
-            }]
+            if let Some(location) = self.institutional.resolve_url_location(&url).await {
+                vec![location]
+            } else {
+                vec![FullTextLocation {
+                    url,
+                    source: "direct_url".to_string(),
+                    status: "direct_url".to_string(),
+                }]
+            }
         } else {
             let identifier = identifier.as_deref().ok_or_else(|| {
                 GrokSearchError::InvalidParams("academic_read requires identifier or url".into())
@@ -286,6 +298,7 @@ impl AcademicService {
             }
             locations
         };
+        let locations = prefer_institutional_locations(locations);
 
         let limit = max_chars
             .or(self.config.academic_pdf_max_chars)
@@ -331,9 +344,22 @@ impl AcademicService {
             "unpaywall_email": self.config.academic_email_status(),
             "scihub_enabled": self.config.academic_scihub_enabled,
             "scihub_base_url": self.config.redacted_scihub_base_url(),
+            "institutional": serde_json::json!({
+                "enabled": self.config.academic_institutional_enabled,
+                "status": "pending",
+                "detail": "institutional access probe has not completed",
+                "ieee": { "available": false, "route": serde_json::Value::Null, "source": serde_json::Value::Null, "proxy_url": serde_json::Value::Null },
+                "acm": { "available": false, "route": serde_json::Value::Null, "source": serde_json::Value::Null, "proxy_url": serde_json::Value::Null },
+            }),
             "pdf_parser": "pdf_oxide",
             "providers": ["dblp", "semantic", "arxiv", "openalex", "crossref", "unpaywall"],
         })
+    }
+
+    pub async fn diagnostics_live(&self) -> serde_json::Value {
+        let mut value = self.diagnostics();
+        value["institutional"] = self.institutional.diagnostics(true).await;
+        value
     }
 
     async fn citation_summary(
@@ -425,22 +451,16 @@ impl AcademicService {
             &self.providers.semantic,
             &self.providers.openalex,
             &self.providers.unpaywall,
-            &self.providers.scihub,
         ] {
             if let Some(location) = provider.resolve_fulltext(paper).await? {
                 locations.push(location);
             }
         }
-        let mut unique = Vec::new();
-        for location in locations {
-            if !unique
-                .iter()
-                .any(|existing: &FullTextLocation| existing.url == location.url)
-            {
-                unique.push(location);
-            }
+        locations.extend(self.institutional.resolve_locations(paper).await);
+        if let Some(location) = self.providers.scihub.resolve_fulltext(paper).await? {
+            locations.push(location);
         }
-        Ok(unique)
+        Ok(prefer_institutional_locations(locations))
     }
 
     async fn download_and_parse_pdf(
@@ -449,21 +469,39 @@ impl AcademicService {
         format: String,
         limit: usize,
     ) -> Result<ParsedContent> {
-        let bytes = tokio::time::timeout(
-            self.config.timeout,
-            download_pdf_bytes(
-                &self.client,
-                &location.url,
-                self.config.academic_max_pdf_bytes,
-            ),
-        )
-        .await
-        .map_err(|_| {
-            GrokSearchError::Timeout(format!(
-                "academic_read PDF download timed out for {}",
-                location.url
-            ))
-        })??;
+        let bytes = if matches!(
+            location.source.as_str(),
+            "ieee_institutional" | "acm_institutional"
+        ) {
+            tokio::time::timeout(
+                self.config.timeout,
+                self.institutional
+                    .download_pdf(location, self.config.academic_max_pdf_bytes),
+            )
+            .await
+            .map_err(|_| {
+                GrokSearchError::Timeout(format!(
+                    "academic_read PDF download timed out for {}",
+                    location.url
+                ))
+            })??
+        } else {
+            tokio::time::timeout(
+                self.config.timeout,
+                download_pdf_bytes(
+                    &self.client,
+                    &location.url,
+                    self.config.academic_max_pdf_bytes,
+                ),
+            )
+            .await
+            .map_err(|_| {
+                GrokSearchError::Timeout(format!(
+                    "academic_read PDF download timed out for {}",
+                    location.url
+                ))
+            })??
+        };
         parse_pdf_bytes_with_timeout(bytes, format, limit, self.config.timeout, &location.url).await
     }
 
@@ -567,6 +605,14 @@ impl AcademicServiceProvider for AcademicService {
     fn diagnostics(&self) -> serde_json::Value {
         AcademicService::diagnostics(self)
     }
+
+    async fn diagnostics_live(&self) -> serde_json::Value {
+        AcademicService::diagnostics_live(self).await
+    }
+
+    fn warm_institutional_access(&self) {
+        AcademicService::warm_institutional_access(self)
+    }
 }
 
 fn search_mode(raw: Option<&str>) -> Result<AcademicSearchMode> {
@@ -668,12 +714,12 @@ fn select_best_title_match(
         .into_iter()
         .filter(|paper| normalize_title(&paper.title) == expected)
         .collect();
-    matches.sort_by(|a, b| canonical_title_score(query, b).cmp(&canonical_title_score(query, a)));
+    matches.sort_by_key(|paper| Reverse(canonical_title_score(query, paper)));
     matches.into_iter().next()
 }
 
 fn merge_canonical_candidates(mut candidates: Vec<AcademicPaper>) -> AcademicPaper {
-    candidates.sort_by(|a, b| canonical_identifier_score(b).cmp(&canonical_identifier_score(a)));
+    candidates.sort_by_key(|paper| Reverse(canonical_identifier_score(paper)));
     let mut merged = candidates.remove(0);
     for candidate in candidates {
         merged.merge_from(candidate);
@@ -791,6 +837,29 @@ fn clean_citation_summary(mut summary: AcademicCitationSummary) -> AcademicCitat
         .map(without_openalex_reference_sources)
         .collect();
     summary
+}
+
+fn prefer_institutional_locations(locations: Vec<FullTextLocation>) -> Vec<FullTextLocation> {
+    let mut unique: Vec<FullTextLocation> = Vec::new();
+    for location in locations {
+        if let Some(existing) = unique
+            .iter_mut()
+            .find(|existing| existing.url == location.url)
+        {
+            if is_institutional_source(&location.source)
+                && !is_institutional_source(&existing.source)
+            {
+                *existing = location;
+            }
+        } else {
+            unique.push(location);
+        }
+    }
+    unique
+}
+
+fn is_institutional_source(source: &str) -> bool {
+    matches!(source, "ieee_institutional" | "acm_institutional")
 }
 
 async fn parse_pdf_bytes_with_timeout(
