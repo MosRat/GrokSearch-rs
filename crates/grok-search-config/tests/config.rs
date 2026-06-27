@@ -489,6 +489,18 @@ fn response_budget_defaults_and_env_overrides() {
 }
 
 #[test]
+fn max_inline_sources_allows_zero_and_clamps_large_values() {
+    let disabled = Config::from_env_map([("GROK_SEARCH_MAX_INLINE_SOURCES", "0")]);
+    assert_eq!(disabled.max_inline_sources, 0);
+
+    let large = Config::from_env_map([("GROK_SEARCH_MAX_INLINE_SOURCES", "999")]);
+    assert_eq!(
+        large.max_inline_sources,
+        grok_search_config::MAX_INLINE_SOURCES_LIMIT
+    );
+}
+
+#[test]
 fn debug_log_path_loads_from_toml_and_is_created() {
     let dir = tempdir().unwrap();
     let config_path = dir.path().join("config.toml");

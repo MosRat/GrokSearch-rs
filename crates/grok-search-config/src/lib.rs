@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+pub const MAX_INLINE_SOURCES_LIMIT: usize = 20;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {
     Responses,
@@ -439,7 +441,8 @@ impl Config {
             source_max_comments: usize_value(&map, "GROK_SEARCH_SOURCE_MAX_COMMENTS", 30),
             enrich_concurrency: usize_value(&map, "GROK_SEARCH_ENRICH_CONCURRENCY", 3).clamp(1, 5),
             enrich_max_chars: usize_value(&map, "GROK_SEARCH_ENRICH_MAX_CHARS", 15000),
-            max_inline_sources: usize_value(&map, "GROK_SEARCH_MAX_INLINE_SOURCES", 5),
+            max_inline_sources: usize_value(&map, "GROK_SEARCH_MAX_INLINE_SOURCES", 5)
+                .min(MAX_INLINE_SOURCES_LIMIT),
             response_max_chars: usize_value(&map, "GROK_SEARCH_RESPONSE_MAX_CHARS", 60_000),
             max_response_bytes: usize_value(
                 &map,
@@ -734,7 +737,7 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 # github_token          = "ghp_..."  # GitHub token (optional; anon = 60 req/hr)
 # enrich_concurrency    = 3          # concurrent resolve_content calls per web_search (1..5)
 # enrich_max_chars      = 15000      # per-source inline content char cap
-# max_inline_sources    = 5          # max sources carrying inline content per response
+# max_inline_sources    = 5          # max sources carrying inline content per response (0..20)
 # response_max_chars    = 60000      # whole-response char budget (answer + inline content)
 # debug_log_path        = "logs/grok-search-rs-debug.jsonl" # optional JSONL debug log
 
@@ -793,7 +796,7 @@ pub enum ConfigLoadError {
     #[error("parse config {} failed: {source}", path.display())]
     Parse {
         path: PathBuf,
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
     #[error("debug log path {} is not writable: {source}", path.display())]
     DebugLogPath {
@@ -814,7 +817,7 @@ fn load_file_map(
     })?;
     let file = toml::from_str::<ConfigFile>(&body).map_err(|source| ConfigLoadError::Parse {
         path: path.to_path_buf(),
-        source,
+        source: Box::new(source),
     })?;
     Ok(Some(file.into_env_map()))
 }

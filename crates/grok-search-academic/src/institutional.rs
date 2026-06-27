@@ -163,7 +163,7 @@ impl InstitutionalAccessManager {
                     cookies: true,
                     accept_invalid_certs: true,
                 },
-            )
+            )?
         } else {
             session.client.clone()
         };
@@ -272,14 +272,17 @@ impl InstitutionalAccessManager {
             cookies: true,
             accept_invalid_certs: self.config.academic_institutional_accept_invalid_certs,
         };
-        let mut routes = vec![CandidateRoute {
-            client: build_client_direct_with_options(self.config.timeout, options),
-            info: RouteInfo {
-                kind: "direct".to_string(),
-                source: "direct".to_string(),
-                proxy_url_redacted: None,
-            },
-        }];
+        let mut routes = Vec::new();
+        if let Ok(client) = build_client_direct_with_options(self.config.timeout, options) {
+            routes.push(CandidateRoute {
+                client,
+                info: RouteInfo {
+                    kind: "direct".to_string(),
+                    source: "direct".to_string(),
+                    proxy_url_redacted: None,
+                },
+            });
+        }
         for candidate in discover_all_candidates() {
             if let Some(route) = build_proxy_route(self.config.timeout, options, candidate) {
                 routes.push(route);
@@ -669,5 +672,18 @@ mod tests {
             .await
             .expect("private HTTP institutional PDF");
         assert!(bytes.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn institutional_invalid_cert_client_option_builds() {
+        let client = build_client_direct_with_options(
+            Duration::from_secs(5),
+            ClientOptions {
+                cookies: true,
+                accept_invalid_certs: true,
+            },
+        )
+        .expect("institutional client with invalid cert option");
+        drop(client);
     }
 }

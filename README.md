@@ -158,7 +158,7 @@ Notes:
 | `GROK_SEARCH_TIMEOUT_SECONDS` | `60` | HTTP timeout for all upstreams. |
 | `GROK_SEARCH_PROXY` | `auto` | `auto` discovers env/system proxies and adopts one only after API reachability checks; `off` forces direct; a proxy URL forces that candidate. |
 | `GROK_SEARCH_FETCH_MAX_CHARS` | unset | Default char cap on `web_fetch`. |
-| `GROK_SEARCH_MAX_INLINE_SOURCES` | `5` | Max `web_search` sources carrying inline content; the rest are metadata-only. |
+| `GROK_SEARCH_MAX_INLINE_SOURCES` | `5` | Max `web_search` sources carrying inline content, clamped to `0..20`; `0` returns metadata-only sources. |
 | `GROK_SEARCH_RESPONSE_MAX_CHARS` | `60000` | Whole-response char budget for `web_search`; over-budget output is truncated tail-first with `truncated: true`. |
 | `GROK_SEARCH_MAX_RESPONSE_BYTES` | `10485760` | Global upstream HTTP response body byte cap before parsing/trimming. |
 | `GROK_SEARCH_DEBUG_LOG_PATH` | unset | Optional JSONL debug log path. Disabled by default; payloads are redacted before writing. |

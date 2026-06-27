@@ -8,18 +8,17 @@ pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
 /// Build a tuned `reqwest::Client`. The same client is shared across providers
 /// so TLS sessions and keep-alive connections can be reused between providers
-/// that hit different hosts. Falls back to a bare `Client::new()` if the
-/// builder errors (preserves prior behavior for tests that construct providers
-/// without env-driven config).
-pub fn build_client(timeout: Duration) -> Client {
+/// that hit different hosts.
+pub fn build_client(timeout: Duration) -> Result<Client> {
     build_client_direct(timeout)
 }
 
-pub fn build_client_direct(timeout: Duration) -> Client {
+pub fn build_client_direct(timeout: Duration) -> Result<Client> {
+    ensure_valid_timeout(timeout)?;
     base_builder(timeout)
         .no_proxy()
         .build()
-        .unwrap_or_else(|_| Client::new())
+        .map_err(|err| GrokSearchError::Config(format!("build HTTP client: {err}")))
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -28,13 +27,18 @@ pub struct ClientOptions {
     pub accept_invalid_certs: bool,
 }
 
-pub fn build_client_direct_with_options(timeout: Duration, options: ClientOptions) -> Client {
+pub fn build_client_direct_with_options(
+    timeout: Duration,
+    options: ClientOptions,
+) -> Result<Client> {
+    ensure_valid_timeout(timeout)?;
     apply_options(base_builder(timeout).no_proxy(), options)
         .build()
-        .unwrap_or_else(|_| Client::new())
+        .map_err(|err| GrokSearchError::Config(format!("build HTTP client: {err}")))
 }
 
 pub fn build_client_with_proxy(timeout: Duration, proxy_url: &str) -> Result<Client> {
+    ensure_valid_timeout(timeout)?;
     let proxy = reqwest::Proxy::all(proxy_url)
         .map_err(|err| GrokSearchError::Config(format!("invalid proxy URL: {err}")))?;
     base_builder(timeout)
@@ -49,11 +53,21 @@ pub fn build_client_with_proxy_options(
     proxy_url: &str,
     options: ClientOptions,
 ) -> Result<Client> {
+    ensure_valid_timeout(timeout)?;
     let proxy = reqwest::Proxy::all(proxy_url)
         .map_err(|err| GrokSearchError::Config(format!("invalid proxy URL: {err}")))?;
     apply_options(base_builder(timeout).no_proxy().proxy(proxy), options)
         .build()
         .map_err(|err| GrokSearchError::Config(format!("build proxied HTTP client: {err}")))
+}
+
+fn ensure_valid_timeout(timeout: Duration) -> Result<()> {
+    if timeout.is_zero() {
+        return Err(GrokSearchError::Config(
+            "build HTTP client: timeout must be greater than zero".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn base_builder(timeout: Duration) -> ClientBuilder {
@@ -726,6 +740,16 @@ mod tests {
             .await
             .expect_err("oversized response should fail");
         assert!(err.to_string().contains("max_response_bytes=4"), "{err}");
+    }
+
+    #[test]
+    fn build_client_reports_builder_errors() {
+        let err = build_client(Duration::ZERO).expect_err("zero timeout should fail");
+        assert!(
+            matches!(err, GrokSearchError::Config(_)),
+            "expected config error, got {err}"
+        );
+        assert!(err.to_string().contains("build HTTP client"), "{err}");
     }
 
     #[tokio::test]

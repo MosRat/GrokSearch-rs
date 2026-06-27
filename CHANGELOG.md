@@ -4,6 +4,26 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.2.0 - 2026-06-27
+
+### Changed
+
+- Made HTTP client construction fallible across the shared net layer and
+  provider wiring, so invalid timeout/proxy/TLS/cookie configuration now
+  returns a configuration error instead of silently falling back to a default
+  client.
+- Added a hard `GROK_SEARCH_MAX_INLINE_SOURCES` limit of `20`; `0` now
+  explicitly disables inline source content while keeping source metadata.
+- Split the heaviest `SearchService` responsibilities into internal fetch,
+  enrichment, and diagnostics modules while preserving public service and tool
+  output shapes.
+
+### Fixed
+
+- Preserved institutional invalid-certificate route handling under the new
+  fallible HTTP client builders.
+- Reduced `ConfigLoadError` size so the workspace passes strict clippy checks.
+
 ## 0.1.29 - 2026-06-27
 
 ### Added

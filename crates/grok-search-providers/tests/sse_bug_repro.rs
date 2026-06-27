@@ -117,7 +117,7 @@ data: {\"type\":\"response.completed\"}\n\n"
 #[tokio::test]
 async fn post_json_returns_when_stream_true_sse_completed_without_connection_close() {
     let base = spawn_sse_server(true, responses_chunks()).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let raw = post_json(
         &client,
@@ -135,7 +135,7 @@ async fn post_json_returns_when_stream_true_sse_completed_without_connection_clo
 #[tokio::test]
 async fn post_json_returns_when_stream_false_still_gets_sse() {
     let base = spawn_sse_server(false, responses_chunks()).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let raw = post_json(
         &client,
@@ -157,7 +157,7 @@ data: {\"type\":\"response.output_text.delta\",\"delta\":\"done marker\"}\n\n\
 event: done\n\n"
         .to_vec()];
     let base = spawn_sse_server(false, chunks).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let raw = post_json(
         &client,
@@ -180,7 +180,7 @@ event: done\n\
 data:\n\n"
         .to_vec()];
     let base = spawn_sse_server(false, chunks).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let raw = post_json(
         &client,
@@ -203,7 +203,7 @@ event: done\n\
 data: {}\n\n"
         .to_vec()];
     let base = spawn_sse_server(false, chunks).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let raw = post_json(
         &client,
@@ -225,7 +225,7 @@ data: {\"type\":\"response.output_text.delta\",\"delta\":\"cr done\"}\r\r\
 event: done\r\r"
         .to_vec()];
     let base = spawn_sse_server(false, chunks).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let raw = post_json(
         &client,
@@ -249,7 +249,7 @@ event: done\n\n"
             .to_vec(),
     ];
     let base = spawn_sse_server(false, chunks).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let raw = post_json(
         &client,
@@ -273,7 +273,7 @@ event: done\n\n"
             .to_vec(),
     ];
     let base = spawn_sse_server(false, chunks).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let raw = post_json(
         &client,
@@ -297,7 +297,7 @@ event: done\n\n"
             .to_vec(),
     ];
     let base = spawn_sse_server(true, chunks).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let raw = post_json(
         &client,
@@ -326,7 +326,7 @@ async fn post_json_parses_trailing_sse_event_at_eof() {
         b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"trailing eof\"}".to_vec(),
     ];
     let base = spawn_closing_sse_server(false, chunks).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let raw = post_json(
         &client,
@@ -347,7 +347,7 @@ async fn post_json_errors_on_response_failed_terminal_event() {
 data: {\"type\":\"response.failed\",\"error\":{\"message\":\"upstream failed\"}}\n\n"
         .to_vec()];
     let base = spawn_sse_server(false, chunks).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let err = post_json(
         &client,
@@ -380,7 +380,7 @@ data: {\"type\":\"response.completed\"}\n\n";
         + 1;
     let chunks = vec![bytes[..split].to_vec(), bytes[split..].to_vec()];
     let base = spawn_sse_server(false, chunks).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let raw = post_json(
         &client,
@@ -404,7 +404,7 @@ event: done\n\n"
             .to_vec(),
     ];
     let base = spawn_sse_server(true, chunks).await;
-    let client = build_client(Duration::from_secs(5));
+    let client = build_client(Duration::from_secs(5)).expect("test HTTP client");
 
     let raw = post_json(
         &client,

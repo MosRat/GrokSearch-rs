@@ -19,6 +19,22 @@ pub struct OpenAICompatProvider {
 }
 
 impl OpenAICompatProvider {
+    pub fn try_new(
+        api_url: impl Into<String>,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        include_web_search_tool: bool,
+        timeout: Duration,
+    ) -> Result<Self> {
+        Ok(Self::with_client(
+            build_client(timeout)?,
+            api_url,
+            api_key,
+            model,
+            include_web_search_tool,
+        ))
+    }
+
     pub fn new(
         api_url: impl Into<String>,
         api_key: impl Into<String>,
@@ -26,13 +42,8 @@ impl OpenAICompatProvider {
         include_web_search_tool: bool,
         timeout: Duration,
     ) -> Self {
-        Self::with_client(
-            build_client(timeout),
-            api_url,
-            api_key,
-            model,
-            include_web_search_tool,
-        )
+        Self::try_new(api_url, api_key, model, include_web_search_tool, timeout)
+            .expect("build HTTP client for OpenAICompatProvider")
     }
 
     /// Construct with an externally provided `reqwest::Client`. Used by

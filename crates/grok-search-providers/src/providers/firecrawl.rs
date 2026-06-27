@@ -19,8 +19,16 @@ pub struct FirecrawlProvider {
 }
 
 impl FirecrawlProvider {
+    pub fn try_new(
+        api_url: impl Into<String>,
+        api_key: impl Into<String>,
+        timeout: Duration,
+    ) -> Result<Self> {
+        Ok(Self::with_client(build_client(timeout)?, api_url, api_key))
+    }
+
     pub fn new(api_url: impl Into<String>, api_key: impl Into<String>, timeout: Duration) -> Self {
-        Self::with_client(build_client(timeout), api_url, api_key)
+        Self::try_new(api_url, api_key, timeout).expect("build HTTP client for FirecrawlProvider")
     }
 
     /// Construct with an externally provided `reqwest::Client`. Used by

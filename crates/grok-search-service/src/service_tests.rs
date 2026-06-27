@@ -1,4 +1,5 @@
 use super::*;
+use grok_search_source_core::SourceType;
 
 #[cfg(test)]
 mod transport_dispatch_tests {
@@ -67,7 +68,8 @@ mod transport_dispatch_tests {
             sources: None,
             fallback_sources: None,
             cache: Arc::new(Mutex::new(SourceCache::new(16))),
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
+            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30))
+                .expect("test HTTP client"),
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
@@ -97,7 +99,8 @@ mod transport_dispatch_tests {
             sources: None,
             fallback_sources: None,
             cache: Arc::new(Mutex::new(SourceCache::new(16))),
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
+            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30))
+                .expect("test HTTP client"),
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
@@ -123,7 +126,8 @@ mod transport_dispatch_tests {
             sources: None,
             fallback_sources: None,
             cache: Arc::new(Mutex::new(SourceCache::new(16))),
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
+            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30))
+                .expect("test HTTP client"),
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
@@ -146,7 +150,8 @@ mod transport_dispatch_tests {
             sources: None,
             fallback_sources: None,
             cache: Arc::new(Mutex::new(SourceCache::new(16))),
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
+            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30))
+                .expect("test HTTP client"),
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
@@ -169,7 +174,8 @@ mod transport_dispatch_tests {
             sources: None,
             fallback_sources: None,
             cache: Arc::new(Mutex::new(SourceCache::new(16))),
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
+            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30))
+                .expect("test HTTP client"),
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics {
                 mode: "manual".to_string(),
@@ -351,7 +357,8 @@ mod enrich_tests {
             sources,
             fallback_sources: None,
             cache: Arc::new(Mutex::new(SourceCache::new(64))),
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
+            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30))
+                .expect("test HTTP client"),
             source_router: Arc::new(router),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,

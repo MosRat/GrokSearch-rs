@@ -10,20 +10,15 @@ use crate::cache::SourceCache;
 use crate::domain_filter::filter_sources_by_domains;
 use crate::logging::DebugLogger;
 use crate::response_budget::apply_response_budget;
-use grok_search_config::{AuthMode, Config};
+use grok_search_config::Config;
 use grok_search_net::proxy::ProxyDiagnostics;
-use grok_search_net::url_policy::validate_public_http_url;
 pub use grok_search_provider_core::{AcademicServiceProvider, AiProvider, SourceProvider};
-use grok_search_source_core::{
-    resolve_content, SourceCaps, SourceRouter, SourceType, NO_SPECIALIST_MATCH,
-};
+use grok_search_source_core::{SourceCaps, SourceRouter};
 use grok_search_types::model::search::{
     ContentBlock, SearchFilters, SearchMessage, SearchRequest, SearchResponse, SearchTool,
 };
 use grok_search_types::model::source::{merge_sources, Source};
-use grok_search_types::model::tool::{
-    GetSourcesOutput, WebFetchOutput, WebSearchInput, WebSearchOutput,
-};
+use grok_search_types::model::tool::{GetSourcesOutput, WebSearchInput, WebSearchOutput};
 use grok_search_types::{
     AcademicCitationsOutput, AcademicGetOutput, AcademicReadOutput, AcademicSearchInput,
     AcademicSearchOutput,
@@ -32,27 +27,27 @@ use grok_search_types::{GrokSearchError, Result};
 
 #[derive(Clone)]
 pub struct SearchService {
-    config: Config,
-    ai: Arc<dyn AiProvider>,
+    pub(crate) config: Config,
+    pub(crate) ai: Arc<dyn AiProvider>,
     /// Model name written into every `SearchRequest` produced by the service.
     /// Resolved once from `config` at construction so each transport gets the
     /// model it actually understands: `grok_model` for Responses, and
     /// `openai_compatible_model` (falling back to `grok_model`) for the
     /// chat-completions transport. Per-call overrides via `WebSearchInput.model`
     /// still win.
-    default_model: String,
-    sources: Option<Arc<dyn SourceProvider>>,
-    fallback_sources: Option<Arc<dyn SourceProvider>>,
-    cache: Arc<Mutex<SourceCache>>,
+    pub(crate) default_model: String,
+    pub(crate) sources: Option<Arc<dyn SourceProvider>>,
+    pub(crate) fallback_sources: Option<Arc<dyn SourceProvider>>,
+    pub(crate) cache: Arc<Mutex<SourceCache>>,
     /// Shared reqwest client for the sources pipeline (same instance handed to
     /// providers). Stored here because resolve_content needs direct GET access.
-    http_client: reqwest::Client,
+    pub(crate) http_client: reqwest::Client,
     /// Specialist extractor router. Empty in Phase 1. Behind `Arc` so
     /// `SearchService: Clone` still holds (the router is not `Clone`).
-    source_router: Arc<SourceRouter>,
-    proxy_diagnostics: ProxyDiagnostics,
-    academic: Option<Arc<dyn AcademicServiceProvider>>,
-    logger: DebugLogger,
+    pub(crate) source_router: Arc<SourceRouter>,
+    pub(crate) proxy_diagnostics: ProxyDiagnostics,
+    pub(crate) academic: Option<Arc<dyn AcademicServiceProvider>>,
+    pub(crate) logger: DebugLogger,
 }
 
 pub struct SearchServiceParts {
@@ -96,7 +91,8 @@ impl SearchService {
             ai: Arc::new(FakeAiProvider),
             sources: Some(Arc::new(FakeSourceProvider)),
             fallback_sources: None,
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
+            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30))
+                .expect("test HTTP client"),
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
@@ -141,7 +137,8 @@ impl SearchService {
             ai: ai.unwrap_or_else(|| Arc::new(FakeAiProvider)),
             sources: Some(primary),
             fallback_sources: fallback,
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
+            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30))
+                .expect("test HTTP client"),
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
@@ -175,7 +172,8 @@ impl SearchService {
             ai: Arc::new(FakeAiProvider),
             sources: Some(primary),
             fallback_sources: fallback,
-            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30)),
+            http_client: grok_search_net::http::build_client(std::time::Duration::from_secs(30))
+                .expect("test HTTP client"),
             source_router: Arc::new(router),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
@@ -332,7 +330,7 @@ impl SearchService {
         // include_content alone would leave content populated at extra_sources=0
         // and break the legacy "summary + source list" shape.
         let merged = if include_content && effective_extra_sources > 0 {
-            enrich_sources(
+            crate::enrichment::enrich_sources(
                 merged,
                 deadline,
                 &self.http_client,
@@ -435,7 +433,7 @@ impl SearchService {
         // opt-out, which must be honored everywhere so callers who disabled inline
         // content never pay the extra fetch budget.
         let fallback = if include_content {
-            enrich_sources(
+            crate::enrichment::enrich_sources(
                 fallback,
                 deadline,
                 &self.http_client,
@@ -531,146 +529,6 @@ impl SearchService {
         })
     }
 
-    pub async fn web_fetch(&self, url: &str, max_chars: Option<usize>) -> Result<WebFetchOutput> {
-        let op_start = Instant::now();
-        let request_id = self.logger.request_id();
-        self.logger.event(
-            &request_id,
-            "debug",
-            "web_fetch.start",
-            Some("web_fetch"),
-            None,
-            json!({
-                "url": summarize_url(url),
-                "max_chars": max_chars,
-            }),
-        );
-        let result = self.web_fetch_inner(url, max_chars).await;
-        match &result {
-            Ok(output) => self.logger.event(
-                &request_id,
-                "debug",
-                "web_fetch.success",
-                Some("web_fetch"),
-                Some(op_start.elapsed()),
-                json!({
-                    "url": summarize_url(&output.url),
-                    "source_type": format!("{:?}", output.source_type),
-                    "original_length": output.original_length,
-                    "truncated": output.truncated,
-                    "fallback_reason": output.fallback_reason,
-                }),
-            ),
-            Err(err) => self.logger.error(
-                &request_id,
-                "web_fetch.error",
-                Some("web_fetch"),
-                Some(op_start.elapsed()),
-                err,
-                json!({ "url": summarize_url(url) }),
-            ),
-        }
-        result
-    }
-
-    async fn web_fetch_inner(&self, url: &str, max_chars: Option<usize>) -> Result<WebFetchOutput> {
-        validate_public_http_url(url)?;
-        let effective_limit = max_chars.or(self.config.fetch_max_chars);
-
-        let (content, source_type, fallback_reason) = match url::Url::parse(url) {
-            Ok(parsed) => {
-                match resolve_content(
-                    &self.http_client,
-                    &parsed,
-                    self.source_router.as_ref(),
-                    &SourceCaps {
-                        max_answers: self.config.source_max_answers,
-                        max_comments: self.config.source_max_comments,
-                    },
-                )
-                .await
-                {
-                    // Specialist succeeded �?keep its content and source type.
-                    Ok((content, kind)) => (content, kind, None),
-                    // No specialist matched: go generic silently (D-01).
-                    Err(reason) if reason == NO_SPECIALIST_MATCH => {
-                        let generic = self.web_fetch_raw(url).await?;
-                        (generic, SourceType::Generic, None)
-                    }
-                    // Specialist matched but failed/empty: surface the reason (D-01).
-                    Err(reason) => {
-                        let generic = self.web_fetch_raw(url).await?;
-                        (generic, SourceType::Generic, Some(reason))
-                    }
-                }
-            }
-            // Malformed URL is not a specialist failure �?go generic, no reason.
-            Err(_) => {
-                let generic = self.web_fetch_raw(url).await?;
-                (generic, SourceType::Generic, None)
-            }
-        };
-
-        Ok(apply_fetch_limit(
-            url,
-            content,
-            effective_limit,
-            source_type,
-            fallback_reason,
-        ))
-    }
-
-    async fn web_fetch_raw(&self, url: &str) -> Result<String> {
-        generic_source_fetch(&self.sources, &self.fallback_sources, url).await
-    }
-
-    pub async fn web_map(&self, url: &str, max_results: usize) -> Result<Vec<Source>> {
-        let op_start = Instant::now();
-        let request_id = self.logger.request_id();
-        self.logger.event(
-            &request_id,
-            "debug",
-            "web_map.start",
-            Some("web_map"),
-            None,
-            json!({
-                "url": summarize_url(url),
-                "max_results": max_results,
-            }),
-        );
-        let result = async {
-            validate_public_http_url(url)?;
-            self.sources
-                .as_ref()
-                .ok_or(GrokSearchError::MissingConfig("TAVILY_API_KEY"))?
-                .map(url, max_results)
-                .await
-        }
-        .await;
-        match &result {
-            Ok(sources) => self.logger.event(
-                &request_id,
-                "debug",
-                "web_map.success",
-                Some("web_map"),
-                Some(op_start.elapsed()),
-                json!({
-                    "url": summarize_url(url),
-                    "sources_count": sources.len(),
-                }),
-            ),
-            Err(err) => self.logger.error(
-                &request_id,
-                "web_map.error",
-                Some("web_map"),
-                Some(op_start.elapsed()),
-                err,
-                json!({ "url": summarize_url(url), "max_results": max_results }),
-            ),
-        }
-        result
-    }
-
     pub async fn academic_search(
         &self,
         input: AcademicSearchInput,
@@ -757,153 +615,6 @@ impl SearchService {
             ))
     }
 
-    /// Runtime diagnostics with live connectivity probes against each configured backend.
-    /// Returns provider availability flags, masked config, and per-provider reachability.
-    pub async fn doctor(&self) -> serde_json::Value {
-        self.doctor_with_options(false).await
-    }
-
-    pub async fn doctor_with_options(&self, verbose: bool) -> serde_json::Value {
-        use grok_search_config::Transport;
-        let request_id = self.logger.request_id();
-        let start = Instant::now();
-        self.logger.event(
-            &request_id,
-            "debug",
-            "doctor.start",
-            Some("doctor"),
-            None,
-            json!({ "verbose": verbose }),
-        );
-        let grok_probe = self.probe_grok().await;
-        let tavily_probe = match &self.sources {
-            Some(provider) => probe_source(provider.as_ref(), "https://example.com").await,
-            None => Probe::skipped("TAVILY_API_KEY not configured"),
-        };
-        let firecrawl_probe = match &self.fallback_sources {
-            Some(provider) => probe_source(provider.as_ref(), "https://example.com").await,
-            None => Probe::skipped("FIRECRAWL_API_KEY not configured"),
-        };
-
-        // Surface the AI transport that the service actually dispatches to so
-        // doctor() stays truthful when callers point us at an OpenAI-compatible
-        // gateway. The legacy "grok" node name is preserved for backward
-        // compatibility, but its fields are now sourced from `default_model`
-        // and the transport-appropriate API URL �?never silently from
-        // `grok_model` / `grok_api_url` on the chat-completions path.
-        let (provider_label, ai_api_url, ai_x_search_enabled) = match self.config.transport {
-            Transport::Responses => (
-                "grok_responses",
-                self.config.grok_api_url.as_str(),
-                self.config.x_search_enabled,
-            ),
-            Transport::ChatCompletions => (
-                "openai_compatible",
-                self.config
-                    .openai_compatible_api_url
-                    .as_deref()
-                    .unwrap_or(""),
-                // x_search is silently ignored on the chat-completions transport
-                // (the gateway has no equivalent); report it as disabled rather
-                // than leaking a misleading config flag.
-                false,
-            ),
-        };
-
-        let mut report = serde_json::json!({
-            "provider": provider_label,
-            "transport": provider_label,
-            "grok": {
-                "api_url": ai_api_url,
-                "model": self.default_model,
-                "auth_mode": match self.config.grok_auth_mode {
-                    AuthMode::ApiKey => "api_key",
-                    AuthMode::OAuth => "oauth",
-                },
-                "auth_file": self.config
-                    .grok_auth_file
-                    .clone()
-                    .or_else(grok_search_config::auth_path)
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "unavailable".to_string()),
-                "web_search_enabled": self.config.web_search_enabled,
-                "x_search_enabled": ai_x_search_enabled,
-                "reachable": grok_probe.ok,
-                "detail": grok_probe.detail,
-            },
-            "tavily": {
-                "api_url": self.config.tavily_api_url,
-                "enabled": self.config.tavily_enabled,
-                "reachable": tavily_probe.ok,
-                "detail": tavily_probe.detail,
-            },
-            "firecrawl": {
-                "api_url": self.config.firecrawl_api_url,
-                "enabled": self.config.firecrawl_enabled,
-                "reachable": firecrawl_probe.ok,
-                "detail": firecrawl_probe.detail,
-            },
-            "default_extra_sources": self.config.default_extra_sources,
-            "fallback_sources": self.config.fallback_sources,
-            "cache_size": self.config.cache_size,
-            "timeout_seconds": self.config.timeout.as_secs(),
-            "github_token": self.config.github_token_status(),
-            "proxy": self.proxy_diagnostics.to_json(),
-            "academic": match &self.academic {
-                Some(academic) => academic.diagnostics_live().await,
-                None => serde_json::json!({ "enabled": false }),
-            },
-            "redacted": self.config.redacted_diagnostics()
-        });
-
-        if verbose {
-            report["diagnostics"] = serde_json::json!({
-                "version": env!("CARGO_PKG_VERSION"),
-                "debug_log": {
-                    "enabled": self.logger.enabled(),
-                    "path": self.logger.path().map(|path| path.display().to_string()),
-                    "session_id": self.logger.session_id(),
-                },
-                "limits": {
-                    "timeout_seconds": self.config.timeout.as_secs(),
-                    "max_response_bytes": self.config.max_response_bytes,
-                    "response_max_chars": self.config.response_max_chars,
-                    "fetch_max_chars": self.config.fetch_max_chars,
-                    "academic_max_pdf_bytes": self.config.academic_max_pdf_bytes,
-                    "academic_pdf_max_chars": self.config.academic_pdf_max_chars,
-                },
-                "url_policy": {
-                    "web_tools": "public http/https only; localhost, private, link-local, multicast, and unspecified addresses are rejected",
-                    "academic_institutional": "public targets require HTTPS and valid TLS; private/local IEEE/ACM targets may use HTTP or invalid TLS",
-                },
-                "providers": {
-                    "ai": {
-                        "configured": true,
-                        "transport": provider_label,
-                        "api_url": ai_api_url,
-                    },
-                    "tavily": {
-                        "configured": self.sources.is_some(),
-                        "enabled": self.config.tavily_enabled,
-                    },
-                    "firecrawl": {
-                        "configured": self.fallback_sources.is_some(),
-                        "enabled": self.config.firecrawl_enabled,
-                    },
-                },
-            });
-        }
-        self.logger.event(
-            &request_id,
-            "debug",
-            "doctor.success",
-            Some("doctor"),
-            Some(start.elapsed()),
-            json!({ "verbose": verbose }),
-        );
-        report
-    }
-
     fn log_result<T>(
         &self,
         request_id: &str,
@@ -932,29 +643,7 @@ impl SearchService {
         }
     }
 
-    async fn probe_grok(&self) -> Probe {
-        // Mirror the real search shape so the probe doesn't fail the
-        // adapter's "web_search tool intent" pre-check.
-        let mut tools = Vec::new();
-        if self.config.web_search_enabled {
-            tools.push(SearchTool::web_search());
-        }
-        let request = SearchRequest {
-            model: self.default_model.clone(),
-            system: None,
-            messages: vec![SearchMessage {
-                role: "user".to_string(),
-                content: vec![ContentBlock::text("ping")],
-            }],
-            tools,
-        };
-        match self.ai.search(&request).await {
-            Ok(_) => Probe::ok("grok responded"),
-            Err(err) => Probe::failed(err.to_string()),
-        }
-    }
-
-    fn build_search_request(
+    pub(crate) fn build_search_request(
         &self,
         input: &WebSearchInput,
         extra_sources: &[Source],
@@ -1069,196 +758,6 @@ fn grok_unverifiable_reason(response: &SearchResponse) -> Option<&'static str> {
     None
 }
 
-fn apply_fetch_limit(
-    url: &str,
-    mut content: String,
-    max_chars: Option<usize>,
-    source_type: SourceType,
-    fallback_reason: Option<String>,
-) -> WebFetchOutput {
-    let Some(limit) = max_chars else {
-        let original_length = content.chars().count();
-        return WebFetchOutput {
-            url: url.to_string(),
-            content,
-            original_length,
-            truncated: false,
-            source_type,
-            fallback_reason,
-        };
-    };
-
-    let mut count = 0usize;
-    let mut cutoff: Option<usize> = None;
-    for (byte_idx, _) in content.char_indices() {
-        if count == limit {
-            cutoff = Some(byte_idx);
-            break;
-        }
-        count += 1;
-    }
-
-    match cutoff {
-        Some(byte_idx) => {
-            let extra = content[byte_idx..].chars().count();
-            content.truncate(byte_idx);
-            WebFetchOutput {
-                url: url.to_string(),
-                content,
-                original_length: limit + extra,
-                truncated: true,
-                source_type,
-                fallback_reason,
-            }
-        }
-        None => WebFetchOutput {
-            url: url.to_string(),
-            content,
-            original_length: count,
-            truncated: false,
-            source_type,
-            fallback_reason,
-        },
-    }
-}
-
-fn summarize_url(raw: &str) -> serde_json::Value {
-    match url::Url::parse(raw) {
-        Ok(parsed) => serde_json::json!({
-            "scheme": parsed.scheme(),
-            "host": parsed.host_str(),
-            "path": parsed.path(),
-        }),
-        Err(_) => serde_json::json!({
-            "invalid": true,
-            "length": raw.len(),
-        }),
-    }
-}
-
-/// Generic (non-specialist) content fetch via the configured source providers:
-/// primary (Tavily) first, then fallback (Firecrawl). Shared by `web_fetch` and
-/// inline enrichment so both agree on how an ordinary URL is retrieved once no
-/// specialist extractor matches. Returns `MissingConfig` when neither provider
-/// is configured.
-async fn generic_source_fetch(
-    primary: &Option<Arc<dyn SourceProvider>>,
-    fallback: &Option<Arc<dyn SourceProvider>>,
-    url: &str,
-) -> Result<String> {
-    if let Some(provider) = primary {
-        if let Ok(content) = provider.fetch(url).await {
-            if !content.trim().is_empty() {
-                return Ok(content);
-            }
-        }
-    }
-    if let Some(provider) = fallback {
-        return provider.fetch(url).await;
-    }
-    Err(GrokSearchError::MissingConfig(
-        "TAVILY_API_KEY or FIRECRAWL_API_KEY",
-    ))
-}
-
-/// Concurrently back-fill `Source.content` for the first `max_sources` sources
-/// via the Phase 1 `resolve_content` pipeline; later sources stay
-/// metadata-only (content = None) so a Grok response with dozens of citations
-/// cannot blow up the payload �?agents drill into them with `web_fetch`.
-/// Bounded by `concurrency` (Semaphore) and the shared `deadline` (D-02:
-/// per-source `timeout_at`, not an independent budget). Every enriched source
-/// ends with `content = Some(..)` �?real markdown (truncated to `max_chars`)
-/// on success, or a deterministic `_Failed to retrieve: ..._` note on any
-/// failure/timeout/invalid-url (D-05 within the inline window: never None,
-/// never empty). Source order is preserved.
-#[allow(clippy::too_many_arguments)]
-async fn enrich_sources(
-    sources: Vec<Source>,
-    deadline: tokio::time::Instant,
-    client: &reqwest::Client,
-    router: &Arc<SourceRouter>,
-    caps: SourceCaps,
-    concurrency: usize,
-    max_chars: usize,
-    max_sources: usize,
-    primary: Option<Arc<dyn SourceProvider>>,
-    fallback: Option<Arc<dyn SourceProvider>>,
-) -> Vec<Source> {
-    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
-    let mut set: tokio::task::JoinSet<(usize, Option<String>)> = tokio::task::JoinSet::new();
-
-    for (idx, source) in sources.iter().enumerate().take(max_sources) {
-        let permit = Arc::clone(&sem);
-        let url_str = source.url.clone();
-        let client = client.clone();
-        let router = Arc::clone(router);
-        let caps = caps.clone();
-        let primary = primary.clone();
-        let fallback = fallback.clone();
-
-        set.spawn(async move {
-            // acquire is micro-second scale for concurrency<=5; deadline
-            // enforcement applies to the resolve_content call itself.
-            let _permit = permit.acquire_owned().await.ok();
-            let content = match url::Url::parse(&url_str) {
-                Err(_) => Some(format!(
-                    "_Failed to retrieve: invalid_url_\n\nSource: {url_str}"
-                )),
-                Ok(parsed) => {
-                    let future = resolve_content(&client, &parsed, &router, &caps);
-                    match tokio::time::timeout_at(deadline, future).await {
-                        Ok(Ok((md, _kind))) => {
-                            let truncated: String = md.chars().take(max_chars).collect();
-                            Some(truncated)
-                        }
-                        // Specialist produced no content �?either no specialist
-                        // matched (generic URL) OR a matched specialist's API
-                        // failed/rate-limited/rendered empty. Either way, mirror
-                        // web_fetch and try the configured Tavily/Firecrawl generic
-                        // fetch before giving up, so inline content still has page
-                        // evidence when a source provider can fetch the URL (P1 +
-                        // specialist-failure fallback). The original `reason` is
-                        // surfaced only if the generic fetch also fails.
-                        Ok(Err(reason)) => {
-                            let generic = generic_source_fetch(&primary, &fallback, &url_str);
-                            match tokio::time::timeout_at(deadline, generic).await {
-                                Ok(Ok(md)) => {
-                                    let truncated: String = md.chars().take(max_chars).collect();
-                                    Some(truncated)
-                                }
-                                Ok(Err(_)) => Some(format!(
-                                    "_Failed to retrieve: {reason}_\n\nSource: {url_str}"
-                                )),
-                                Err(_elapsed) => Some(format!(
-                                    "_Failed to retrieve: timeout_\n\nSource: {url_str}"
-                                )),
-                            }
-                        }
-                        Err(_elapsed) => Some(format!(
-                            "_Failed to retrieve: timeout_\n\nSource: {url_str}"
-                        )),
-                    }
-                }
-            };
-            (idx, content)
-        });
-    }
-
-    let mut results: Vec<(usize, Option<String>)> = Vec::with_capacity(sources.len());
-    while let Some(res) = set.join_next().await {
-        if let Ok(pair) = res {
-            results.push(pair);
-        }
-    }
-
-    results.sort_by_key(|(idx, _)| *idx);
-    let mut out = sources;
-    for (idx, content) in results {
-        out[idx].content = content;
-    }
-    out
-}
-
 fn with_provider(
     mut sources: Vec<Source>,
     provider: impl Into<std::borrow::Cow<'static, str>>,
@@ -1270,38 +769,29 @@ fn with_provider(
     sources
 }
 
-struct Probe {
-    ok: bool,
-    detail: String,
+pub(crate) struct Probe {
+    pub(crate) ok: bool,
+    pub(crate) detail: String,
 }
 
 impl Probe {
-    fn ok(detail: impl Into<String>) -> Self {
+    pub(crate) fn ok(detail: impl Into<String>) -> Self {
         Self {
             ok: true,
             detail: detail.into(),
         }
     }
-    fn failed(detail: impl Into<String>) -> Self {
+    pub(crate) fn failed(detail: impl Into<String>) -> Self {
         Self {
             ok: false,
             detail: detail.into(),
         }
     }
-    fn skipped(detail: impl Into<String>) -> Self {
+    pub(crate) fn skipped(detail: impl Into<String>) -> Self {
         Self {
             ok: false,
             detail: detail.into(),
         }
-    }
-}
-
-async fn probe_source(provider: &dyn SourceProvider, sample_url: &str) -> Probe {
-    // Use a short keyword search as a lightweight liveness signal.
-    let filters = SearchFilters::default();
-    match provider.search_sources("ping", 1, &filters).await {
-        Ok(_) => Probe::ok(format!("reachable (sample probe via {sample_url} ok)")),
-        Err(err) => Probe::failed(err.to_string()),
     }
 }
 

@@ -82,6 +82,33 @@ async fn inline_content_capped_to_max_inline_sources() {
     );
 }
 
+#[tokio::test]
+async fn zero_max_inline_sources_disables_inline_content() {
+    let service = SearchService::fake_custom(
+        None,
+        std::sync::Arc::new(FixedLenFetchProvider { len: 100 }),
+        None,
+        [
+            ("GROK_SEARCH_EXTRA_SOURCES", "3"),
+            ("GROK_SEARCH_MAX_INLINE_SOURCES", "0"),
+        ],
+    );
+
+    let output = service
+        .web_search(WebSearchInput {
+            query: "q".to_string(),
+            ..Default::default()
+        })
+        .await
+        .expect("search output");
+
+    assert_eq!(output.sources_count, 4);
+    assert!(
+        output.sources.iter().all(|source| source.content.is_none()),
+        "max_inline_sources=0 must return metadata-only sources"
+    );
+}
+
 // Item 2: whole-response budget. The returned payload is trimmed from the
 // tail, every trimmed source carries an actionable note (web_fetch /
 // get_sources), and the cache keeps the full enriched content so drill-down

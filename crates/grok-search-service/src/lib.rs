@@ -1,5 +1,8 @@
 mod cache;
+mod diagnostics;
 mod domain_filter;
+mod enrichment;
+mod fetch;
 pub mod logging;
 mod response_budget;
 mod service;

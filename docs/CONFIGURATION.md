@@ -125,7 +125,7 @@ content; truncated sources carry a note pointing at `web_fetch(url)` /
 
 | Variable | Default | Description |
 |---|---|---|
-| `GROK_SEARCH_MAX_INLINE_SOURCES` | `5` | Maximum sources that carry inline `content` per `web_search` response; the rest return metadata only. |
+| `GROK_SEARCH_MAX_INLINE_SOURCES` | `5` | Maximum sources that carry inline `content` per `web_search` response, clamped to `0..20`; `0` returns metadata only. |
 | `GROK_SEARCH_RESPONSE_MAX_CHARS` | `60000` | Whole-response character budget (answer + per-source metadata and inline content). Over-budget responses truncate inline content tail-first, then drop trailing sources (always keeping at least one) and set `truncated: true`. |
 
 ## Academic search

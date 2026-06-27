@@ -13,7 +13,7 @@ use grok_search_service::{SearchService, SearchServiceParts};
 use grok_search_types::{GrokSearchError, Result};
 
 pub fn new(config: Config) -> Result<SearchService> {
-    let http = grok_search_net::http::build_client(config.timeout);
+    let http = grok_search_net::http::build_client(config.timeout)?;
     new_with_http(config, http, ProxyDiagnostics::default())
 }
 

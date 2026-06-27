@@ -20,6 +20,22 @@ pub struct GrokResponsesProvider {
 }
 
 impl GrokResponsesProvider {
+    pub fn try_new(
+        api_url: impl Into<String>,
+        api_key: impl Into<String>,
+        require_web_search: bool,
+        include_x_search: bool,
+        timeout: Duration,
+    ) -> Result<Self> {
+        Ok(Self::with_client(
+            build_client(timeout)?,
+            api_url,
+            api_key,
+            require_web_search,
+            include_x_search,
+        ))
+    }
+
     pub fn new(
         api_url: impl Into<String>,
         api_key: impl Into<String>,
@@ -27,13 +43,14 @@ impl GrokResponsesProvider {
         include_x_search: bool,
         timeout: Duration,
     ) -> Self {
-        Self::with_client(
-            build_client(timeout),
+        Self::try_new(
             api_url,
             api_key,
             require_web_search,
             include_x_search,
+            timeout,
         )
+        .expect("build HTTP client for GrokResponsesProvider")
     }
 
     /// Construct with an externally provided `reqwest::Client`. Used by

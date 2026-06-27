@@ -8,6 +8,7 @@ use url::Url;
 
 use crate::http::{build_client_direct, build_client_with_proxy};
 use grok_search_config::{AuthMode, Config, Transport};
+use grok_search_types::Result as GrokResult;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyDiagnostics {
@@ -90,21 +91,21 @@ pub fn discover_all_candidates() -> Vec<ProxyCandidate> {
     discover_candidates_for_urls(&urls)
 }
 
-pub async fn bootstrap(config: &Config) -> (Client, ProxyDiagnostics) {
+pub async fn bootstrap(config: &Config) -> GrokResult<(Client, ProxyDiagnostics)> {
     let checked_urls = probe_urls(config);
     let timeout = probe_timeout(config.timeout);
     let mode = config.proxy.trim();
     if mode.eq_ignore_ascii_case("off") {
-        return (
-            build_client_direct(config.timeout),
+        return Ok((
+            build_client_direct(config.timeout)?,
             ProxyDiagnostics::direct("off", "proxy disabled by configuration", checked_urls),
-        );
+        ));
     }
     if checked_urls.is_empty() {
-        return (
-            build_client_direct(config.timeout),
+        return Ok((
+            build_client_direct(config.timeout)?,
             ProxyDiagnostics::direct(mode_label(mode), "skipped/no probeable api", checked_urls),
-        );
+        ));
     }
 
     let candidates = if mode.is_empty() || mode.eq_ignore_ascii_case("auto") {
@@ -112,25 +113,25 @@ pub async fn bootstrap(config: &Config) -> (Client, ProxyDiagnostics) {
     } else if let Some(candidate) = ProxyCandidate::new("manual", mode) {
         vec![candidate]
     } else {
-        return (
-            build_client_direct(config.timeout),
+        return Ok((
+            build_client_direct(config.timeout)?,
             ProxyDiagnostics::direct(
                 "manual",
                 format!("invalid proxy URL: {}", redact_proxy_url(mode)),
                 checked_urls,
             ),
-        );
+        ));
     };
 
     if candidates.is_empty() {
-        return (
-            build_client_direct(config.timeout),
+        return Ok((
+            build_client_direct(config.timeout)?,
             ProxyDiagnostics::direct(
                 mode_label(mode),
                 "no proxy candidate discovered",
                 checked_urls,
             ),
-        );
+        ));
     }
 
     let mut failures = Vec::new();
@@ -149,7 +150,7 @@ pub async fn bootstrap(config: &Config) -> (Client, ProxyDiagnostics) {
         };
         match probe_all(&client, &checked_urls, timeout).await {
             Ok(()) => {
-                return (
+                return Ok((
                     client,
                     ProxyDiagnostics {
                         mode: mode_label(mode),
@@ -159,7 +160,7 @@ pub async fn bootstrap(config: &Config) -> (Client, ProxyDiagnostics) {
                         detail: "proxy path reached all probeable APIs".to_string(),
                         checked_urls,
                     },
-                );
+                ));
             }
             Err(err) => failures.push(format!(
                 "{} {redacted}: {}",
@@ -169,8 +170,8 @@ pub async fn bootstrap(config: &Config) -> (Client, ProxyDiagnostics) {
         }
     }
 
-    (
-        build_client_direct(config.timeout),
+    Ok((
+        build_client_direct(config.timeout)?,
         ProxyDiagnostics::direct(
             mode_label(mode),
             format!(
@@ -179,7 +180,7 @@ pub async fn bootstrap(config: &Config) -> (Client, ProxyDiagnostics) {
             ),
             checked_urls,
         ),
-    )
+    ))
 }
 
 fn mode_label(mode: &str) -> String {
@@ -761,7 +762,7 @@ socksProxy=socks5://127.0.0.1:1080
             ("GROK_SEARCH_PROXY", proxy.as_str()),
         ]);
 
-        let (_client, diagnostics) = bootstrap(&config).await;
+        let (_client, diagnostics) = bootstrap(&config).await.expect("bootstrap");
 
         assert_eq!(diagnostics.mode, "manual");
         assert_eq!(diagnostics.status, "proxied");
@@ -776,7 +777,7 @@ socksProxy=socks5://127.0.0.1:1080
     async fn bootstrap_skips_when_no_api_can_be_probed() {
         let config = Config::from_env_map([("GROK_SEARCH_PROXY", "auto")]);
 
-        let (_client, diagnostics) = bootstrap(&config).await;
+        let (_client, diagnostics) = bootstrap(&config).await.expect("bootstrap");
 
         assert_eq!(diagnostics.status, "direct");
         assert_eq!(diagnostics.detail, "skipped/no probeable api");
@@ -790,7 +791,7 @@ socksProxy=socks5://127.0.0.1:1080
             ("GROK_SEARCH_PROXY", "http://user:secret@"),
         ]);
 
-        let (_client, diagnostics) = bootstrap(&config).await;
+        let (_client, diagnostics) = bootstrap(&config).await.expect("bootstrap");
 
         assert_eq!(diagnostics.status, "direct");
         assert!(diagnostics.detail.contains("invalid proxy URL"));

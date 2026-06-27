@@ -316,7 +316,7 @@ async fn run_mcp() -> anyhow::Result<()> {
         print_setup_guide();
         return Ok(());
     }
-    let (http, proxy_diagnostics) = grok_search_net::proxy::bootstrap(&cfg).await;
+    let (http, proxy_diagnostics) = grok_search_net::proxy::bootstrap(&cfg).await?;
     let service = grok_search_runtime::new_with_http(cfg, http, proxy_diagnostics)?;
     service.warm_academic_institutional_access();
     grok_search_mcp::run_stdio(service).await?;
@@ -407,7 +407,7 @@ async fn invoke_and_print<T: serde::Serialize>(
 
 async fn build_service() -> anyhow::Result<grok_search_service::SearchService> {
     let cfg = Config::try_load()?;
-    let (http, proxy_diagnostics) = grok_search_net::proxy::bootstrap(&cfg).await;
+    let (http, proxy_diagnostics) = grok_search_net::proxy::bootstrap(&cfg).await?;
     Ok(grok_search_runtime::new_with_http(
         cfg,
         http,
