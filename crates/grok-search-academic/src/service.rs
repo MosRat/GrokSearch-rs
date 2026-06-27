@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use grok_search_config::Config;
-use grok_search_content::download_pdf_bytes;
+use grok_search_content::download_pdf_bytes_limited;
 use grok_search_content::ParsedContent;
 use grok_search_parse::{
     normalize_title, parse_academic_identifier as parse_identifier, rrf_merge_papers as rrf_merge,
@@ -69,15 +69,17 @@ impl AcademicService {
         Self {
             providers: ProviderSet {
                 dblp: DblpProvider::new(client.clone()),
-                semantic: SemanticProvider::new(
+                semantic: SemanticProvider::new_with_limit(
                     client.clone(),
                     config.semantic_scholar_api_key.clone(),
+                    config.max_response_bytes,
                 ),
                 arxiv: ArxivProvider::new(client.clone()),
-                openalex: OpenAlexProvider::new(
+                openalex: OpenAlexProvider::new_with_limit(
                     client.clone(),
                     config.academic_email.clone(),
                     config.openalex_api_key.clone(),
+                    config.max_response_bytes,
                 ),
                 crossref: CrossrefProvider::new(client.clone(), config.academic_email.clone()),
                 unpaywall: UnpaywallProvider::new(client.clone(), config.academic_email.clone()),
@@ -324,14 +326,22 @@ impl AcademicService {
                         resolver_chain: chain,
                     });
                 }
-                Err(err) => failures.push(format!("{}: {err}", location.url)),
+                Err(err) => {
+                    failures.push((err.kind().to_string(), format!("{}: {err}", location.url)))
+                }
             }
         }
-        let message = failures.join("; ");
-        let is_timeout = message.contains("timed out");
+        let message = failures
+            .iter()
+            .map(|(_, message)| message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
         let err = format!("academic_read PDF fetch failed for all candidates: {message}");
-        if is_timeout {
+        if failures.iter().any(|(kind, _)| kind == "timeout") {
             return Err(GrokSearchError::Timeout(err));
+        }
+        if failures.iter().any(|(kind, _)| kind == "upstream") {
+            return Err(GrokSearchError::Upstream(err));
         }
         Err(GrokSearchError::Provider(err))
     }
@@ -488,10 +498,11 @@ impl AcademicService {
         } else {
             tokio::time::timeout(
                 self.config.timeout,
-                download_pdf_bytes(
+                download_pdf_bytes_limited(
                     &self.client,
                     &location.url,
                     self.config.academic_max_pdf_bytes,
+                    self.config.max_response_bytes,
                 ),
             )
             .await
@@ -883,7 +894,7 @@ async fn parse_pdf_bytes_with_timeout(
     )
     .await
     .map_err(|_| GrokSearchError::Timeout(format!("academic_read PDF parse timed out for {url}")))?
-    .map_err(|err| GrokSearchError::Provider(format!("academic_read parse task failed: {err}")))?
+    .map_err(|err| GrokSearchError::Io(format!("academic_read parse task failed: {err}")))?
 }
 
 fn paper_matches_year_filter(

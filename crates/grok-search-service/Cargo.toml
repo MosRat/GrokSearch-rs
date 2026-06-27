@@ -22,3 +22,6 @@ grok-search-net = { path = "../grok-search-net" }
 grok-search-provider-core = { path = "../grok-search-provider-core" }
 grok-search-source-core = { path = "../grok-search-source-core" }
 grok-search-types = { path = "../grok-search-types" }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -38,7 +38,13 @@ fn tool_from_value(value: &Value) -> ToolSpec {
 
 pub async fn invoke_tool(service: &SearchService, name: &str, args: Value) -> Result<Value> {
     match name {
-        "doctor" => Ok(service.doctor().await),
+        "doctor" => {
+            let params: DoctorParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            Ok(service
+                .doctor_with_options(params.verbose.unwrap_or(false))
+                .await)
+        }
         "web_search" => {
             let params: WebSearchParams = serde_json::from_value(args)
                 .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
@@ -74,6 +80,11 @@ pub async fn invoke_tool(service: &SearchService, name: &str, args: Value) -> Re
             let params: WebMapParams = serde_json::from_value(args)
                 .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
             let max_results = params.max_results.unwrap_or(10);
+            if !(1..=50).contains(&max_results) {
+                return Err(GrokSearchError::InvalidParams(
+                    "web_map.max_results must be between 1 and 50".to_string(),
+                ));
+            }
             let sources = service.web_map(&params.url, max_results).await?;
             let mapped_sources: Vec<Value> = sources
                 .iter()
@@ -197,6 +208,11 @@ pub struct WebFetchParams {
 pub struct WebMapParams {
     pub url: String,
     pub max_results: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DoctorParams {
+    pub verbose: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -344,14 +360,23 @@ pub fn tools_list_json() -> Value {
                     "required": ["url"],
                     "properties": {
                         "url": { "type": "string" },
-                        "max_results": { "type": "integer", "minimum": 1 }
+                        "max_results": { "type": "integer", "minimum": 1, "maximum": 50 }
                     }
                 }
             },
             {
                 "name": "doctor",
                 "description": "Diagnostic probe: live connectivity check for Grok, Tavily, and Firecrawl backends, plus masked configuration. Use to verify the server is wired up and reachable.",
-                "inputSchema": { "type": "object", "properties": {} }
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "verbose": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Include detailed limits, logging status, provider wiring, and URL policy diagnostics."
+                        }
+                    }
+                }
             },
             {
                 "name": "academic_search",
@@ -506,15 +531,42 @@ mod tests {
             &service,
             "web_map",
             json!({
-                "url": "https://example.com",
+                "url": "https://93.184.216.34",
                 "max_results": 2
             }),
         )
         .await
         .expect("web_map should succeed");
 
-        assert_eq!(value["url"], "https://example.com");
+        assert_eq!(value["url"], "https://93.184.216.34");
         assert_eq!(value["sources_count"], 2);
         assert_eq!(value["sources"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn invoke_tool_rejects_web_map_out_of_range() {
+        let service = SearchService::fake_with_sources();
+        let err = invoke_tool(
+            &service,
+            "web_map",
+            json!({
+                "url": "https://93.184.216.34",
+                "max_results": 51
+            }),
+        )
+        .await
+        .expect_err("max_results above 50 should fail");
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn invoke_tool_doctor_accepts_verbose_param() {
+        let service = SearchService::fake_with_sources();
+        let value = invoke_tool(&service, "doctor", json!({ "verbose": true }))
+            .await
+            .expect("doctor should succeed");
+
+        assert_eq!(value["diagnostics"]["debug_log"]["enabled"], false);
+        assert!(value["diagnostics"]["limits"]["max_response_bytes"].is_number());
     }
 }

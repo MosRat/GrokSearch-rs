@@ -10,6 +10,7 @@ description = "Configuration loading for GrokSearch-rs"
 
 [dependencies]
 serde.workspace = true
+thiserror.workspace = true
 toml.workspace = true
 url.workspace = true
 grok-search-types = { path = "../grok-search-types" }

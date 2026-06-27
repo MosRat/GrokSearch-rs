@@ -10,7 +10,7 @@ use rmcp::model::{
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::transport::stdio;
 use rmcp::{ErrorData as McpError, ServerHandler, ServiceExt};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 pub async fn run_stdio(service: SearchService) -> anyhow::Result<()> {
     let server = McpServer { service }.serve(stdio()).await?;
@@ -85,9 +85,10 @@ fn tool_from_spec(spec: ToolSpec) -> Tool {
 
 fn mcp_error(error: GrokSearchError) -> McpError {
     let message = error.to_string();
-    let data = Some(json!({ "code": error.code() }));
+    let data = Some(error.diagnostics());
     match error {
         GrokSearchError::InvalidParams(_) => McpError::invalid_params(message, data),
+        GrokSearchError::SecurityPolicy(_) => McpError::invalid_params(message, data),
         GrokSearchError::NotFound(_) => McpError::resource_not_found(message, data),
         GrokSearchError::Parse(_) => McpError::parse_error(message, data),
         _ => McpError::internal_error(message, data),
@@ -96,6 +97,8 @@ fn mcp_error(error: GrokSearchError) -> McpError {
 
 #[cfg(test)]
 mod tests {
+    use grok_search_types::GrokSearchError;
+
     #[test]
     fn tools_list_contains_existing_tools() {
         let names: Vec<_> = grok_search_tools::tools()
@@ -168,5 +171,17 @@ mod tests {
             get_sources.contains("new search"),
             "get_sources: {get_sources}"
         );
+    }
+
+    #[test]
+    fn mcp_error_data_contains_structured_diagnostics() {
+        let err = super::mcp_error(GrokSearchError::SecurityPolicy(
+            "url must resolve to a public http or https address".to_string(),
+        ));
+        let data = err.data.expect("diagnostic data");
+        assert_eq!(data["kind"], "security_policy");
+        assert_eq!(data["code"], -32602);
+        assert_eq!(data["retryable"], false);
+        assert!(data["hint"].as_str().unwrap().contains("public"));
     }
 }

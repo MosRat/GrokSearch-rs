@@ -1,4 +1,6 @@
-use grok_search_net::http::{build_client, post_json_with_status};
+use grok_search_net::http::{
+    build_client, post_json_with_status_limited, DEFAULT_MAX_RESPONSE_BYTES,
+};
 use grok_search_net::key_pool::{is_key_scoped_status, KeyPool};
 use grok_search_provider_core::SourceProvider;
 use grok_search_types::model::search::SearchFilters;
@@ -13,6 +15,7 @@ pub struct FirecrawlProvider {
     client: Client,
     api_url: String,
     keys: KeyPool,
+    max_response_bytes: usize,
 }
 
 impl FirecrawlProvider {
@@ -27,10 +30,20 @@ impl FirecrawlProvider {
         api_url: impl Into<String>,
         api_key: impl Into<String>,
     ) -> Self {
+        Self::with_client_and_limit(client, api_url, api_key, DEFAULT_MAX_RESPONSE_BYTES)
+    }
+
+    pub fn with_client_and_limit(
+        client: Client,
+        api_url: impl Into<String>,
+        api_key: impl Into<String>,
+        max_response_bytes: usize,
+    ) -> Self {
         Self {
             client,
             api_url: api_url.into().trim_end_matches('/').to_string(),
             keys: KeyPool::parse(&api_key.into()),
+            max_response_bytes,
         }
     }
 
@@ -66,7 +79,16 @@ impl FirecrawlProvider {
         let mut last_error = None;
         for offset in 0..attempts {
             let key = self.keys.key(start + offset);
-            match post_json_with_status(&self.client, &endpoint, key, body, "Firecrawl").await {
+            match post_json_with_status_limited(
+                &self.client,
+                &endpoint,
+                key,
+                body,
+                "Firecrawl",
+                self.max_response_bytes,
+            )
+            .await
+            {
                 Ok(value) => return Ok(value),
                 Err(failure) => {
                     let key_scoped = failure.status.is_some_and(is_key_scoped_status);

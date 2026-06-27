@@ -955,6 +955,7 @@ dependencies = [
  "grok-search-types",
  "serde",
  "tempfile",
+ "thiserror",
  "toml",
  "url",
 ]
@@ -1073,6 +1074,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "url",
  "uuid",

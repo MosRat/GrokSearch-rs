@@ -4,7 +4,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use grok_search_net::http::{get_json, get_text};
+use grok_search_net::http::{get_json, get_json_limited, get_text, DEFAULT_MAX_RESPONSE_BYTES};
 use grok_search_net::key_pool::{is_key_scoped_status, KeyPool};
 use grok_search_parse::{clean_html_title, extract_arxiv_id_from_path, openalex_abstract};
 use grok_search_provider_core::{
@@ -132,14 +132,25 @@ pub(crate) struct SemanticProvider {
     client: reqwest::Client,
     api_key: Option<String>,
     limiter: Arc<Mutex<Option<Instant>>>,
+    max_response_bytes: usize,
 }
 
 impl SemanticProvider {
+    #[allow(dead_code)]
     pub(crate) fn new(client: reqwest::Client, api_key: Option<String>) -> Self {
+        Self::new_with_limit(client, api_key, DEFAULT_MAX_RESPONSE_BYTES)
+    }
+
+    pub(crate) fn new_with_limit(
+        client: reqwest::Client,
+        api_key: Option<String>,
+        max_response_bytes: usize,
+    ) -> Self {
         Self {
             client,
             api_key,
             limiter: Arc::new(Mutex::new(None)),
+            max_response_bytes,
         }
     }
 
@@ -152,16 +163,26 @@ impl SemanticProvider {
                 builder = builder.header("x-api-key", key);
             }
             let response = builder.send().await.map_err(|err| {
-                GrokSearchError::Provider(format!("{label} request failed: {err}"))
+                if err.is_timeout() {
+                    GrokSearchError::Timeout(format!("{label} request timed out: {err}"))
+                } else {
+                    GrokSearchError::Upstream(format!("{label} request failed: {err}"))
+                }
             })?;
             let status = response.status();
             let retry_after = retry_after_delay(&response);
-            let bytes = response.bytes().await.map_err(|err| {
-                GrokSearchError::Provider(format!("{label} body read failed: {err}"))
-            })?;
+            let bytes =
+                read_response_bytes_limited(response, label, self.max_response_bytes).await?;
             if !status.is_success() {
                 if self.api_key.is_some() && matches!(status.as_u16(), 401 | 403) {
-                    return get_json(&self.client, url, &[(USER_AGENT, UA)], label).await;
+                    return get_json_limited(
+                        &self.client,
+                        url,
+                        &[(USER_AGENT, UA)],
+                        label,
+                        self.max_response_bytes,
+                    )
+                    .await;
                 }
                 if status.as_u16() == 429 && attempt < 2 {
                     last_rate_limit = Some(String::from_utf8_lossy(&bytes).into_owned());
@@ -173,7 +194,7 @@ impl SemanticProvider {
                     .await;
                     continue;
                 }
-                return Err(GrokSearchError::Provider(format!(
+                return Err(GrokSearchError::Upstream(format!(
                     "{label} returned HTTP {status}: {}",
                     String::from_utf8_lossy(&bytes)
                 )));
@@ -181,7 +202,7 @@ impl SemanticProvider {
             return serde_json::from_slice(&bytes)
                 .map_err(|err| GrokSearchError::Parse(format!("invalid {label} JSON: {err}")));
         }
-        Err(GrokSearchError::Provider(format!(
+        Err(GrokSearchError::Upstream(format!(
             "{label} returned HTTP 429 after retries: {}",
             last_rate_limit.unwrap_or_else(|| "rate limited".to_string())
         )))
@@ -733,6 +754,7 @@ async fn get_json_with_status(
     client: &reqwest::Client,
     url: &str,
     label: &str,
+    max_response_bytes: usize,
 ) -> std::result::Result<Value, GetJsonFailure> {
     let response = client
         .get(url)
@@ -744,18 +766,20 @@ async fn get_json_with_status(
             error: if err.is_timeout() {
                 GrokSearchError::Timeout(format!("{label} GET timed out: {err}"))
             } else {
-                GrokSearchError::Provider(format!("{label} GET failed: {err}"))
+                GrokSearchError::Upstream(format!("{label} GET failed: {err}"))
             },
         })?;
     let status = response.status();
-    let bytes = response.bytes().await.map_err(|err| GetJsonFailure {
-        status: None,
-        error: GrokSearchError::Provider(format!("{label} body read failed: {err}")),
-    })?;
+    let bytes = read_response_bytes_limited(response, label, max_response_bytes)
+        .await
+        .map_err(|error| GetJsonFailure {
+            status: None,
+            error,
+        })?;
     if !status.is_success() {
         return Err(GetJsonFailure {
             status: Some(status.as_u16()),
-            error: GrokSearchError::Provider(format!(
+            error: GrokSearchError::Upstream(format!(
                 "{label} returned HTTP {status}: {}",
                 String::from_utf8_lossy(&bytes)
             )),
@@ -767,23 +791,56 @@ async fn get_json_with_status(
     })
 }
 
+async fn read_response_bytes_limited(
+    mut response: reqwest::Response,
+    label: &str,
+    max_response_bytes: usize,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|err| GrokSearchError::Upstream(format!("{label} body read failed: {err}")))?
+    {
+        if out.len().saturating_add(chunk.len()) > max_response_bytes {
+            return Err(GrokSearchError::Upstream(format!(
+                "{label} response exceeded max_response_bytes={max_response_bytes}"
+            )));
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
 #[derive(Clone)]
 pub(crate) struct OpenAlexProvider {
     client: reqwest::Client,
     email: Option<String>,
     keys: Option<KeyPool>,
+    max_response_bytes: usize,
 }
 
 impl OpenAlexProvider {
+    #[allow(dead_code)]
     pub(crate) fn new(
         client: reqwest::Client,
         email: Option<String>,
         api_key: Option<String>,
     ) -> Self {
+        Self::new_with_limit(client, email, api_key, DEFAULT_MAX_RESPONSE_BYTES)
+    }
+
+    pub(crate) fn new_with_limit(
+        client: reqwest::Client,
+        email: Option<String>,
+        api_key: Option<String>,
+        max_response_bytes: usize,
+    ) -> Self {
         Self {
             client,
             email,
             keys: api_key.map(|key| KeyPool::parse(&key)),
+            max_response_bytes,
         }
     }
 
@@ -802,14 +859,23 @@ impl OpenAlexProvider {
 
     async fn get_json(&self, base_url: &Url, label: &str) -> Result<Value> {
         let Some(keys) = &self.keys else {
-            return get_json(&self.client, base_url.as_str(), &[(USER_AGENT, UA)], label).await;
+            return get_json_limited(
+                &self.client,
+                base_url.as_str(),
+                &[(USER_AGENT, UA)],
+                label,
+                self.max_response_bytes,
+            )
+            .await;
         };
         let start = keys.start();
         let mut last_key_error = None;
         for offset in 0..keys.len() {
             let mut url = base_url.clone();
             self.add_key(&mut url, start + offset);
-            match get_json_with_status(&self.client, url.as_str(), label).await {
+            match get_json_with_status(&self.client, url.as_str(), label, self.max_response_bytes)
+                .await
+            {
                 Ok(value) => return Ok(value),
                 Err(failure) => {
                     if failure.status.is_some_and(is_key_scoped_status) && offset + 1 < keys.len() {
@@ -821,7 +887,7 @@ impl OpenAlexProvider {
             }
         }
         Err(last_key_error.unwrap_or_else(|| {
-            GrokSearchError::Provider(format!("{label} request failed with no configured key"))
+            GrokSearchError::Config(format!("{label} request failed with no configured key"))
         }))
     }
 }

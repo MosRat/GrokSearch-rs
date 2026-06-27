@@ -1,7 +1,7 @@
 use crate::adapters::chat_completions_request::to_chat_completions_payload;
 use crate::adapters::chat_completions_response::parse_chat_completions;
 use grok_search_config::normalize_v1_base;
-use grok_search_net::http::{build_client, post_json};
+use grok_search_net::http::{build_client, post_json_limited, DEFAULT_MAX_RESPONSE_BYTES};
 use grok_search_provider_core::AiProvider;
 use grok_search_types::model::search::{SearchRequest, SearchResponse};
 use grok_search_types::Result;
@@ -15,6 +15,7 @@ pub struct OpenAICompatProvider {
     api_key: String,
     model: String,
     include_web_search_tool: bool,
+    max_response_bytes: usize,
 }
 
 impl OpenAICompatProvider {
@@ -44,6 +45,24 @@ impl OpenAICompatProvider {
         model: impl Into<String>,
         include_web_search_tool: bool,
     ) -> Self {
+        Self::with_client_and_limit(
+            client,
+            api_url,
+            api_key,
+            model,
+            include_web_search_tool,
+            DEFAULT_MAX_RESPONSE_BYTES,
+        )
+    }
+
+    pub fn with_client_and_limit(
+        client: Client,
+        api_url: impl Into<String>,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        include_web_search_tool: bool,
+        max_response_bytes: usize,
+    ) -> Self {
         Self {
             client,
             // Mirror the Responses provider: accept root URLs, `/v1` bases, or
@@ -54,6 +73,7 @@ impl OpenAICompatProvider {
             api_key: api_key.into(),
             model: model.into(),
             include_web_search_tool,
+            max_response_bytes,
         }
     }
 
@@ -71,12 +91,13 @@ impl OpenAICompatProvider {
             request.model.as_str()
         };
         let payload = to_chat_completions_payload(request, model, self.include_web_search_tool);
-        let raw = post_json(
+        let raw = post_json_limited(
             &self.client,
             &self.endpoint(),
             &self.api_key,
             &payload,
             "OpenAI-compatible",
+            self.max_response_bytes,
         )
         .await?;
         parse_chat_completions(&raw)

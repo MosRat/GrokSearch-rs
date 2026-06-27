@@ -85,6 +85,8 @@ impl From<InitTargetArg> for InitTarget {
 struct OutputArgs {
     #[arg(long)]
     compact: bool,
+    #[arg(long)]
+    verbose: bool,
 }
 
 #[derive(Debug, Args)]
@@ -231,20 +233,23 @@ pub async fn run() -> anyhow::Result<()> {
         None | Some(Command::Mcp) => run_mcp().await,
         Some(Command::Init(command)) => run_init(command),
         Some(Command::Login) => {
-            let cfg = Config::load();
+            let cfg = Config::try_load()?;
             run_login(&cfg).await
         }
         Some(Command::Status) => {
-            let cfg = Config::load();
+            let cfg = Config::try_load()?;
             run_status(&cfg)
         }
         Some(Command::Logout) => {
-            let cfg = Config::load();
+            let cfg = Config::try_load()?;
             run_logout(&cfg)
         }
         Some(Command::Doctor(output)) => {
             let service = build_service().await?;
-            print_json(service.doctor().await, output.compact)
+            print_json(
+                service.doctor_with_options(output.verbose).await,
+                output.compact,
+            )
         }
         Some(Command::WebSearch(command)) => {
             invoke_and_print(
@@ -303,7 +308,7 @@ pub async fn run() -> anyhow::Result<()> {
 }
 
 async fn run_mcp() -> anyhow::Result<()> {
-    let cfg = Config::load();
+    let cfg = Config::try_load()?;
     if cfg.grok_auth_mode == AuthMode::ApiKey
         && cfg.grok_api_key.is_none()
         && std::io::stdin().is_terminal()
@@ -401,7 +406,7 @@ async fn invoke_and_print<T: serde::Serialize>(
 }
 
 async fn build_service() -> anyhow::Result<grok_search_service::SearchService> {
-    let cfg = Config::load();
+    let cfg = Config::try_load()?;
     let (http, proxy_diagnostics) = grok_search_net::proxy::bootstrap(&cfg).await;
     Ok(grok_search_runtime::new_with_http(
         cfg,

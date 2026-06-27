@@ -71,6 +71,7 @@ mod transport_dispatch_tests {
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            logger: DebugLogger::disabled(),
         };
 
         let report = svc.doctor().await;
@@ -100,6 +101,7 @@ mod transport_dispatch_tests {
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            logger: DebugLogger::disabled(),
         };
 
         let report = svc.doctor().await;
@@ -125,6 +127,7 @@ mod transport_dispatch_tests {
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            logger: DebugLogger::disabled(),
         };
         let report = svc.doctor().await;
         assert_eq!(report["github_token"], "set");
@@ -147,6 +150,7 @@ mod transport_dispatch_tests {
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            logger: DebugLogger::disabled(),
         };
         let report_unset = svc_unset.doctor().await;
         assert_eq!(report_unset["github_token"], "unset");
@@ -178,6 +182,7 @@ mod transport_dispatch_tests {
                 checked_urls: vec!["https://api.x.ai/v1".to_string()],
             },
             academic: None,
+            logger: DebugLogger::disabled(),
         };
 
         let report = svc.doctor().await;
@@ -350,6 +355,7 @@ mod enrich_tests {
             source_router: Arc::new(router),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            logger: DebugLogger::disabled(),
         }
     }
 

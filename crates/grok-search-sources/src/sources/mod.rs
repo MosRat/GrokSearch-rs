@@ -70,17 +70,17 @@ async fn get_bytes(
         if err.is_timeout() {
             GrokSearchError::Timeout(format!("{label} GET timed out: {err}"))
         } else {
-            GrokSearchError::Provider(format!("{label} GET failed: {err}"))
+            GrokSearchError::Upstream(format!("{label} GET failed: {err}"))
         }
     })?;
     let status = response.status();
     let bytes = response
         .bytes()
         .await
-        .map_err(|err| GrokSearchError::Provider(format!("{label} body read failed: {err}")))?;
+        .map_err(|err| GrokSearchError::Upstream(format!("{label} body read failed: {err}")))?;
     if !status.is_success() {
         let text = String::from_utf8_lossy(&bytes);
-        return Err(GrokSearchError::Provider(format!(
+        return Err(GrokSearchError::Upstream(format!(
             "{label} returned HTTP {status}: {text}"
         )));
     }

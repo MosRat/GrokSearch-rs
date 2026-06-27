@@ -2,11 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use grok_search_config::Config;
-use grok_search_content::{download_pdf_bytes_with_options, PdfDownloadOptions};
+use grok_search_content::{download_pdf_bytes_with_options_limited, PdfDownloadOptions};
 use grok_search_net::http::{
     build_client_direct_with_options, build_client_with_proxy_options, ClientOptions,
 };
 use grok_search_net::proxy::{discover_all_candidates, ProxyCandidate};
+use grok_search_net::url_policy::{url_is_private_or_local, validate_http_url};
 use grok_search_provider_core::FullTextLocation;
 use grok_search_types::{AcademicPaper, GrokSearchError, Result};
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, USER_AGENT};
@@ -148,12 +149,37 @@ impl InstitutionalAccessManager {
                 location.source
             )));
         };
+        let parsed = validate_http_url(&location.url)?;
+        let private_or_local = url_is_private_or_local(&parsed);
+        if !private_or_local && parsed.scheme() != "https" {
+            return Err(GrokSearchError::InvalidParams(
+                "institutional IEEE/ACM public PDF URLs must use https".to_string(),
+            ));
+        }
+        let client = if private_or_local {
+            build_client_direct_with_options(
+                self.config.timeout,
+                ClientOptions {
+                    cookies: true,
+                    accept_invalid_certs: true,
+                },
+            )
+        } else {
+            session.client.clone()
+        };
         let options = PdfDownloadOptions {
             label: location.source.as_str(),
             warmup_url: warmup_url.as_deref(),
             headers: &browser_pdf_headers(),
         };
-        download_pdf_bytes_with_options(&session.client, &location.url, max_bytes, options).await
+        download_pdf_bytes_with_options_limited(
+            &client,
+            &location.url,
+            max_bytes,
+            options,
+            self.config.max_response_bytes,
+        )
+        .await
     }
 
     pub(crate) async fn diagnostics(&self, live: bool) -> serde_json::Value {
@@ -338,9 +364,15 @@ async fn probe_ieee(client: &reqwest::Client) -> Result<()> {
         warmup_url: Some(&ieee_detail_url(IEEE_PROBE_ARNUMBER)),
         headers: &browser_pdf_headers(),
     };
-    download_pdf_bytes_with_options(client, &location.url, 5 * 1024 * 1024, options)
-        .await
-        .map(|_| ())
+    download_pdf_bytes_with_options_limited(
+        client,
+        &location.url,
+        5 * 1024 * 1024,
+        options,
+        5 * 1024 * 1024,
+    )
+    .await
+    .map(|_| ())
 }
 
 async fn probe_acm(client: &reqwest::Client) -> Result<()> {
@@ -350,9 +382,15 @@ async fn probe_acm(client: &reqwest::Client) -> Result<()> {
         warmup_url: Some(&acm_detail_url(ACM_PROBE_DOI)),
         headers: &browser_pdf_headers(),
     };
-    download_pdf_bytes_with_options(client, &url, 10 * 1024 * 1024, options)
-        .await
-        .map(|_| ())
+    download_pdf_bytes_with_options_limited(
+        client,
+        &url,
+        10 * 1024 * 1024,
+        options,
+        10 * 1024 * 1024,
+    )
+    .await
+    .map(|_| ())
 }
 
 pub(crate) fn extract_ieee_arnumber(value: &str) -> Option<String> {
@@ -575,5 +613,61 @@ mod tests {
     fn ieee_arnumber_does_not_guess_from_plain_doi_digits() {
         assert!(extract_ieee_arnumber("10.1145/3544548.3581390").is_none());
         assert!(extract_ieee_arnumber("10.1109/5.771073").is_none());
+    }
+
+    #[tokio::test]
+    async fn institutional_private_http_pdf_is_allowed() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let url = format!("http://{}/paper.pdf", listener.local_addr().unwrap());
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let body = b"%PDF-1.7\n";
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .expect("headers");
+            stream.write_all(body).expect("body");
+        });
+
+        let state = InstitutionalState {
+            enabled: true,
+            ieee: Some(InstitutionalSession {
+                client: reqwest::Client::builder()
+                    .no_proxy()
+                    .build()
+                    .expect("client"),
+                route: RouteInfo {
+                    kind: "direct".into(),
+                    source: "direct".into(),
+                    proxy_url_redacted: None,
+                },
+            }),
+            acm: None,
+            detail: "ok".into(),
+        };
+        let manager = InstitutionalAccessManager {
+            config: Config::from_env_map(Vec::<(String, String)>::new()),
+            state: Arc::new(OnceCell::const_new_with(state)),
+        };
+        let bytes = manager
+            .download_pdf(
+                &FullTextLocation {
+                    url,
+                    source: "ieee_institutional".into(),
+                    status: "institutional_pdf".into(),
+                },
+                1024,
+            )
+            .await
+            .expect("private HTTP institutional PDF");
+        assert!(bytes.starts_with(b"%PDF"));
     }
 }

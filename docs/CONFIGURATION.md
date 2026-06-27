@@ -16,7 +16,9 @@ Run `grok-search-rs init` to create the shared config if it is missing and keep 
 The same global config is used by both MCP mode and direct CLI tool calls such
 as `grok-search-rs doctor`, `grok-search-rs web-search "query"`, and
 `grok-search-rs academic search "query"`. Direct CLI tool calls print pretty
-JSON by default; pass `--compact` for single-line JSON.
+JSON by default; pass `--compact` for single-line JSON. Use
+`grok-search-rs doctor --verbose` for detailed limits, logging status,
+provider wiring, and URL policy diagnostics.
 
 ## Grok Responses
 
@@ -91,6 +93,8 @@ command = "grok-search-rs"
 | `GROK_SEARCH_TIMEOUT_SECONDS` | `60` | HTTP timeout for Grok, Tavily, and Firecrawl requests. |
 | `GROK_SEARCH_PROXY` | `auto` | Proxy mode. `auto` discovers environment/system proxies and uses one only after API reachability checks; `off` forces direct; a URL such as `http://127.0.0.1:7890` or `socks5://127.0.0.1:1080` forces that candidate. |
 | `GROK_SEARCH_FETCH_MAX_CHARS` | unset | Default character cap on `web_fetch` content. Overridden per call by `max_chars`. Unset means no truncation. |
+| `GROK_SEARCH_MAX_RESPONSE_BYTES` | `10485760` | Global upstream HTTP response body byte cap before JSON/PDF/text parsing. |
+| `GROK_SEARCH_DEBUG_LOG_PATH` | unset | Optional JSONL debug log path. Disabled when unset; payloads are redacted before writing. |
 
 ## Proxy
 
@@ -136,7 +140,7 @@ The `academic_*` MCP tools are independent of `web_*` and focus on computer-scie
 | `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | `false` | Explicit opt-in for Sci-Hub fallback in `academic_read`. It is never used by default. |
 | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` | unset | Sci-Hub base URL, only used when Sci-Hub fallback is enabled. User/password components are redacted in Debug and doctor output. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED` | `true` | Enables IEEE/ACM institutional PDF fallback for `academic_read`; automatically disables itself when no usable route is found. |
-| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS` | `true` | Allows invalid TLS certificates only for the IEEE/ACM institutional fallback clients. |
+| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS` | `false` | Allows invalid TLS certificates only for private/local IEEE/ACM institutional fallback routes. Public routes require HTTPS validation. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE` | `true` | Probes direct and discovered proxy routes for IEEE/ACM access before using the fallback. |
 | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF bytes downloaded for `academic_read`. |
 | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for parsed PDF output. Falls back to `GROK_SEARCH_FETCH_MAX_CHARS`, then `200000`. |
@@ -222,6 +226,8 @@ Unknown keys are rejected by the loader — typos surface as parse errors instea
 | `enrich_max_chars` | `GROK_SEARCH_ENRICH_MAX_CHARS` |
 | `max_inline_sources` | `GROK_SEARCH_MAX_INLINE_SOURCES` |
 | `response_max_chars` | `GROK_SEARCH_RESPONSE_MAX_CHARS` |
+| `max_response_bytes` | `GROK_SEARCH_MAX_RESPONSE_BYTES` |
+| `debug_log_path` | `GROK_SEARCH_DEBUG_LOG_PATH` |
 | `academic_enabled` | `GROK_SEARCH_ACADEMIC_ENABLED` |
 | `academic_email` | `GROK_SEARCH_ACADEMIC_EMAIL` |
 | `semantic_scholar_api_key` | `SEMANTIC_SCHOLAR_API_KEY` |
@@ -270,6 +276,8 @@ firecrawl_enabled     = true
 default_extra_sources = 3
 fallback_sources      = 5
 fetch_max_chars       = 200000
+max_response_bytes    = 10485760
+debug_log_path        = "logs/grok-search-rs-debug.jsonl"
 cache_size            = 256
 timeout_seconds       = 60
 proxy                 = "auto"

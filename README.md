@@ -17,7 +17,7 @@
 - 🔐 **Optional Grok OAuth mode** — `login/status/logout` commands store a local xAI OAuth token for Responses auth, so the MCP server can run without `GROK_SEARCH_API_KEY`.
 - 📥 **Tavily fetch / map** for full‑text extraction and link discovery, with **Firecrawl** as automatic fallback. `TAVILY_API_KEY` and `FIRECRAWL_API_KEY` accept comma‑separated key lists — keys rotate round‑robin with automatic failover on rate/quota errors.
 - 🐦 **Optional X/Twitter search** via `x_search` (Responses transport only).
-- 🩺 **`doctor`** — connectivity probe + redacted config in one tool call.
+- 🩺 **`doctor`** — connectivity probe + redacted config in one tool call; pass `--verbose` for limits, logging status, provider wiring, and URL policy diagnostics.
 - 🗂 **Single global config file** so multiple MCP clients share one set of keys.
 
 ---
@@ -158,8 +158,10 @@ Notes:
 | `GROK_SEARCH_TIMEOUT_SECONDS` | `60` | HTTP timeout for all upstreams. |
 | `GROK_SEARCH_PROXY` | `auto` | `auto` discovers env/system proxies and adopts one only after API reachability checks; `off` forces direct; a proxy URL forces that candidate. |
 | `GROK_SEARCH_FETCH_MAX_CHARS` | unset | Default char cap on `web_fetch`. |
-| `GROK_SEARCH_MAX_INLINE_SOURCES` | `5` | Max `web_search` sources carrying inline content; the rest are metadata‑only. |
-| `GROK_SEARCH_RESPONSE_MAX_CHARS` | `60000` | Whole‑response char budget for `web_search`; over‑budget output is truncated tail‑first with `truncated: true`. |
+| `GROK_SEARCH_MAX_INLINE_SOURCES` | `5` | Max `web_search` sources carrying inline content; the rest are metadata-only. |
+| `GROK_SEARCH_RESPONSE_MAX_CHARS` | `60000` | Whole-response char budget for `web_search`; over-budget output is truncated tail-first with `truncated: true`. |
+| `GROK_SEARCH_MAX_RESPONSE_BYTES` | `10485760` | Global upstream HTTP response body byte cap before parsing/trimming. |
+| `GROK_SEARCH_DEBUG_LOG_PATH` | unset | Optional JSONL debug log path. Disabled by default; payloads are redacted before writing. |
 
 ### Source extraction (`web_fetch` specialists / `web_search` enrichment)
 
@@ -185,7 +187,7 @@ for the generic fallback path.
 | `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | `false` | Explicit opt-in for Sci-Hub as the final `academic_read` fallback. Legal risk varies by jurisdiction and use. |
 | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` | unset | Sci-Hub base URL, only read when Sci-Hub fallback is enabled. Credentials are redacted in diagnostics. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED` | `true` | Enables IEEE/ACM institutional PDF fallback for `academic_read`; automatically disables itself when no usable route is found. |
-| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS` | `true` | Allows invalid TLS certificates only for the IEEE/ACM institutional fallback clients. |
+| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS` | `false` | Allows invalid TLS certificates only for private/local IEEE/ACM institutional fallback routes. Public routes require HTTPS validation. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE` | `true` | Probes direct and discovered proxy routes for IEEE/ACM access before using the fallback. |
 | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF download size for `academic_read`. |
 | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for `pdf_oxide` PDF text extraction. Falls back to `GROK_SEARCH_FETCH_MAX_CHARS`, then `200000`. |
@@ -219,7 +221,7 @@ Tired of duplicating `env` blocks across clients? Run `grok-search-rs --init` on
 | `get_sources` | Re‑fetch sources of a previous `web_search` by `session_id`. Supports `offset` / `limit` pagination for large source sets. |
 | `web_fetch` | Page content as clean Markdown. Specialist extractors for GitHub / StackExchange / arXiv / Wikipedia; generic Tavily → Firecrawl fallback otherwise. Returns `source_type` + `fallback_reason`. |
 | `web_map` | Discover URLs on a domain via Tavily Map. |
-| `doctor` | Live connectivity probe + redacted config. Run first when something looks off. |
+| `doctor` | Live connectivity probe + redacted config. Pass `verbose: true` for detailed diagnostics. |
 | `academic_search` | CS-focused literature search across dblp, Semantic Scholar, arXiv, OpenAlex, and Crossref with dedupe/RRF ranking. |
 | `academic_get` | Resolve one paper by DOI, arXiv ID/URL, Semantic Scholar ID, OpenAlex ID/URL, dblp URL/key, or title-like query. |
 | `academic_citations` | Citation/reference summary for one paper, using Semantic Scholar first and OpenAlex as fallback. |
@@ -236,7 +238,7 @@ agent configs. `grok-search-rs mcp` does the same explicitly.
 |---|---|
 | `grok-search-rs init [--target all|codex|claude-code|snippets] [--dry-run]` | Create shared config if missing and maintain thin agent MCP entries. |
 | `grok-search-rs login\|status\|logout` | Manage local xAI OAuth tokens. |
-| `grok-search-rs doctor [--compact]` | Print diagnostic JSON. |
+| `grok-search-rs doctor [--compact] [--verbose]` | Print diagnostic JSON. |
 | `grok-search-rs web-search <query> ...` | Run `web_search` once and print JSON. |
 | `grok-search-rs get-sources <session_id> ...` | Page cached sources from a prior CLI/MCP `web_search`. |
 | `grok-search-rs web-fetch <url> ...` | Fetch one page as structured content. |

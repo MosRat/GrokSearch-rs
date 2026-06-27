@@ -451,15 +451,36 @@ async fn web_fetch_rejects_invalid_urls_before_providers() {
     let provider = Arc::new(CountingSourceProvider::default());
     let service = SearchService::fake_custom(None, provider.clone(), None, [] as [(&str, &str); 0]);
 
-    for url in ["not-a-url", "ftp://example.com/a", "https://"] {
+    for url in [
+        "not-a-url",
+        "ftp://example.com/a",
+        "https://",
+        "http://127.0.0.1/page",
+        "http://localhost/page",
+        "http://10.0.0.1/page",
+        "http://172.16.0.1/page",
+        "http://192.168.0.1/page",
+        "http://169.254.1.1/page",
+        "http://[::1]/page",
+        "http://[fc00::1]/page",
+    ] {
         let err = service
             .web_fetch(url, None)
             .await
             .expect_err("invalid URL should fail before provider");
-        assert!(
-            matches!(err, GrokSearchError::InvalidParams(_)),
-            "got: {err:?}"
-        );
+        if matches!(url::Url::parse(url), Ok(parsed) if matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some())
+        {
+            assert!(
+                matches!(err, GrokSearchError::SecurityPolicy(_)),
+                "got: {err:?}"
+            );
+            assert_eq!(err.kind(), "security_policy");
+        } else {
+            assert!(
+                matches!(err, GrokSearchError::InvalidParams(_)),
+                "got: {err:?}"
+            );
+        }
     }
     assert_eq!(*provider.fetch_calls.lock().unwrap(), 0);
 }
@@ -469,14 +490,28 @@ async fn web_map_rejects_invalid_urls_before_providers() {
     let provider = Arc::new(CountingSourceProvider::default());
     let service = SearchService::fake_custom(None, provider.clone(), None, [] as [(&str, &str); 0]);
 
-    let err = service
-        .web_map("not-a-url", 1)
-        .await
-        .expect_err("invalid URL should fail before provider");
-    assert!(
-        matches!(err, GrokSearchError::InvalidParams(_)),
-        "got: {err:?}"
-    );
+    for url in [
+        "not-a-url",
+        "http://127.0.0.1/docs",
+        "http://localhost/docs",
+    ] {
+        let err = service
+            .web_map(url, 1)
+            .await
+            .expect_err("invalid URL should fail before provider");
+        if url.starts_with("http") {
+            assert!(
+                matches!(err, GrokSearchError::SecurityPolicy(_)),
+                "got: {err:?}"
+            );
+            assert_eq!(err.kind(), "security_policy");
+        } else {
+            assert!(
+                matches!(err, GrokSearchError::InvalidParams(_)),
+                "got: {err:?}"
+            );
+        }
+    }
     assert_eq!(*provider.map_calls.lock().unwrap(), 0);
 }
 

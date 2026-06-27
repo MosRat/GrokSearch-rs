@@ -68,13 +68,16 @@ fn ai_provider(config: &Config, http: &reqwest::Client) -> Result<Arc<dyn AiProv
                         Arc::new(OAuthCredential::new(http.clone(), auth_path))
                     }
                 };
-            Ok(Arc::new(GrokResponsesProvider::with_credential_client(
-                http.clone(),
-                config.grok_api_url.clone(),
-                credential,
-                config.web_search_enabled,
-                config.x_search_enabled,
-            )))
+            Ok(Arc::new(
+                GrokResponsesProvider::with_credential_client_and_limit(
+                    http.clone(),
+                    config.grok_api_url.clone(),
+                    credential,
+                    config.web_search_enabled,
+                    config.x_search_enabled,
+                    config.max_response_bytes,
+                ),
+            ))
         }
         Transport::ChatCompletions => {
             let url = config
@@ -94,12 +97,13 @@ fn ai_provider(config: &Config, http: &reqwest::Client) -> Result<Arc<dyn AiProv
                     "grok-search-rs: x_search_enabled is ignored when using OPENAI_COMPATIBLE_* transport"
                 );
             }
-            Ok(Arc::new(OpenAICompatProvider::with_client(
+            Ok(Arc::new(OpenAICompatProvider::with_client_and_limit(
                 http.clone(),
                 url,
                 key,
                 model,
                 config.web_search_enabled,
+                config.max_response_bytes,
             )))
         }
     }
@@ -110,10 +114,11 @@ fn source_provider(config: &Config, http: &reqwest::Client) -> Option<Arc<dyn So
         return None;
     }
     config.tavily_api_key.clone().map(|key| {
-        Arc::new(TavilyProvider::with_client(
+        Arc::new(TavilyProvider::with_client_and_limit(
             http.clone(),
             config.tavily_api_url.clone(),
             key,
+            config.max_response_bytes,
         )) as Arc<dyn SourceProvider>
     })
 }
@@ -126,10 +131,11 @@ fn fallback_source_provider(
         return None;
     }
     config.firecrawl_api_key.clone().map(|key| {
-        Arc::new(FirecrawlProvider::with_client(
+        Arc::new(FirecrawlProvider::with_client_and_limit(
             http.clone(),
             config.firecrawl_api_url.clone(),
             key,
+            config.max_response_bytes,
         )) as Arc<dyn SourceProvider>
     })
 }

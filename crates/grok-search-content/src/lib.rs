@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use grok_search_net::http::get_bytes;
+use grok_search_net::http::{get_bytes_limited, DEFAULT_MAX_RESPONSE_BYTES};
 use grok_search_types::{GrokSearchError, Result};
 use reqwest::header::{HeaderName, ACCEPT, ACCEPT_ENCODING, CONTENT_TYPE, USER_AGENT};
 
@@ -17,13 +17,23 @@ pub async fn download_pdf_bytes(
     url: &str,
     max_bytes: usize,
 ) -> Result<Vec<u8>> {
-    let first = download_pdf_bytes_with_accept(client, url, "application/pdf").await;
+    download_pdf_bytes_limited(client, url, max_bytes, DEFAULT_MAX_RESPONSE_BYTES).await
+}
+
+pub async fn download_pdf_bytes_limited(
+    client: &reqwest::Client,
+    url: &str,
+    max_bytes: usize,
+    max_response_bytes: usize,
+) -> Result<Vec<u8>> {
+    let read_limit = max_response_bytes.min(max_bytes);
+    let first = download_pdf_bytes_with_accept(client, url, "application/pdf", read_limit).await;
     let bytes = match first {
         Ok(bytes) => bytes,
-        Err(first_err) => match download_pdf_bytes_with_accept(client, url, "*/*").await {
+        Err(first_err) => match download_pdf_bytes_with_accept(client, url, "*/*", read_limit).await {
             Ok(bytes) => bytes,
             Err(second_err) => {
-                return Err(GrokSearchError::Provider(format!(
+                return Err(GrokSearchError::Upstream(format!(
                     "academic pdf download failed for {url}: first attempt: {first_err}; retry with broad Accept: {second_err}"
                 )))
             }
@@ -47,6 +57,23 @@ pub async fn download_pdf_bytes_with_options(
     max_bytes: usize,
     options: PdfDownloadOptions<'_>,
 ) -> Result<Vec<u8>> {
+    download_pdf_bytes_with_options_limited(
+        client,
+        url,
+        max_bytes,
+        options,
+        DEFAULT_MAX_RESPONSE_BYTES,
+    )
+    .await
+}
+
+pub async fn download_pdf_bytes_with_options_limited(
+    client: &reqwest::Client,
+    url: &str,
+    max_bytes: usize,
+    options: PdfDownloadOptions<'_>,
+    max_response_bytes: usize,
+) -> Result<Vec<u8>> {
     if let Some(warmup_url) = options.warmup_url {
         let mut builder = client.get(warmup_url);
         for (name, value) in options.headers {
@@ -56,7 +83,7 @@ pub async fn download_pdf_bytes_with_options(
             if err.is_timeout() {
                 GrokSearchError::Timeout(format!("{} warmup timed out: {err}", options.label))
             } else {
-                GrokSearchError::Provider(format!("{} warmup failed: {err}", options.label))
+                GrokSearchError::Upstream(format!("{} warmup failed: {err}", options.label))
             }
         })?;
     }
@@ -68,15 +95,10 @@ pub async fn download_pdf_bytes_with_options(
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|err| {
-            GrokSearchError::Provider(format!("{} body read failed: {err}", options.label))
-        })?
-        .to_vec();
+    let bytes =
+        read_response_bytes(response, options.label, max_response_bytes.min(max_bytes)).await?;
     if !status.is_success() {
-        return Err(GrokSearchError::Provider(format!(
+        return Err(GrokSearchError::Upstream(format!(
             "{} returned HTTP {status}: {}",
             options.label,
             String::from_utf8_lossy(&bytes)
@@ -106,8 +128,9 @@ async fn download_pdf_bytes_with_accept(
     client: &reqwest::Client,
     url: &str,
     accept: &str,
+    max_response_bytes: usize,
 ) -> Result<Vec<u8>> {
-    get_bytes(
+    get_bytes_limited(
         client,
         url,
         &[
@@ -116,6 +139,7 @@ async fn download_pdf_bytes_with_accept(
             (ACCEPT_ENCODING, "identity"),
         ],
         "academic pdf",
+        max_response_bytes,
     )
     .await
 }
@@ -134,9 +158,30 @@ async fn request_with_headers(
         if err.is_timeout() {
             GrokSearchError::Timeout(format!("{label} GET timed out: {err}"))
         } else {
-            GrokSearchError::Provider(format!("{label} GET failed: {err}"))
+            GrokSearchError::Upstream(format!("{label} GET failed: {err}"))
         }
     })
+}
+
+async fn read_response_bytes(
+    mut response: reqwest::Response,
+    label: &str,
+    max_response_bytes: usize,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|err| GrokSearchError::Upstream(format!("{label} body read failed: {err}")))?
+    {
+        if out.len().saturating_add(chunk.len()) > max_response_bytes {
+            return Err(GrokSearchError::Upstream(format!(
+                "{label} response exceeded max_response_bytes={max_response_bytes}"
+            )));
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
 }
 
 pub fn validate_pdf_bytes(bytes: &[u8], max_bytes: usize) -> Result<()> {
@@ -161,9 +206,9 @@ pub fn parse_pdf_bytes(
     max_chars: Option<usize>,
 ) -> Result<ParsedContent> {
     let mut file = tempfile::NamedTempFile::new()
-        .map_err(|err| GrokSearchError::Provider(format!("create temp PDF: {err}")))?;
+        .map_err(|err| GrokSearchError::Io(format!("create temp PDF: {err}")))?;
     file.write_all(bytes)
-        .map_err(|err| GrokSearchError::Provider(format!("write temp PDF: {err}")))?;
+        .map_err(|err| GrokSearchError::Io(format!("write temp PDF: {err}")))?;
     let path = file.path().to_path_buf();
     let content = parse_with_pdf_oxide(&path, format)?;
     Ok(truncate_content(content, max_chars))

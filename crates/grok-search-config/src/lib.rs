@@ -49,6 +49,8 @@ pub struct Config {
     pub enrich_max_chars: usize,
     pub max_inline_sources: usize,
     pub response_max_chars: usize,
+    pub max_response_bytes: usize,
+    pub debug_log_path: Option<PathBuf>,
     pub academic_enabled: bool,
     pub academic_email: Option<String>,
     pub semantic_scholar_api_key: Option<String>,
@@ -109,6 +111,8 @@ impl std::fmt::Debug for Config {
             .field("enrich_max_chars", &self.enrich_max_chars)
             .field("max_inline_sources", &self.max_inline_sources)
             .field("response_max_chars", &self.response_max_chars)
+            .field("max_response_bytes", &self.max_response_bytes)
+            .field("debug_log_path", &self.debug_log_path)
             .field("academic_enabled", &self.academic_enabled)
             .field("academic_email", &self.academic_email_status())
             .field(
@@ -173,6 +177,8 @@ struct ConfigFile {
     enrich_max_chars: Option<usize>,
     max_inline_sources: Option<usize>,
     response_max_chars: Option<usize>,
+    max_response_bytes: Option<usize>,
+    debug_log_path: Option<String>,
     academic_enabled: Option<bool>,
     academic_email: Option<String>,
     semantic_scholar_api_key: Option<String>,
@@ -268,6 +274,11 @@ impl ConfigFile {
             self.response_max_chars.map(|n| n.to_string()),
         );
         insert(
+            "GROK_SEARCH_MAX_RESPONSE_BYTES",
+            self.max_response_bytes.map(|n| n.to_string()),
+        );
+        insert("GROK_SEARCH_DEBUG_LOG_PATH", self.debug_log_path);
+        insert(
             "GROK_SEARCH_ACADEMIC_ENABLED",
             self.academic_enabled.map(|b| b.to_string()),
         );
@@ -317,9 +328,29 @@ impl Config {
         Self::load_from(std::env::vars())
     }
 
+    pub fn try_load() -> std::result::Result<Self, ConfigLoadError> {
+        Self::try_load_from(std::env::vars())
+    }
+
     /// Same as `load`, but uses a caller-supplied env map. Lets tests exercise
     /// the file + env merge without mutating process-global env state.
     pub fn load_from<I, K, V>(env_vars: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        let env_vec: Vec<(String, String)> = env_vars
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
+        Self::try_load_from(env_vec.clone()).unwrap_or_else(|err| {
+            eprintln!("grok-search-rs: {err}; falling back to env/defaults");
+            Self::from_env_map(env_vec)
+        })
+    }
+
+    pub fn try_load_from<I, K, V>(env_vars: I) -> std::result::Result<Self, ConfigLoadError>
     where
         I: IntoIterator<Item = (K, V)>,
         K: Into<String>,
@@ -330,11 +361,14 @@ impl Config {
             .map(|(k, v)| (k.into(), v.into()))
             .collect();
         let file_map = resolve_config_path(&env_map)
-            .and_then(|path| load_file_map(&path))
+            .map(|path| load_file_map(&path))
+            .transpose()?
+            .flatten()
             .unwrap_or_default();
         let mut config = Self::from_env_map(merge_env_over_file(file_map, env_map));
         config.apply_github_cli_token_fallback();
-        config
+        validate_debug_log_path(&config)?;
+        Ok(config)
     }
 
     pub fn from_env() -> Self {
@@ -407,6 +441,16 @@ impl Config {
             enrich_max_chars: usize_value(&map, "GROK_SEARCH_ENRICH_MAX_CHARS", 15000),
             max_inline_sources: usize_value(&map, "GROK_SEARCH_MAX_INLINE_SOURCES", 5),
             response_max_chars: usize_value(&map, "GROK_SEARCH_RESPONSE_MAX_CHARS", 60_000),
+            max_response_bytes: usize_value(
+                &map,
+                "GROK_SEARCH_MAX_RESPONSE_BYTES",
+                10 * 1024 * 1024,
+            ),
+            debug_log_path: map
+                .get("GROK_SEARCH_DEBUG_LOG_PATH")
+                .cloned()
+                .filter(|v| !v.trim().is_empty())
+                .map(PathBuf::from),
             academic_enabled: bool_value(&map, "GROK_SEARCH_ACADEMIC_ENABLED", true),
             academic_email: map
                 .get("GROK_SEARCH_ACADEMIC_EMAIL")
@@ -435,7 +479,7 @@ impl Config {
             academic_institutional_accept_invalid_certs: bool_value(
                 &map,
                 "GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS",
-                true,
+                false,
             ),
             academic_institutional_probe: bool_value(
                 &map,
@@ -501,7 +545,7 @@ impl Config {
 
     pub fn redacted_diagnostics(&self) -> String {
         format!(
-            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} proxy={} github_token={} academic_enabled={} academic_email={} semantic_scholar_api_key={} openalex_api_key={} academic_scihub_enabled={} academic_scihub_base_url={} academic_institutional_enabled={} academic_institutional_accept_invalid_certs={} academic_institutional_probe={}",
+            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} proxy={} github_token={} max_response_bytes={} debug_log_path={} academic_enabled={} academic_email={} semantic_scholar_api_key={} openalex_api_key={} academic_scihub_enabled={} academic_scihub_base_url={} academic_institutional_enabled={} academic_institutional_accept_invalid_certs={} academic_institutional_probe={}",
             self.grok_api_url,
             redact(self.grok_api_key.as_deref()),
             self.grok_auth_mode,
@@ -519,6 +563,11 @@ impl Config {
             self.timeout.as_secs(),
             redact_proxy_url_for_config(&self.proxy),
             self.github_token_status(),
+            self.max_response_bytes,
+            self.debug_log_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "unset".to_string()),
             self.academic_enabled,
             self.academic_email_status(),
             redact(self.semantic_scholar_api_key.as_deref()),
@@ -687,6 +736,7 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 # enrich_max_chars      = 15000      # per-source inline content char cap
 # max_inline_sources    = 5          # max sources carrying inline content per response
 # response_max_chars    = 60000      # whole-response char budget (answer + inline content)
+# debug_log_path        = "logs/grok-search-rs-debug.jsonl" # optional JSONL debug log
 
 # Academic search (CS-focused literature tools)
 # academic_enabled          = true
@@ -696,10 +746,11 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 # academic_scihub_enabled   = false             # explicit opt-in only; legal risk varies
 # academic_scihub_base_url  = "https://..."     # only read when academic_scihub_enabled=true
 # academic_institutional_enabled = true          # IEEE/ACM institutional PDF fallback
-# academic_institutional_accept_invalid_certs = true # applies only to IEEE/ACM fallback clients
+# academic_institutional_accept_invalid_certs = false # private IEEE/ACM routes may opt into invalid TLS certs
 # academic_institutional_probe = true            # detect direct/proxy institutional access
 # academic_max_pdf_bytes    = 52428800          # max PDF download size for academic_read
 # academic_pdf_max_chars    = 200000            # text cap for parsed PDFs
+# max_response_bytes        = 10485760          # max upstream response body bytes
 "#;
 
 fn redact_proxy_url_for_config(raw: &str) -> String {
@@ -732,19 +783,40 @@ fn redact_optional_url(raw: &Option<String>) -> Option<String> {
     Some(url.to_string())
 }
 
-fn load_file_map(path: &Path) -> Option<HashMap<String, String>> {
-    let body = std::fs::read_to_string(path).ok()?;
-    match toml::from_str::<ConfigFile>(&body) {
-        Ok(file) => Some(file.into_env_map()),
-        Err(err) => {
-            eprintln!(
-                "grok-search-rs: ignoring malformed config {}: {}",
-                path.display(),
-                err
-            );
-            None
-        }
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigLoadError {
+    #[error("read config {} failed: {source}", path.display())]
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("parse config {} failed: {source}", path.display())]
+    Parse {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
+    #[error("debug log path {} is not writable: {source}", path.display())]
+    DebugLogPath {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
+
+fn load_file_map(
+    path: &Path,
+) -> std::result::Result<Option<HashMap<String, String>>, ConfigLoadError> {
+    if !path.exists() {
+        return Ok(None);
     }
+    let body = std::fs::read_to_string(path).map_err(|source| ConfigLoadError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let file = toml::from_str::<ConfigFile>(&body).map_err(|source| ConfigLoadError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(Some(file.into_env_map()))
 }
 
 fn merge_env_over_file(
@@ -755,6 +827,30 @@ fn merge_env_over_file(
         base.insert(k, v);
     }
     base
+}
+
+fn validate_debug_log_path(config: &Config) -> std::result::Result<(), ConfigLoadError> {
+    let Some(path) = config.debug_log_path.as_ref() else {
+        return Ok(());
+    };
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|source| ConfigLoadError::DebugLogPath {
+            path: path.clone(),
+            source,
+        })?;
+    }
+    let _file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|source| ConfigLoadError::DebugLogPath {
+            path: path.clone(),
+            source,
+        })?;
+    Ok(())
 }
 
 fn get(map: &HashMap<String, String>, key: &str, default: &str) -> String {
@@ -997,7 +1093,7 @@ mod source_config_tests {
         assert!(cfg.academic_enabled);
         assert!(!cfg.academic_scihub_enabled);
         assert!(cfg.academic_institutional_enabled);
-        assert!(cfg.academic_institutional_accept_invalid_certs);
+        assert!(!cfg.academic_institutional_accept_invalid_certs);
         assert!(cfg.academic_institutional_probe);
         assert_eq!(cfg.academic_email_status(), "unset");
         assert_eq!(cfg.semantic_scholar_key_status(), "unset");

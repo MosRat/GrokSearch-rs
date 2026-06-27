@@ -26,6 +26,10 @@ PypiSerects
 /python/grok_search_rs/bin/grok-search-rs.exe
 /python/**/__pycache__/
 
+# Local release/npm scratch artifacts
+/dist/
+/package.json
+
 # Agent planning scratch files
 /docs/superpowers/
 /.planning/

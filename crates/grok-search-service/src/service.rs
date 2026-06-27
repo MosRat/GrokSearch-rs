@@ -1,12 +1,18 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
+use serde_json::json;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::cache::SourceCache;
+use crate::domain_filter::filter_sources_by_domains;
+use crate::logging::DebugLogger;
+use crate::response_budget::apply_response_budget;
 use grok_search_config::{AuthMode, Config};
 use grok_search_net::proxy::ProxyDiagnostics;
+use grok_search_net::url_policy::validate_public_http_url;
 pub use grok_search_provider_core::{AcademicServiceProvider, AiProvider, SourceProvider};
 use grok_search_source_core::{
     resolve_content, SourceCaps, SourceRouter, SourceType, NO_SPECIALIST_MATCH,
@@ -46,6 +52,7 @@ pub struct SearchService {
     source_router: Arc<SourceRouter>,
     proxy_diagnostics: ProxyDiagnostics,
     academic: Option<Arc<dyn AcademicServiceProvider>>,
+    logger: DebugLogger,
 }
 
 pub struct SearchServiceParts {
@@ -73,6 +80,7 @@ impl SearchService {
             source_router: Arc::new(parts.source_router),
             proxy_diagnostics: parts.proxy_diagnostics,
             academic: parts.academic,
+            logger: DebugLogger::new(config.debug_log_path.clone()),
         }
     }
 
@@ -92,6 +100,7 @@ impl SearchService {
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            logger: DebugLogger::new(config.debug_log_path.clone()),
         }
     }
 
@@ -136,6 +145,7 @@ impl SearchService {
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            logger: DebugLogger::new(config.debug_log_path.clone()),
         }
     }
 
@@ -169,10 +179,58 @@ impl SearchService {
             source_router: Arc::new(router),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            logger: DebugLogger::new(config.debug_log_path.clone()),
         }
     }
 
     pub async fn web_search(&self, input: WebSearchInput) -> Result<WebSearchOutput> {
+        let op_start = Instant::now();
+        let request_id = self.logger.request_id();
+        self.logger.event(
+            &request_id,
+            "debug",
+            "web_search.start",
+            Some("web_search"),
+            None,
+            json!({
+                "query_chars": input.query.chars().count(),
+                "extra_sources": input.extra_sources,
+                "recency_days": input.recency_days,
+                "include_domains": input.include_domains,
+                "exclude_domains": input.exclude_domains,
+                "include_content": input.include_content,
+                "response_format": input.response_format,
+            }),
+        );
+        let result = self.web_search_inner(input).await;
+        match &result {
+            Ok(output) => self.logger.event(
+                &request_id,
+                "debug",
+                "web_search.success",
+                Some("web_search"),
+                Some(op_start.elapsed()),
+                json!({
+                    "session_id": output.session_id,
+                    "sources_count": output.sources_count,
+                    "fallback_used": output.fallback_used,
+                    "fallback_reason": output.fallback_reason,
+                    "truncated": output.truncated,
+                }),
+            ),
+            Err(err) => self.logger.error(
+                &request_id,
+                "web_search.error",
+                Some("web_search"),
+                Some(op_start.elapsed()),
+                err,
+                json!({}),
+            ),
+        }
+        result
+    }
+
+    async fn web_search_inner(&self, input: WebSearchInput) -> Result<WebSearchOutput> {
         // D-02: single global deadline shared by Grok + supplemental fetch + enrichment.
         let deadline = tokio::time::Instant::now() + self.config.timeout;
         // response_format (Anthropic tool-design guidance: concise|detailed)
@@ -474,7 +532,49 @@ impl SearchService {
     }
 
     pub async fn web_fetch(&self, url: &str, max_chars: Option<usize>) -> Result<WebFetchOutput> {
-        validate_http_url(url)?;
+        let op_start = Instant::now();
+        let request_id = self.logger.request_id();
+        self.logger.event(
+            &request_id,
+            "debug",
+            "web_fetch.start",
+            Some("web_fetch"),
+            None,
+            json!({
+                "url": summarize_url(url),
+                "max_chars": max_chars,
+            }),
+        );
+        let result = self.web_fetch_inner(url, max_chars).await;
+        match &result {
+            Ok(output) => self.logger.event(
+                &request_id,
+                "debug",
+                "web_fetch.success",
+                Some("web_fetch"),
+                Some(op_start.elapsed()),
+                json!({
+                    "url": summarize_url(&output.url),
+                    "source_type": format!("{:?}", output.source_type),
+                    "original_length": output.original_length,
+                    "truncated": output.truncated,
+                    "fallback_reason": output.fallback_reason,
+                }),
+            ),
+            Err(err) => self.logger.error(
+                &request_id,
+                "web_fetch.error",
+                Some("web_fetch"),
+                Some(op_start.elapsed()),
+                err,
+                json!({ "url": summarize_url(url) }),
+            ),
+        }
+        result
+    }
+
+    async fn web_fetch_inner(&self, url: &str, max_chars: Option<usize>) -> Result<WebFetchOutput> {
+        validate_public_http_url(url)?;
         let effective_limit = max_chars.or(self.config.fetch_max_chars);
 
         let (content, source_type, fallback_reason) = match url::Url::parse(url) {
@@ -525,19 +625,61 @@ impl SearchService {
     }
 
     pub async fn web_map(&self, url: &str, max_results: usize) -> Result<Vec<Source>> {
-        validate_http_url(url)?;
-        self.sources
-            .as_ref()
-            .ok_or(GrokSearchError::MissingConfig("TAVILY_API_KEY"))?
-            .map(url, max_results)
-            .await
+        let op_start = Instant::now();
+        let request_id = self.logger.request_id();
+        self.logger.event(
+            &request_id,
+            "debug",
+            "web_map.start",
+            Some("web_map"),
+            None,
+            json!({
+                "url": summarize_url(url),
+                "max_results": max_results,
+            }),
+        );
+        let result = async {
+            validate_public_http_url(url)?;
+            self.sources
+                .as_ref()
+                .ok_or(GrokSearchError::MissingConfig("TAVILY_API_KEY"))?
+                .map(url, max_results)
+                .await
+        }
+        .await;
+        match &result {
+            Ok(sources) => self.logger.event(
+                &request_id,
+                "debug",
+                "web_map.success",
+                Some("web_map"),
+                Some(op_start.elapsed()),
+                json!({
+                    "url": summarize_url(url),
+                    "sources_count": sources.len(),
+                }),
+            ),
+            Err(err) => self.logger.error(
+                &request_id,
+                "web_map.error",
+                Some("web_map"),
+                Some(op_start.elapsed()),
+                err,
+                json!({ "url": summarize_url(url), "max_results": max_results }),
+            ),
+        }
+        result
     }
 
     pub async fn academic_search(
         &self,
         input: AcademicSearchInput,
     ) -> Result<AcademicSearchOutput> {
-        self.academic_service()?.search(input).await
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let result = self.academic_service()?.search(input).await;
+        self.log_result(&request_id, "academic_search", start, &result, json!({}));
+        result
     }
 
     pub async fn academic_get(
@@ -546,9 +688,20 @@ impl SearchService {
         include_citations: bool,
         include_open_access: bool,
     ) -> Result<AcademicGetOutput> {
-        self.academic_service()
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let result = self
+            .academic_service()
             .map(|service| service.get(identifier, include_citations, include_open_access))?
-            .await
+            .await;
+        self.log_result(
+            &request_id,
+            "academic_get",
+            start,
+            &result,
+            json!({ "identifier": identifier }),
+        );
+        result
     }
 
     pub async fn academic_citations(
@@ -556,9 +709,20 @@ impl SearchService {
         identifier: &str,
         limit: Option<usize>,
     ) -> Result<AcademicCitationsOutput> {
-        self.academic_service()?
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let result = self
+            .academic_service()?
             .citations(identifier, limit.unwrap_or(10))
-            .await
+            .await;
+        self.log_result(
+            &request_id,
+            "academic_citations",
+            start,
+            &result,
+            json!({ "identifier": identifier, "limit": limit }),
+        );
+        result
     }
 
     pub async fn academic_read(
@@ -568,9 +732,14 @@ impl SearchService {
         max_chars: Option<usize>,
         output_format: Option<String>,
     ) -> Result<AcademicReadOutput> {
-        self.academic_service()?
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let result = self
+            .academic_service()?
             .read(identifier, url, max_chars, output_format)
-            .await
+            .await;
+        self.log_result(&request_id, "academic_read", start, &result, json!({}));
+        result
     }
 
     pub fn warm_academic_institutional_access(&self) {
@@ -591,7 +760,21 @@ impl SearchService {
     /// Runtime diagnostics with live connectivity probes against each configured backend.
     /// Returns provider availability flags, masked config, and per-provider reachability.
     pub async fn doctor(&self) -> serde_json::Value {
+        self.doctor_with_options(false).await
+    }
+
+    pub async fn doctor_with_options(&self, verbose: bool) -> serde_json::Value {
         use grok_search_config::Transport;
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        self.logger.event(
+            &request_id,
+            "debug",
+            "doctor.start",
+            Some("doctor"),
+            None,
+            json!({ "verbose": verbose }),
+        );
         let grok_probe = self.probe_grok().await;
         let tavily_probe = match &self.sources {
             Some(provider) => probe_source(provider.as_ref(), "https://example.com").await,
@@ -627,7 +810,7 @@ impl SearchService {
             ),
         };
 
-        serde_json::json!({
+        let mut report = serde_json::json!({
             "provider": provider_label,
             "transport": provider_label,
             "grok": {
@@ -671,7 +854,82 @@ impl SearchService {
                 None => serde_json::json!({ "enabled": false }),
             },
             "redacted": self.config.redacted_diagnostics()
-        })
+        });
+
+        if verbose {
+            report["diagnostics"] = serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "debug_log": {
+                    "enabled": self.logger.enabled(),
+                    "path": self.logger.path().map(|path| path.display().to_string()),
+                    "session_id": self.logger.session_id(),
+                },
+                "limits": {
+                    "timeout_seconds": self.config.timeout.as_secs(),
+                    "max_response_bytes": self.config.max_response_bytes,
+                    "response_max_chars": self.config.response_max_chars,
+                    "fetch_max_chars": self.config.fetch_max_chars,
+                    "academic_max_pdf_bytes": self.config.academic_max_pdf_bytes,
+                    "academic_pdf_max_chars": self.config.academic_pdf_max_chars,
+                },
+                "url_policy": {
+                    "web_tools": "public http/https only; localhost, private, link-local, multicast, and unspecified addresses are rejected",
+                    "academic_institutional": "public targets require HTTPS and valid TLS; private/local IEEE/ACM targets may use HTTP or invalid TLS",
+                },
+                "providers": {
+                    "ai": {
+                        "configured": true,
+                        "transport": provider_label,
+                        "api_url": ai_api_url,
+                    },
+                    "tavily": {
+                        "configured": self.sources.is_some(),
+                        "enabled": self.config.tavily_enabled,
+                    },
+                    "firecrawl": {
+                        "configured": self.fallback_sources.is_some(),
+                        "enabled": self.config.firecrawl_enabled,
+                    },
+                },
+            });
+        }
+        self.logger.event(
+            &request_id,
+            "debug",
+            "doctor.success",
+            Some("doctor"),
+            Some(start.elapsed()),
+            json!({ "verbose": verbose }),
+        );
+        report
+    }
+
+    fn log_result<T>(
+        &self,
+        request_id: &str,
+        operation: &str,
+        start: Instant,
+        result: &Result<T>,
+        payload: serde_json::Value,
+    ) {
+        match result {
+            Ok(_) => self.logger.event(
+                request_id,
+                "debug",
+                &format!("{operation}.success"),
+                Some(operation),
+                Some(start.elapsed()),
+                payload,
+            ),
+            Err(err) => self.logger.error(
+                request_id,
+                &format!("{operation}.error"),
+                Some(operation),
+                Some(start.elapsed()),
+                err,
+                payload,
+            ),
+        }
     }
 
     async fn probe_grok(&self) -> Probe {
@@ -811,104 +1069,6 @@ fn grok_unverifiable_reason(response: &SearchResponse) -> Option<&'static str> {
     None
 }
 
-fn filter_sources_by_domains(sources: Vec<Source>, filters: &SearchFilters) -> Vec<Source> {
-    let include = DomainSet::new(&filters.include_domains);
-    let exclude = DomainSet::new(&filters.exclude_domains);
-    if include.is_empty() && exclude.is_empty() {
-        return sources;
-    }
-    sources
-        .into_iter()
-        .filter(|source| source_allowed_by_domains(&source.url, &include, &exclude))
-        .collect()
-}
-
-fn source_allowed_by_domains(url: &str, include: &DomainSet, exclude: &DomainSet) -> bool {
-    let Some(host) = host_for_match(url) else {
-        return include.is_empty();
-    };
-    (include.is_empty() || include.matches(&host)) && !exclude.matches(&host)
-}
-
-#[derive(Debug, Clone)]
-struct DomainSet {
-    domains: Vec<String>,
-}
-
-impl DomainSet {
-    fn new(raw: &[String]) -> Self {
-        let domains = raw
-            .iter()
-            .filter_map(|value| normalize_domain(value))
-            .collect();
-        Self { domains }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.domains.is_empty()
-    }
-
-    fn matches(&self, host: &str) -> bool {
-        self.domains
-            .iter()
-            .any(|domain| host == domain || host.ends_with(&format!(".{domain}")))
-    }
-}
-
-fn host_for_match(raw: &str) -> Option<String> {
-    url::Url::parse(raw)
-        .ok()
-        .and_then(|url| url.host_str().map(normalize_host))
-        .or_else(|| normalize_domain(raw))
-}
-
-fn normalize_domain(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if let Ok(url) = url::Url::parse(trimmed) {
-        return url.host_str().map(normalize_host);
-    }
-    let without_scheme = trimmed
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(trimmed);
-    let host = without_scheme
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .split('@')
-        .next_back()
-        .unwrap_or_default()
-        .split(':')
-        .next()
-        .unwrap_or_default();
-    let host = normalize_host(host);
-    (!host.is_empty()).then_some(host)
-}
-
-fn normalize_host(host: &str) -> String {
-    host.trim()
-        .trim_end_matches('.')
-        .trim_start_matches("www.")
-        .to_ascii_lowercase()
-}
-
-fn validate_http_url(raw: &str) -> Result<url::Url> {
-    let parsed = url::Url::parse(raw).map_err(|_| {
-        GrokSearchError::InvalidParams(
-            "url must be an absolute http or https URL with a host".to_string(),
-        )
-    })?;
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-        return Err(GrokSearchError::InvalidParams(
-            "url must be an absolute http or https URL with a host".to_string(),
-        ));
-    }
-    Ok(parsed)
-}
-
 fn apply_fetch_limit(
     url: &str,
     mut content: String,
@@ -959,6 +1119,20 @@ fn apply_fetch_limit(
             source_type,
             fallback_reason,
         },
+    }
+}
+
+fn summarize_url(raw: &str) -> serde_json::Value {
+    match url::Url::parse(raw) {
+        Ok(parsed) => serde_json::json!({
+            "scheme": parsed.scheme(),
+            "host": parsed.host_str(),
+            "path": parsed.path(),
+        }),
+        Err(_) => serde_json::json!({
+            "invalid": true,
+            "length": raw.len(),
+        }),
     }
 }
 
@@ -1083,104 +1257,6 @@ async fn enrich_sources(
         out[idx].content = content;
     }
     out
-}
-
-/// Approximate serialized footprint of one source: every metadata field plus
-/// inline content plus a fixed allowance for JSON keys/quotes/separators. The
-/// budget must track what actually lands in the agent's context �?a broad
-/// query where Grok cites 50+ pages overflows on metadata alone, so counting
-/// only inline content under-reports the payload.
-fn source_weight(source: &Source) -> usize {
-    const JSON_OVERHEAD: usize = 64;
-    let opt_chars = |v: &Option<String>| v.as_deref().map(|s| s.chars().count()).unwrap_or(0);
-    source.url.chars().count()
-        + source.provider.chars().count()
-        + opt_chars(&source.title)
-        + opt_chars(&source.description)
-        + opt_chars(&source.published_date)
-        + source
-            .content
-            .as_deref()
-            .map(|c| c.chars().count())
-            .unwrap_or(0)
-        + JSON_OVERHEAD
-}
-
-/// Trim the response from the TAIL until `answer_chars` plus the weighted
-/// source list fits the `budget`. Head sources (Grok's own citations rank
-/// first) survive intact. Two passes:
-///
-/// 1. Replace tail inline content with an actionable note naming `web_fetch`
-///    and `get_sources` �?the official MCP fetch server's "call again with
-///    start_index" guidance, applied to sources.
-/// 2. Still over budget (metadata overflow): drop whole tail sources from the
-///    returned list, always keeping at least one.
-///
-/// The synthesized answer is never trimmed. Returns whether anything was
-/// trimmed; callers always trim a clone so the session cache keeps everything.
-fn apply_response_budget(
-    answer_chars: usize,
-    sources: &mut Vec<Source>,
-    budget: usize,
-    session_id: &str,
-) -> bool {
-    let content_chars = |s: &Source| s.content.as_deref().map(|c| c.chars().count()).unwrap_or(0);
-    let mut total: usize = answer_chars + sources.iter().map(source_weight).sum::<usize>();
-    if total <= budget {
-        return false;
-    }
-
-    // Pass 1: swap tail inline content for recovery notes.
-    for idx in (0..sources.len()).rev() {
-        if total <= budget {
-            break;
-        }
-        let len = content_chars(&sources[idx]);
-        if len == 0 {
-            continue;
-        }
-        let url = sources[idx].url.clone();
-        let note = |verb: &str| {
-            format!(
-                "_[{verb}: response budget reached �?full text via web_fetch(\"{url}\") or get_sources(session_id=\"{session_id}\", offset={idx}, limit=1)]_"
-            )
-        };
-        let omit_note = note("inline content omitted");
-        let omit_len = omit_note.chars().count();
-        if len <= omit_len {
-            // Replacing would not shrink the payload; leave it alone.
-            continue;
-        }
-        let overshoot = total - budget;
-        let trim_note = note("truncated");
-        // "\n\n" separator + note must fit inside the chars we reclaim.
-        let trim_overhead = trim_note.chars().count() + 2;
-        if len > overshoot + trim_overhead {
-            // Partial trim: keep a prefix so the head of the document survives.
-            let keep = len - overshoot - trim_overhead;
-            let prefix: String = sources[idx]
-                .content
-                .as_deref()
-                .unwrap_or_default()
-                .chars()
-                .take(keep)
-                .collect();
-            sources[idx].content = Some(format!("{prefix}\n\n{trim_note}"));
-            total -= overshoot;
-        } else {
-            sources[idx].content = Some(omit_note);
-            total = total - len + omit_len;
-        }
-    }
-
-    // Pass 2: metadata alone still over budget �?cut whole tail sources.
-    // They stay in the cache; get_sources(offset=..) pages through them.
-    while total > budget && sources.len() > 1 {
-        let dropped = sources.pop().expect("len > 1");
-        total -= source_weight(&dropped);
-    }
-
-    true
 }
 
 fn with_provider(

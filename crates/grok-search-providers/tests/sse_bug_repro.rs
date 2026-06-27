@@ -357,8 +357,9 @@ data: {\"type\":\"response.failed\",\"error\":{\"message\":\"upstream failed\"}}
         "Grok Responses",
     )
     .await
-    .expect_err("terminal response.failed event should surface as provider error");
+    .expect_err("terminal response.failed event should surface as upstream error");
 
+    assert_eq!(err.kind(), "upstream");
     assert!(
         err.to_string().contains("response.failed") && err.to_string().contains("upstream failed"),
         "unexpected error: {err}"

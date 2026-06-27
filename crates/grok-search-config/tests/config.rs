@@ -22,6 +22,7 @@ fn config_reads_grok_search_responses_defaults() {
     assert_eq!(cfg.timeout.as_secs(), 60);
     assert_eq!(cfg.proxy, "auto");
     assert_eq!(cfg.grok_auth_mode, AuthMode::ApiKey);
+    assert_eq!(cfg.max_response_bytes, 10 * 1024 * 1024);
 }
 
 #[test]
@@ -284,6 +285,7 @@ fallback_sources      = 9
 fetch_max_chars       = 12345
 cache_size            = 128
 timeout_seconds       = 30
+max_response_bytes    = 2097152
 "#,
     )
     .unwrap();
@@ -316,6 +318,7 @@ timeout_seconds       = 30
     assert_eq!(cfg.fetch_max_chars, Some(12345));
     assert_eq!(cfg.cache_size, 128);
     assert_eq!(cfg.timeout.as_secs(), 30);
+    assert_eq!(cfg.max_response_bytes, 2 * 1024 * 1024);
 }
 
 #[test]
@@ -467,11 +470,64 @@ fn response_budget_defaults_and_env_overrides() {
     let defaults = Config::from_env_map([] as [(&str, &str); 0]);
     assert_eq!(defaults.max_inline_sources, 5);
     assert_eq!(defaults.response_max_chars, 60_000);
+    assert_eq!(defaults.max_response_bytes, 10 * 1024 * 1024);
+    assert_eq!(defaults.debug_log_path, None);
 
     let overridden = Config::from_env_map([
         ("GROK_SEARCH_MAX_INLINE_SOURCES", "2"),
         ("GROK_SEARCH_RESPONSE_MAX_CHARS", "30000"),
+        ("GROK_SEARCH_MAX_RESPONSE_BYTES", "123456"),
+        ("GROK_SEARCH_DEBUG_LOG_PATH", "logs/debug.jsonl"),
     ]);
     assert_eq!(overridden.max_inline_sources, 2);
     assert_eq!(overridden.response_max_chars, 30_000);
+    assert_eq!(overridden.max_response_bytes, 123456);
+    assert_eq!(
+        overridden.debug_log_path.as_deref(),
+        Some(std::path::Path::new("logs/debug.jsonl"))
+    );
+}
+
+#[test]
+fn debug_log_path_loads_from_toml_and_is_created() {
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let log_path = dir.path().join("nested").join("debug.jsonl");
+    fs::write(
+        &config_path,
+        format!("debug_log_path = {:?}\n", log_path.display().to_string()),
+    )
+    .unwrap();
+
+    let cfg = Config::try_load_from([(
+        "GROK_SEARCH_CONFIG",
+        config_path.to_string_lossy().to_string(),
+    )])
+    .expect("debug log path should be valid");
+
+    assert_eq!(cfg.debug_log_path.as_deref(), Some(log_path.as_path()));
+    assert!(log_path.exists());
+}
+
+#[test]
+fn malformed_explicit_config_file_returns_error_in_fallible_loader() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "not valid toml = [").unwrap();
+
+    let err = Config::try_load_from([("GROK_SEARCH_CONFIG", path.to_string_lossy().to_string())])
+        .expect_err("malformed explicit config must fail");
+    assert!(err.to_string().contains("parse config"), "{err}");
+}
+
+#[test]
+fn institutional_invalid_certs_default_false_and_explicit_true() {
+    let defaults = Config::from_env_map([] as [(&str, &str); 0]);
+    assert!(!defaults.academic_institutional_accept_invalid_certs);
+
+    let enabled = Config::from_env_map([(
+        "GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS",
+        "true",
+    )]);
+    assert!(enabled.academic_institutional_accept_invalid_certs);
 }

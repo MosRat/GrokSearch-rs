@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use grok_search_types::{GrokSearchError, Result};
 
+pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
 /// Build a tuned `reqwest::Client`. The same client is shared across providers
 /// so TLS sessions and keep-alive connections can be reused between providers
 /// that hit different hosts. Falls back to a bare `Client::new()` if the
@@ -34,12 +36,12 @@ pub fn build_client_direct_with_options(timeout: Duration, options: ClientOption
 
 pub fn build_client_with_proxy(timeout: Duration, proxy_url: &str) -> Result<Client> {
     let proxy = reqwest::Proxy::all(proxy_url)
-        .map_err(|err| GrokSearchError::Provider(format!("invalid proxy URL: {err}")))?;
+        .map_err(|err| GrokSearchError::Config(format!("invalid proxy URL: {err}")))?;
     base_builder(timeout)
         .no_proxy()
         .proxy(proxy)
         .build()
-        .map_err(|err| GrokSearchError::Provider(format!("build proxied HTTP client: {err}")))
+        .map_err(|err| GrokSearchError::Config(format!("build proxied HTTP client: {err}")))
 }
 
 pub fn build_client_with_proxy_options(
@@ -48,10 +50,10 @@ pub fn build_client_with_proxy_options(
     options: ClientOptions,
 ) -> Result<Client> {
     let proxy = reqwest::Proxy::all(proxy_url)
-        .map_err(|err| GrokSearchError::Provider(format!("invalid proxy URL: {err}")))?;
+        .map_err(|err| GrokSearchError::Config(format!("invalid proxy URL: {err}")))?;
     apply_options(base_builder(timeout).no_proxy().proxy(proxy), options)
         .build()
-        .map_err(|err| GrokSearchError::Provider(format!("build proxied HTTP client: {err}")))
+        .map_err(|err| GrokSearchError::Config(format!("build proxied HTTP client: {err}")))
 }
 
 fn base_builder(timeout: Duration) -> ClientBuilder {
@@ -102,7 +104,27 @@ pub async fn post_json(
     body: &Value,
     label: &str,
 ) -> Result<Value> {
-    post_json_with_status(client, endpoint, api_key, body, label)
+    post_json_with_status_limited(
+        client,
+        endpoint,
+        api_key,
+        body,
+        label,
+        DEFAULT_MAX_RESPONSE_BYTES,
+    )
+    .await
+    .map_err(|failure| failure.error)
+}
+
+pub async fn post_json_limited(
+    client: &Client,
+    endpoint: &str,
+    api_key: &str,
+    body: &Value,
+    label: &str,
+    max_response_bytes: usize,
+) -> Result<Value> {
+    post_json_with_status_limited(client, endpoint, api_key, body, label, max_response_bytes)
         .await
         .map_err(|failure| failure.error)
 }
@@ -113,6 +135,16 @@ pub async fn get_bytes(
     headers: &[(reqwest::header::HeaderName, &str)],
     label: &str,
 ) -> Result<Vec<u8>> {
+    get_bytes_limited(client, url, headers, label, DEFAULT_MAX_RESPONSE_BYTES).await
+}
+
+pub async fn get_bytes_limited(
+    client: &Client,
+    url: &str,
+    headers: &[(reqwest::header::HeaderName, &str)],
+    label: &str,
+    max_response_bytes: usize,
+) -> Result<Vec<u8>> {
     let mut builder = client.get(url);
     for (name, value) in headers {
         builder = builder.header(name.clone(), *value);
@@ -121,17 +153,14 @@ pub async fn get_bytes(
         if err.is_timeout() {
             GrokSearchError::Timeout(format!("{label} GET timed out: {err}"))
         } else {
-            GrokSearchError::Provider(format!("{label} GET failed: {err}"))
+            GrokSearchError::Upstream(format!("{label} GET failed: {err}"))
         }
     })?;
     let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|err| GrokSearchError::Provider(format!("{label} body read failed: {err}")))?;
+    let bytes = read_response_bytes_limited(response, label, max_response_bytes).await?;
     if !status.is_success() {
         let text = String::from_utf8_lossy(&bytes);
-        return Err(GrokSearchError::Provider(format!(
+        return Err(GrokSearchError::Upstream(format!(
             "{label} returned HTTP {status}: {text}"
         )));
     }
@@ -144,7 +173,19 @@ pub async fn get_json(
     headers: &[(reqwest::header::HeaderName, &str)],
     label: &str,
 ) -> Result<Value> {
-    let bytes = get_bytes(client, url, headers, label).await?;
+    let bytes = get_bytes_limited(client, url, headers, label, DEFAULT_MAX_RESPONSE_BYTES).await?;
+    serde_json::from_slice(&bytes)
+        .map_err(|err| GrokSearchError::Parse(format!("invalid {label} JSON: {err}")))
+}
+
+pub async fn get_json_limited(
+    client: &Client,
+    url: &str,
+    headers: &[(reqwest::header::HeaderName, &str)],
+    label: &str,
+    max_response_bytes: usize,
+) -> Result<Value> {
+    let bytes = get_bytes_limited(client, url, headers, label, max_response_bytes).await?;
     serde_json::from_slice(&bytes)
         .map_err(|err| GrokSearchError::Parse(format!("invalid {label} JSON: {err}")))
 }
@@ -155,7 +196,18 @@ pub async fn get_text(
     headers: &[(reqwest::header::HeaderName, &str)],
     label: &str,
 ) -> Result<String> {
-    let bytes = get_bytes(client, url, headers, label).await?;
+    let bytes = get_bytes_limited(client, url, headers, label, DEFAULT_MAX_RESPONSE_BYTES).await?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+pub async fn get_text_limited(
+    client: &Client,
+    url: &str,
+    headers: &[(reqwest::header::HeaderName, &str)],
+    label: &str,
+    max_response_bytes: usize,
+) -> Result<String> {
+    let bytes = get_bytes_limited(client, url, headers, label, max_response_bytes).await?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -168,6 +220,25 @@ pub async fn post_json_with_status(
     body: &Value,
     label: &str,
 ) -> std::result::Result<Value, HttpFailure> {
+    post_json_with_status_limited(
+        client,
+        endpoint,
+        api_key,
+        body,
+        label,
+        DEFAULT_MAX_RESPONSE_BYTES,
+    )
+    .await
+}
+
+pub async fn post_json_with_status_limited(
+    client: &Client,
+    endpoint: &str,
+    api_key: &str,
+    body: &Value,
+    label: &str,
+    max_response_bytes: usize,
+) -> std::result::Result<Value, HttpFailure> {
     let mut response = client
         .post(endpoint)
         .bearer_auth(api_key)
@@ -178,7 +249,7 @@ pub async fn post_json_with_status(
             HttpFailure::transport(if err.is_timeout() {
                 GrokSearchError::Timeout(format!("{label} request timed out: {err}"))
             } else {
-                GrokSearchError::Provider(format!("{label} request failed: {err}"))
+                GrokSearchError::Upstream(format!("{label} request failed: {err}"))
             })
         })?;
 
@@ -191,22 +262,20 @@ pub async fn post_json_with_status(
         .to_ascii_lowercase();
 
     if status.is_success() && content_type.starts_with("text/event-stream") {
-        return read_sse_json(&mut response, label)
+        return read_sse_json(&mut response, label, max_response_bytes)
             .await
             .map_err(HttpFailure::transport);
     }
 
-    let bytes = response.bytes().await.map_err(|err| {
-        HttpFailure::transport(GrokSearchError::Provider(format!(
-            "{label} body read failed: {err}"
-        )))
-    })?;
+    let bytes = read_response_bytes_limited(response, label, max_response_bytes)
+        .await
+        .map_err(HttpFailure::transport)?;
 
     if !status.is_success() {
         let text = String::from_utf8_lossy(&bytes);
         return Err(HttpFailure {
             status: Some(status.as_u16()),
-            error: GrokSearchError::Provider(format!("{label} returned HTTP {status}: {text}")),
+            error: GrokSearchError::Upstream(format!("{label} returned HTTP {status}: {text}")),
         });
     }
 
@@ -217,8 +286,13 @@ pub async fn post_json_with_status(
     })
 }
 
-async fn read_sse_json(response: &mut Response, label: &str) -> Result<Value> {
+async fn read_sse_json(
+    response: &mut Response,
+    label: &str,
+    max_response_bytes: usize,
+) -> Result<Value> {
     let mut buffer = Vec::new();
+    let mut seen_bytes = 0usize;
     let mut output_text = String::new();
     let mut chat_content = String::new();
     let mut last_json = None;
@@ -227,8 +301,12 @@ async fn read_sse_json(response: &mut Response, label: &str) -> Result<Value> {
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|err| GrokSearchError::Provider(format!("{label} stream read failed: {err}")))?
+        .map_err(|err| GrokSearchError::Upstream(format!("{label} stream read failed: {err}")))?
     {
+        seen_bytes = seen_bytes.saturating_add(chunk.len());
+        if seen_bytes > max_response_bytes {
+            return Err(response_too_large(label, max_response_bytes));
+        }
         buffer.extend_from_slice(&chunk);
 
         while let Some((event, rest)) = split_sse_event(&buffer) {
@@ -262,6 +340,37 @@ async fn read_sse_json(response: &mut Response, label: &str) -> Result<Value> {
     }
 
     finish_sse_json(label, last_json, chat_metadata, output_text, chat_content)
+}
+
+async fn read_response_bytes_limited(
+    mut response: Response,
+    label: &str,
+    max_response_bytes: usize,
+) -> Result<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|length| length as usize > max_response_bytes)
+    {
+        return Err(response_too_large(label, max_response_bytes));
+    }
+    let mut out = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|err| GrokSearchError::Upstream(format!("{label} body read failed: {err}")))?
+    {
+        if out.len().saturating_add(chunk.len()) > max_response_bytes {
+            return Err(response_too_large(label, max_response_bytes));
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
+fn response_too_large(label: &str, max_response_bytes: usize) -> GrokSearchError {
+    GrokSearchError::Upstream(format!(
+        "{label} response exceeded max_response_bytes={max_response_bytes}"
+    ))
 }
 
 struct SseEvent {
@@ -354,7 +463,7 @@ fn process_sse_event(
     accumulate_chat_metadata(chat_metadata, &value);
 
     if let Some(kind) = response_terminal_error_type(&value) {
-        return Err(GrokSearchError::Provider(format!(
+        return Err(GrokSearchError::Upstream(format!(
             "{label} stream ended with {kind}: {}",
             response_terminal_error_detail(&value)
         )));
@@ -571,4 +680,68 @@ fn finish_sse_json(
     last_json.ok_or_else(|| {
         GrokSearchError::Parse(format!("{label} SSE stream ended without JSON data"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    fn spawn_body_server(body: &'static [u8], content_type: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = Vec::new();
+            let mut buf = [0u8; 512];
+            loop {
+                let n = stream.read(&mut buf).expect("read request");
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .expect("headers");
+            stream.write_all(body).expect("body");
+            stream.flush().expect("flush");
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn get_bytes_limited_rejects_oversized_body() {
+        let url = spawn_body_server(b"0123456789", "text/plain");
+        let client = Client::builder().no_proxy().build().expect("client");
+        let err = get_bytes_limited(&client, &url, &[], "limited test", 4)
+            .await
+            .expect_err("oversized response should fail");
+        assert!(err.to_string().contains("max_response_bytes=4"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn post_json_limited_rejects_oversized_json_body() {
+        let url = spawn_body_server(br#"{"ok":true}"#, "application/json");
+        let client = Client::builder().no_proxy().build().expect("client");
+        let err = post_json_limited(
+            &client,
+            &url,
+            "key",
+            &serde_json::json!({}),
+            "limited post",
+            4,
+        )
+        .await
+        .expect_err("oversized JSON should fail");
+        assert!(err.to_string().contains("max_response_bytes=4"), "{err}");
+    }
 }
