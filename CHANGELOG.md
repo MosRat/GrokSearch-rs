@@ -4,6 +4,14 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.2.1 - 2026-06-28
+
+### Fixed
+
+- Publish PyPI Linux GNU/glibc wheel tags alongside musllinux tags while
+  reusing the existing static musl binaries, so `pip` and `uv` can install the
+  Linux wheels on mainstream GNU Linux distributions.
+
 ## 0.2.0 - 2026-06-27
 
 ### Changed
