@@ -1,0 +1,3 @@
+display_name: GrokSearch Social Search
+short_description: Use GrokSearch-rs WeChat public-account and Zhihu search tools.
+default_prompt: Use GrokSearch-rs social search tools to find Chinese WeChat or Zhihu content.

@@ -21,7 +21,9 @@ MCP client
           -> crates/grok-search-parse
               -> shared identifiers, title normalization, OpenAlex abstract, RRF/dedupe helpers
           -> crates/grok-search-content
-              -> shared PDF byte guards, pdf_oxide parsing, truncation helpers
+              -> generic content parsing, truncation, and artifact file helpers
+          -> crates/grok-search-pdf
+              -> PDF byte guards, downloads, pdf_oxide parsing, image/table artifacts
           -> crates/grok-search-providers
               -> Grok Responses provider: /v1/responses with web_search and optional x_search
               -> OpenAI-compatible chat-completions provider
@@ -39,11 +41,11 @@ MCP client
 - `web_map` discovers URLs through Tavily Map.
 - Tavily and Firecrawl are not the default answer generators inside `web_search`; they provide enrichment, fallback sources, fetch, and map capability.
 - Agents should use `web_search` for concise sourced summaries, call `get_sources` before source-specific claims, citation lists, or follow-up fetches, and call `web_fetch` for exact page evidence, quotes, technical details, or when the summary is insufficient.
-- Agents should use `academic_search` / `academic_get` / `academic_citations` / `academic_read` for computer-science paper discovery, metadata, citation summaries, and PDF text extraction rather than forcing scholarly tasks through generic web tools.
+- Agents should use `academic_search` / `academic_get` / `academic_citations` / `academic_read` / `academic_parse_pdf` for computer-science paper discovery, metadata, citation summaries, PDF text extraction, and artifact-focused PDF parsing rather than forcing scholarly tasks through generic web tools.
 
 ## Academic Layer
 
-`grok-search-academic` owns scholarly orchestration and the concrete academic providers. Shared scholarly mechanics that are useful outside the academic service live below it: identifiers, title normalization, OpenAlex abstract reconstruction, and RRF/dedupe are in `grok-search-parse`; PDF byte validation, `pdf_oxide` parsing, and truncation are in `grok-search-content`; the `AcademicProvider` trait and capability defaults are in `grok-search-provider-core`.
+`grok-search-academic` owns scholarly orchestration and the concrete academic providers. Shared scholarly mechanics that are useful outside the academic service live below it: identifiers, title normalization, OpenAlex abstract reconstruction, and RRF/dedupe are in `grok-search-parse`; generic content parsing, truncation, and artifact file helpers are in `grok-search-content`; PDF byte validation, downloads, `pdf_oxide` parsing, and image/table artifact extraction are in `grok-search-pdf`; the `AcademicProvider` trait and capability defaults are in `grok-search-provider-core`.
 
 Academic providers are capability-based: dblp and Crossref are metadata-first, Semantic Scholar and OpenAlex add citations/references, arXiv and open-access locations provide PDFs, Unpaywall resolves DOI-based OA full text, and Sci-Hub is disabled by default and only used as a final explicitly configured fallback. Results are normalized into `AcademicPaper` while provenance URLs remain regular `Source` values.
 

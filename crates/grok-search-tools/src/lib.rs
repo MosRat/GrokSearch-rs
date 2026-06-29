@@ -1,7 +1,7 @@
 use grok_search_service::SearchService;
-use grok_search_types::model::tool::WebSearchInput;
-use grok_search_types::AcademicSearchInput;
-use grok_search_types::{GrokSearchError, Result};
+use grok_search_types::model::tool::{WebSearchInput, WechatSearchInput, ZhihuSearchInput};
+use grok_search_types::{AcademicParseOptions, AcademicSearchInput};
+use grok_search_types::{GrokSearchError, RepoMetadataInput, RepoProvider, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -48,11 +48,7 @@ pub async fn invoke_tool(service: &SearchService, name: &str, args: Value) -> Re
         "web_search" => {
             let params: WebSearchParams = serde_json::from_value(args)
                 .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
-            if params.query.trim().is_empty() {
-                return Err(GrokSearchError::InvalidParams(
-                    "web_search.query is required".into(),
-                ));
-            }
+            validate_required_query("web_search", &params.query)?;
             let output = service.web_search(params.into()).await?;
             serialize_output(output, "serialize output")
         }
@@ -96,14 +92,38 @@ pub async fn invoke_tool(service: &SearchService, name: &str, args: Value) -> Re
                 "sources": mapped_sources
             }))
         }
+        "wechat_search" => {
+            let params: WechatSearchParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            validate_required_query("wechat_search", &params.query)?;
+            validate_range(params.max_results, 1, 50, "wechat_search.max_results")?;
+            validate_range(params.pages, 1, 10, "wechat_search.pages")?;
+            if params.max_content_chars.is_some_and(|value| value == 0) {
+                return Err(GrokSearchError::InvalidParams(
+                    "wechat_search.max_content_chars must be greater than 0".into(),
+                ));
+            }
+            let output = service.wechat_search(params.into()).await?;
+            serialize_output(output, "serialize wechat search")
+        }
+        "zhihu_search" => {
+            let params: ZhihuSearchParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            validate_required_query("zhihu_search", &params.query)?;
+            validate_range(params.count, 1, 10, "zhihu_search.count")?;
+            let output = service.zhihu_search(params.into()).await?;
+            serialize_output(output, "serialize zhihu search")
+        }
+        "repo_metadata" => {
+            let params: RepoMetadataParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            let output = service.repo_metadata(params.into()).await?;
+            serialize_output(output, "serialize repo metadata")
+        }
         "academic_search" => {
             let params: AcademicSearchParams = serde_json::from_value(args)
                 .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
-            if params.query.trim().is_empty() {
-                return Err(GrokSearchError::InvalidParams(
-                    "academic_search.query is required".into(),
-                ));
-            }
+            validate_required_query("academic_search", &params.query)?;
             let output = service.academic_search(params.into()).await?;
             serialize_output(output, "serialize academic search")
         }
@@ -120,6 +140,7 @@ pub async fn invoke_tool(service: &SearchService, name: &str, args: Value) -> Re
                     &params.identifier,
                     params.include_citations.unwrap_or(false),
                     params.include_open_access.unwrap_or(true),
+                    params.extract_material_links.unwrap_or(false),
                 )
                 .await?;
             serialize_output(output, "serialize academic get")
@@ -148,9 +169,56 @@ pub async fn invoke_tool(service: &SearchService, name: &str, args: Value) -> Re
                     params.url,
                     params.max_chars,
                     params.output_format,
+                    params.parse_options.map(Into::into),
                 )
                 .await?;
             serialize_output(output, "serialize academic read")
+        }
+        "academic_parse_pdf" => {
+            let params: AcademicParsePdfParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            if params.identifier.as_deref().unwrap_or("").trim().is_empty()
+                && params.url.as_deref().unwrap_or("").trim().is_empty()
+            {
+                return Err(GrokSearchError::InvalidParams(
+                    "academic_parse_pdf requires identifier or url".into(),
+                ));
+            }
+            let output = service
+                .academic_parse_pdf(
+                    params.identifier,
+                    params.url,
+                    params.max_chars,
+                    params.output_format,
+                    params.parse_options.map(Into::into),
+                )
+                .await?;
+            serialize_output(output, "serialize academic parse pdf")
+        }
+        "academic_download_pdf" => {
+            let params: AcademicDownloadPdfParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            if params.identifier.as_deref().unwrap_or("").trim().is_empty()
+                && params.url.as_deref().unwrap_or("").trim().is_empty()
+            {
+                return Err(GrokSearchError::InvalidParams(
+                    "academic_download_pdf requires identifier or url".into(),
+                ));
+            }
+            if params.output_path.trim().is_empty() {
+                return Err(GrokSearchError::InvalidParams(
+                    "academic_download_pdf.output_path is required".into(),
+                ));
+            }
+            let output = service
+                .academic_download_pdf(
+                    params.identifier,
+                    params.url,
+                    params.output_path,
+                    params.overwrite.unwrap_or(false),
+                )
+                .await?;
+            serialize_output(output, "serialize academic download pdf")
         }
         _ => Err(GrokSearchError::NotFound(format!("unknown tool: {name}"))),
     }
@@ -158,6 +226,26 @@ pub async fn invoke_tool(service: &SearchService, name: &str, args: Value) -> Re
 
 pub fn serialize_output<T: serde::Serialize>(output: T, context: &str) -> Result<Value> {
     serde_json::to_value(output).map_err(|err| GrokSearchError::Parse(format!("{context}: {err}")))
+}
+
+fn validate_required_query(tool: &str, query: &str) -> Result<()> {
+    if query.trim().is_empty() {
+        return Err(GrokSearchError::InvalidParams(format!(
+            "{tool}.query is required"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_range(value: Option<usize>, min: usize, max: usize, name: &str) -> Result<()> {
+    if let Some(value) = value {
+        if !(min..=max).contains(&value) {
+            return Err(GrokSearchError::InvalidParams(format!(
+                "{name} must be between {min} and {max}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -211,8 +299,91 @@ pub struct WebMapParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WechatSearchParams {
+    pub query: String,
+    pub account: Option<String>,
+    pub max_results: Option<usize>,
+    pub pages: Option<usize>,
+    pub include_content: Option<bool>,
+    pub max_content_chars: Option<usize>,
+}
+
+impl From<WechatSearchParams> for WechatSearchInput {
+    fn from(params: WechatSearchParams) -> Self {
+        Self {
+            query: params.query,
+            account: params.account,
+            max_results: params.max_results,
+            pages: params.pages,
+            include_content: params.include_content,
+            max_content_chars: params.max_content_chars,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ZhihuSearchParams {
+    pub query: String,
+    pub count: Option<usize>,
+}
+
+impl From<ZhihuSearchParams> for ZhihuSearchInput {
+    fn from(params: ZhihuSearchParams) -> Self {
+        Self {
+            query: params.query,
+            count: params.count,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DoctorParams {
     pub verbose: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RepoMetadataParams {
+    pub url: Option<String>,
+    pub provider: Option<RepoProviderParam>,
+    pub repo_id: Option<String>,
+    pub owner: Option<String>,
+    pub name: Option<String>,
+    pub repo_type: Option<String>,
+    pub include_readme: Option<bool>,
+    pub include_card: Option<bool>,
+    pub max_text_chars: Option<usize>,
+}
+
+impl From<RepoMetadataParams> for RepoMetadataInput {
+    fn from(params: RepoMetadataParams) -> Self {
+        Self {
+            url: params.url,
+            provider: params.provider.map(Into::into),
+            repo_id: params.repo_id,
+            owner: params.owner,
+            name: params.name,
+            repo_type: params.repo_type,
+            include_readme: params.include_readme,
+            include_card: params.include_card,
+            max_text_chars: params.max_text_chars,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RepoProviderParam {
+    Github,
+    Huggingface,
+}
+
+impl From<RepoProviderParam> for RepoProvider {
+    fn from(value: RepoProviderParam) -> Self {
+        match value {
+            RepoProviderParam::Github => RepoProvider::Github,
+            RepoProviderParam::Huggingface => RepoProvider::Huggingface,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -228,6 +399,7 @@ pub struct AcademicSearchParams {
     pub open_access_only: Option<bool>,
     pub include_abstract: Option<bool>,
     pub include_citations: Option<bool>,
+    pub extract_material_links: Option<bool>,
 }
 
 impl From<AcademicSearchParams> for AcademicSearchInput {
@@ -243,6 +415,7 @@ impl From<AcademicSearchParams> for AcademicSearchInput {
             open_access_only: params.open_access_only,
             include_abstract: params.include_abstract,
             include_citations: params.include_citations,
+            extract_material_links: params.extract_material_links,
         }
     }
 }
@@ -252,6 +425,7 @@ pub struct AcademicGetParams {
     pub identifier: String,
     pub include_citations: Option<bool>,
     pub include_open_access: Option<bool>,
+    pub extract_material_links: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -266,215 +440,184 @@ pub struct AcademicReadParams {
     pub url: Option<String>,
     pub max_chars: Option<usize>,
     pub output_format: Option<String>,
+    pub parse_options: Option<AcademicParseOptionsParams>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AcademicParseOptionsParams {
+    pub save_markdown_path: Option<String>,
+    pub images_dir: Option<String>,
+    pub tables_dir: Option<String>,
+    pub extract_images: Option<bool>,
+    pub extract_tables: Option<bool>,
+    pub extract_material_links: Option<bool>,
+}
+
+impl From<AcademicParseOptionsParams> for AcademicParseOptions {
+    fn from(params: AcademicParseOptionsParams) -> Self {
+        Self {
+            save_markdown_path: params.save_markdown_path,
+            images_dir: params.images_dir,
+            tables_dir: params.tables_dir,
+            extract_images: params.extract_images,
+            extract_tables: params.extract_tables,
+            extract_material_links: params.extract_material_links,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AcademicParsePdfParams {
+    pub identifier: Option<String>,
+    pub url: Option<String>,
+    pub max_chars: Option<usize>,
+    pub output_format: Option<String>,
+    pub parse_options: Option<AcademicParseOptionsParams>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AcademicDownloadPdfParams {
+    pub identifier: Option<String>,
+    pub url: Option<String>,
+    pub output_path: String,
+    pub overwrite: Option<bool>,
+}
+
+const TOOLS_SPEC_JSON: &str = include_str!("../spec/tools.json");
+
 pub fn tools_list_json() -> Value {
-    json!({
-        "tools": [
-            {
-                "name": "web_search",
-                "description": "Use for discovery 鈥?when you don't have a specific URL and need to find information, debug an error, research a topic, or track down an issue or news item. Returns an AI-synthesised answer plus a source list. By default the first few sources carry inline content (max_inline_sources, default 5); the rest are metadata-only 鈥?drill into any of them with web_fetch(url). The whole response is capped by a character budget; when truncated=true, trimmed sources carry a note telling you how to recover the full text via web_fetch or get_sources. Pass response_format=\"concise\" for answer + source metadata only. If you already know the exact page URL, use web_fetch instead.",
-                "inputSchema": {
-                    "type": "object",
-                    "required": ["query"],
-                    "properties": {
-                        "query": { "type": "string" },
-                        "platform": { "type": "string" },
-                        "model": { "type": "string" },
-                        "extra_sources": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "description": "Optional supplemental source count. Tavily is primary; Firecrawl is fallback. If omitted, GROK_SEARCH_EXTRA_SOURCES is used."
-                        },
-                        "recency_days": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "Restrict supplemental results to sources published within the last N days. Forwarded to Tavily as days+topic=news; also hinted to Grok prompt."
-                        },
-                        "include_domains": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Only return supplemental results from these domains. Tavily honors strictly; Grok receives as soft preference."
-                        },
-                        "exclude_domains": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Suppress supplemental results from these domains. Tavily honors strictly; Grok receives as soft instruction."
-                        },
-                        "include_content": {
-                            "type": "boolean",
-                            "default": true,
-                            "description": "Inline source content via the resolve_content pipeline. Default true. Pass false to get summary + source-list only (legacy behavior, no content field in sources). Superseded by response_format when both are set."
-                        },
-                        "response_format": {
-                            "type": "string",
-                            "enum": ["concise", "detailed"],
-                            "description": "concise = synthesized answer + source metadata only (smallest payload); detailed = inline source content, subject to the response budget. Takes precedence over include_content."
-                        }
-                    }
-                }
-            },
-            {
-                "name": "get_sources",
-                "description": "Return cached sources from a previous web_search call by session_id. Use to re-examine sources already retrieved without issuing a new search 鈥?it reuses the prior session and runs no new search or fetch. Paginate with offset/limit: the response reports total_sources and, when more pages remain, next_offset to pass as the next offset.",
-                "inputSchema": {
-                    "type": "object",
-                    "required": ["session_id"],
-                    "properties": {
-                        "session_id": { "type": "string" },
-                        "offset": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "default": 0,
-                            "description": "Index of the first source to return. Use next_offset from the previous page to continue."
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "Max sources in this page. Omit to return all remaining sources (still subject to the response budget)."
-                        }
-                    }
-                }
-            },
-            {
-                "name": "web_fetch",
-                "description": "Use when you already have a specific URL and want to read a single page in depth. GitHub issue/PR, StackOverflow (StackExchange), arXiv, and Wikipedia URLs are automatically parsed into structured, de-noised Markdown ready to feed an LLM; all other pages fall back to generic extraction. Returns {url, content, original_length, truncated, source_type, fallback_reason?}. If you don't have a URL yet and need to discover sources, use web_search instead.",
-                "inputSchema": {
-                    "type": "object",
-                    "required": ["url"],
-                    "properties": {
-                        "url": { "type": "string" },
-                        "max_chars": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "Optional character cap on returned content. Falls back to GROK_SEARCH_FETCH_MAX_CHARS, otherwise unlimited."
-                        }
-                    }
-                }
-            },
-            {
-                "name": "web_map",
-                "description": "Map/discover URLs through Tavily Map.",
-                "inputSchema": {
-                    "type": "object",
-                    "required": ["url"],
-                    "properties": {
-                        "url": { "type": "string" },
-                        "max_results": { "type": "integer", "minimum": 1, "maximum": 50 }
-                    }
-                }
-            },
-            {
-                "name": "doctor",
-                "description": "Diagnostic probe: live connectivity check for Grok, Tavily, and Firecrawl backends, plus masked configuration. Use to verify the server is wired up and reachable.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "verbose": {
-                            "type": "boolean",
-                            "default": false,
-                            "description": "Include detailed limits, logging status, provider wiring, and URL policy diagnostics."
-                        }
-                    }
-                }
-            },
-            {
-                "name": "academic_search",
-                "description": "Search computer-science academic literature across dblp, Semantic Scholar, arXiv, OpenAlex, and Crossref. Results are deduplicated by DOI/arXiv/title and ranked with reciprocal rank fusion; OpenAlex/Crossref/Semantic metadata is used to enrich papers when available.",
-                "inputSchema": {
-                    "type": "object",
-                    "required": ["query"],
-                    "properties": {
-                        "query": { "type": "string" },
-                        "sources": {
-                            "type": "array",
-                            "items": { "type": "string", "enum": ["dblp", "semantic", "arxiv", "openalex", "crossref"] },
-                            "description": "Selected sources. Defaults depend on search_mode; balanced uses dblp, Semantic Scholar, and arXiv as primary sources and enriches from OpenAlex/Crossref when possible."
-                        },
-                        "search_mode": {
-                            "type": "string",
-                            "enum": ["balanced", "broad", "precise"],
-                            "default": "balanced",
-                            "description": "balanced = stable CS discovery with metadata enrichment; broad = include all providers for maximum recall; precise = stricter title/query matching for known-paper lookups."
-                        },
-                        "sort_by": {
-                            "type": "string",
-                            "enum": ["relevance", "citations", "date"],
-                            "default": "relevance",
-                            "description": "Final ranking preference. relevance keeps query match first, citations boosts highly cited relevant papers, date boosts recent relevant papers. Provider APIs use matching native sort parameters when available."
-                        },
-                        "max_results": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 },
-                        "year_from": { "type": "integer", "minimum": 1 },
-                        "year_to": { "type": "integer", "minimum": 1 },
-                        "open_access_only": { "type": "boolean" },
-                        "include_abstract": { "type": "boolean", "default": true },
-                        "include_citations": { "type": "boolean", "default": false }
-                    }
-                }
-            },
-            {
-                "name": "academic_get",
-                "description": "Resolve one academic paper by DOI, arXiv ID/URL, Semantic Scholar paperId, OpenAlex ID/URL, dblp URL/key, or title-like query. Returns normalized metadata and optionally citation/open-access enrichment.",
-                "inputSchema": {
-                    "type": "object",
-                    "required": ["identifier"],
-                    "properties": {
-                        "identifier": { "type": "string" },
-                        "include_citations": { "type": "boolean", "default": false },
-                        "include_open_access": { "type": "boolean", "default": true }
-                    }
-                }
-            },
-            {
-                "name": "academic_citations",
-                "description": "Return a summary of citing and referenced papers for one academic identifier. Uses Semantic Scholar first and OpenAlex as fallback; this is an overview, not a full citation graph crawl.",
-                "inputSchema": {
-                    "type": "object",
-                    "required": ["identifier"],
-                    "properties": {
-                        "identifier": { "type": "string" },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 }
-                    }
-                }
-            },
-            {
-                "name": "academic_read",
-                "description": "Resolve and read an academic PDF as Markdown or text. Open-access sources are tried first: arXiv, Semantic Scholar, OpenAlex, Unpaywall. Sci-Hub is only considered when explicitly enabled in configuration and remains the last fallback.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "identifier": { "type": "string" },
-                        "url": { "type": "string" },
-                        "max_chars": { "type": "integer", "minimum": 1 },
-                        "output_format": { "type": "string", "enum": ["markdown", "text"], "default": "markdown" }
-                    }
-                }
-            }
-        ]
-    })
+    serde_json::from_str(TOOLS_SPEC_JSON).expect("embedded tools spec JSON must be valid")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::Path;
+
+    const EXPECTED_TOOLS: &[&str] = &[
+        "web_search",
+        "get_sources",
+        "web_fetch",
+        "web_map",
+        "wechat_search",
+        "zhihu_search",
+        "doctor",
+        "repo_metadata",
+        "academic_search",
+        "academic_get",
+        "academic_citations",
+        "academic_read",
+        "academic_parse_pdf",
+        "academic_download_pdf",
+    ];
 
     #[test]
     fn tools_list_contains_existing_tools() {
         let names: Vec<_> = tools().into_iter().map(|tool| tool.name).collect();
-        assert_eq!(
-            names,
-            vec![
-                "web_search",
-                "get_sources",
-                "web_fetch",
-                "web_map",
-                "doctor",
-                "academic_search",
-                "academic_get",
-                "academic_citations",
-                "academic_read"
-            ]
-        );
+        assert_eq!(names, EXPECTED_TOOLS);
+    }
+
+    #[test]
+    fn embedded_tools_spec_has_valid_shape() {
+        let spec: Value = serde_json::from_str(TOOLS_SPEC_JSON).expect("valid tools spec json");
+        let tools = spec["tools"].as_array().expect("tools array");
+        assert_eq!(tools.len(), EXPECTED_TOOLS.len());
+
+        for (tool, expected_name) in tools.iter().zip(EXPECTED_TOOLS) {
+            assert_eq!(tool["name"], json!(expected_name));
+            assert!(
+                tool["description"]
+                    .as_str()
+                    .is_some_and(|description| !description.trim().is_empty()),
+                "{expected_name} description must be non-empty"
+            );
+            assert!(
+                tool["inputSchema"].as_object().is_some(),
+                "{expected_name} inputSchema must be an object"
+            );
+        }
+    }
+
+    #[test]
+    fn repo_local_skills_have_minimal_valid_layout() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("repo root");
+        let skills_dir = repo_root.join("skills");
+        let expected_skills = [
+            "grok-search-web-research",
+            "grok-search-academic-literature",
+            "grok-search-social-search",
+            "grok-search-repo-intelligence",
+            "grok-search-diagnostics",
+        ];
+
+        for name in expected_skills {
+            let skill_dir = skills_dir.join(name);
+            let skill_md_path = skill_dir.join("SKILL.md");
+            let examples_path = skill_dir.join("references").join("examples.md");
+            let agent_metadata_path = skill_dir.join("agents").join("openai.yaml");
+
+            let skill_md = fs::read_to_string(&skill_md_path)
+                .unwrap_or_else(|err| panic!("read {}: {err}", skill_md_path.display()));
+            assert!(
+                skill_md.starts_with("---\n"),
+                "{} must start with YAML frontmatter",
+                skill_md_path.display()
+            );
+            let end = skill_md[4..]
+                .find("\n---\n")
+                .map(|idx| idx + 4)
+                .expect("frontmatter terminator");
+            let frontmatter = &skill_md[4..end];
+            let keys: BTreeSet<_> = frontmatter
+                .lines()
+                .filter_map(|line| line.split_once(':').map(|(key, _)| key.trim()))
+                .collect();
+            assert_eq!(keys, BTreeSet::from(["description", "name"]));
+            assert!(
+                name.chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'),
+                "{name} must be hyphen-case ASCII"
+            );
+            assert!(frontmatter.contains(&format!("name: {name}")));
+            assert!(
+                skill_md.contains("references/examples.md"),
+                "{name} should point to examples reference"
+            );
+            assert!(
+                examples_path.exists(),
+                "{} missing",
+                examples_path.display()
+            );
+            assert!(
+                agent_metadata_path.exists(),
+                "{} missing",
+                agent_metadata_path.display()
+            );
+            let agent_metadata = fs::read_to_string(&agent_metadata_path)
+                .unwrap_or_else(|err| panic!("read {}: {err}", agent_metadata_path.display()));
+            for key in ["display_name", "short_description", "default_prompt"] {
+                let prefix = format!("{key}: ");
+                let value = agent_metadata
+                    .lines()
+                    .find_map(|line| line.strip_prefix(&prefix))
+                    .unwrap_or_else(|| panic!("{name} missing {key}"));
+                assert!(!value.trim().is_empty(), "{name} {key} must be non-empty");
+            }
+
+            for banned in [
+                skill_dir.join("README.md"),
+                skill_dir.join("CHANGELOG.md"),
+                skill_dir.join("INSTALLATION_GUIDE.md"),
+                skill_dir.join("QUICK_REFERENCE.md"),
+            ] {
+                assert!(!banned.exists(), "{} should not exist", banned.display());
+            }
+        }
     }
 
     #[test]
@@ -524,6 +667,86 @@ mod tests {
         assert_eq!(input.year_from, Some(2020));
     }
 
+    #[test]
+    fn academic_parse_schemas_expose_parse_options() {
+        for name in ["academic_read", "academic_parse_pdf"] {
+            let tool = tools()
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name} tool"));
+            assert!(tool.input_schema.contains_key("$defs"));
+            let properties = tool.input_schema["properties"].as_object().unwrap();
+            assert!(properties.contains_key("parse_options"));
+            let defs = tool.input_schema["$defs"].as_object().unwrap();
+            assert!(defs["AcademicParseOptions"]["properties"]
+                .as_object()
+                .unwrap()
+                .contains_key("save_markdown_path"));
+        }
+    }
+
+    #[test]
+    fn academic_download_pdf_schema_requires_output_path() {
+        let tool = tools()
+            .into_iter()
+            .find(|tool| tool.name == "academic_download_pdf")
+            .expect("academic_download_pdf tool");
+        let required = tool.input_schema["required"].as_array().unwrap();
+        assert_eq!(required, &vec![json!("output_path")]);
+        let properties = tool.input_schema["properties"].as_object().unwrap();
+        assert!(properties.contains_key("identifier"));
+        assert!(properties.contains_key("url"));
+        assert!(properties.contains_key("overwrite"));
+    }
+
+    #[test]
+    fn repo_metadata_schema_exposes_provider_and_text_flags() {
+        let tool = tools()
+            .into_iter()
+            .find(|tool| tool.name == "repo_metadata")
+            .expect("repo_metadata tool");
+        let properties = tool.input_schema["properties"].as_object().unwrap();
+        assert!(properties.contains_key("url"));
+        assert!(properties.contains_key("provider"));
+        assert!(properties.contains_key("include_readme"));
+        assert!(properties.contains_key("include_card"));
+    }
+
+    #[test]
+    fn wechat_search_schema_exposes_filters_and_content_flags() {
+        let tool = tools()
+            .into_iter()
+            .find(|tool| tool.name == "wechat_search")
+            .expect("wechat_search tool");
+        let required = tool.input_schema["required"].as_array().unwrap();
+        assert_eq!(required, &vec![json!("query")]);
+        let properties = tool.input_schema["properties"].as_object().unwrap();
+        for key in [
+            "query",
+            "account",
+            "max_results",
+            "pages",
+            "include_content",
+            "max_content_chars",
+        ] {
+            assert!(properties.contains_key(key), "missing {key}");
+        }
+    }
+
+    #[test]
+    fn zhihu_search_schema_exposes_query_and_count() {
+        let tool = tools()
+            .into_iter()
+            .find(|tool| tool.name == "zhihu_search")
+            .expect("zhihu_search tool");
+        let required = tool.input_schema["required"].as_array().unwrap();
+        assert_eq!(required, &vec![json!("query")]);
+        let properties = tool.input_schema["properties"].as_object().unwrap();
+        assert!(properties.contains_key("query"));
+        assert_eq!(properties["count"]["minimum"], json!(1));
+        assert_eq!(properties["count"]["maximum"], json!(10));
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn invoke_tool_returns_existing_web_map_shape() {
         let service = SearchService::fake_with_sources();
@@ -557,6 +780,99 @@ mod tests {
         .await
         .expect_err("max_results above 50 should fail");
         assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn invoke_tool_rejects_wechat_search_invalid_params() {
+        let service = SearchService::fake_with_sources();
+        let err = invoke_tool(&service, "wechat_search", json!({ "query": "   " }))
+            .await
+            .expect_err("empty query should fail");
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+
+        let err = invoke_tool(
+            &service,
+            "wechat_search",
+            json!({ "query": "OpenAI", "pages": 11 }),
+        )
+        .await
+        .expect_err("pages above 10 should fail");
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+
+        let err = invoke_tool(
+            &service,
+            "wechat_search",
+            json!({ "query": "OpenAI", "max_results": 0 }),
+        )
+        .await
+        .expect_err("max_results below 1 should fail");
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn invoke_tool_rejects_zhihu_search_invalid_params() {
+        let service = SearchService::fake_with_sources();
+        let err = invoke_tool(&service, "zhihu_search", json!({ "query": "   " }))
+            .await
+            .expect_err("empty query should fail");
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+
+        let err = invoke_tool(
+            &service,
+            "zhihu_search",
+            json!({ "query": "OpenAI", "count": 0 }),
+        )
+        .await
+        .expect_err("count below 1 should fail");
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+
+        let err = invoke_tool(
+            &service,
+            "zhihu_search",
+            json!({ "query": "OpenAI", "count": 11 }),
+        )
+        .await
+        .expect_err("count above 10 should fail");
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn invoke_tool_rejects_academic_download_pdf_without_location() {
+        let service = SearchService::fake_with_sources();
+        let err = invoke_tool(
+            &service,
+            "academic_download_pdf",
+            json!({
+                "output_path": "paper.pdf"
+            }),
+        )
+        .await
+        .expect_err("missing identifier/url should fail before service call");
+
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+        assert!(err
+            .to_string()
+            .contains("academic_download_pdf requires identifier or url"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn invoke_tool_rejects_academic_download_pdf_without_output_path() {
+        let service = SearchService::fake_with_sources();
+        let err = invoke_tool(
+            &service,
+            "academic_download_pdf",
+            json!({
+                "url": "https://arxiv.org/pdf/1706.03762",
+                "output_path": ""
+            }),
+        )
+        .await
+        .expect_err("empty output_path should fail before service call");
+
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+        assert!(err
+            .to_string()
+            .contains("academic_download_pdf.output_path is required"));
     }
 
     #[tokio::test(flavor = "current_thread")]

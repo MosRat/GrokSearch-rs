@@ -1,0 +1,111 @@
+# grok-search-rs global configuration
+# Default path:
+#   Unix / macOS / Git Bash:   $HOME/.config/grok-search-rs/config.toml
+#   Windows (PowerShell/cmd):  %USERPROFILE%\.config\grok-search-rs\config.toml
+# Override anywhere with $GROK_SEARCH_CONFIG=/abs/path/to/config.toml
+#
+# Precedence: process env > this file > built-in defaults.
+# All keys below are commented out; uncomment and fill what you need.
+# Unknown keys are rejected; typos surface as errors, not silent drops.
+
+# -- Grok Responses --
+# Root URL, /v1 base URL, or full endpoint. Normalized to /v1 for Responses calls.
+# grok_api_url = "https://api.x.ai" # default: https://api.x.ai
+# Bearer token for the configured Grok/xAI-compatible Responses gateway.
+# grok_api_key = "xai-..."
+# Authentication mode. Use api_key for static keys or oauth for the local OAuth token file.
+# grok_auth_mode = "api_key" # default: api_key
+# Optional OAuth token file override.
+# grok_auth_file = "C:\\Users\\you\\.config\\grok-search-rs\\auth.json" # default: default auth.json next to config.toml
+# Model sent in the Responses payload.
+# grok_model = "grok-4-1-fast-reasoning" # default: grok-4-1-fast-reasoning
+# Enables the upstream Responses web_search tool.
+# web_search_enabled = true # default: true
+# Enables the upstream Responses x_search tool when the gateway supports it.
+# x_search_enabled = false # default: false
+
+# -- Source providers --
+# Tavily API base URL.
+# tavily_api_url = "https://api.tavily.com" # default: https://api.tavily.com
+# Tavily key for enrichment, fallback, fetch, and map.
+# tavily_api_key = "tvly-..."
+# Optional Tavily enable override.
+# tavily_enabled = true # default: true
+# Firecrawl API base URL. Normalized to /v1.
+# firecrawl_api_url = "https://api.firecrawl.dev" # default: https://api.firecrawl.dev
+# Firecrawl key for fetch fallback and supplemental fallback sources.
+# firecrawl_api_key = "fc-..."
+# Optional Firecrawl enable override.
+# firecrawl_enabled = true # default: true
+# Adds Tavily enrichment sources after a verifiable Grok result.
+# default_extra_sources = 3 # default: 3
+# Number of fallback sources to cache when Grok is unverifiable.
+# fallback_sources = 5 # default: 5
+
+# -- Runtime limits --
+# Default character cap on web_fetch content. Unset means no truncation.
+# fetch_max_chars = 200000
+# Maximum cached web_search sessions for get_sources.
+# cache_size = 256 # default: 256
+# HTTP timeout in seconds for upstream requests.
+# timeout_seconds = 60 # default: 60
+# Proxy mode: auto, off, or an explicit proxy URL.
+# proxy = "auto" # default: auto
+# Global upstream response body byte cap before parsing or trimming.
+# max_response_bytes = 10485760 # default: 10485760
+# Optional JSONL debug log path.
+# debug_log_path = "logs/grok-search-rs-debug.jsonl"
+
+# -- OpenAI-compatible transport --
+# OpenAI-compatible chat-completions gateway base URL.
+# openai_compatible_api_url = "https://your-gateway/v1"
+# OpenAI-compatible gateway bearer token.
+# openai_compatible_api_key = "sk-..."
+# OpenAI-compatible model name.
+# openai_compatible_model = "grok-4.3-fast" # default: falls back to grok_model
+
+# -- Source extraction --
+# GitHub token for issue, PR, and repo metadata fetches.
+# github_token = "ghp_..."
+# StackExchange answers rendered before folding.
+# source_max_answers = 5 # default: 5
+# GitHub and StackExchange comments rendered before folding.
+# source_max_comments = 30 # default: 30
+# Parallel source enrichments when web_search includes content.
+# enrich_concurrency = 3 # default: 3
+# Character cap per enriched source body.
+# enrich_max_chars = 15000 # default: 15000
+# Maximum sources carrying inline content per web_search response.
+# max_inline_sources = 5 # default: 5
+# Whole-response character budget for web_search.
+# response_max_chars = 60000 # default: 60000
+
+# -- Academic and social search --
+# Enables the academic_* MCP tools.
+# academic_enabled = true # default: true
+# Contact email for Unpaywall and polite academic API usage.
+# academic_email = "you@example.com"
+# Optional Semantic Scholar API key.
+# semantic_scholar_api_key = "..."
+# Optional OpenAlex key. Comma-separated lists rotate keys round-robin.
+# openalex_api_key = "..."
+# Zhihu OpenAPI Access Secret for zhihu_search.
+# zhihu_api_key = "..."
+# Zhihu OpenAPI base URL.
+# zhihu_openapi_base_url = "https://developer.zhihu.com" # default: https://developer.zhihu.com
+# Full Zhihu search endpoint override.
+# zhihu_search_url = "https://developer.zhihu.com/api/v1/content/zhihu_search"
+# Explicit opt-in for Sci-Hub fallback. Legal risk varies by jurisdiction.
+# academic_scihub_enabled = false # default: false
+# Sci-Hub base URL, used only when academic_scihub_enabled is true.
+# academic_scihub_base_url = "https://..."
+# Enables IEEE/ACM institutional PDF fallback.
+# academic_institutional_enabled = true # default: true
+# Allows invalid TLS certificates only for private institutional fallback routes.
+# academic_institutional_accept_invalid_certs = false # default: false
+# Probes direct and discovered proxy routes for IEEE/ACM access.
+# academic_institutional_probe = true # default: true
+# Maximum PDF bytes downloaded for academic PDF read, parse, and download flows.
+# academic_max_pdf_bytes = 52428800 # default: 52428800
+# Character cap for parsed PDF output.
+# academic_pdf_max_chars = 200000

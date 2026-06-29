@@ -4,7 +4,7 @@
 
 **A lightweight Rust MCP server for Grok / OpenAI‑compatible web search, plus Tavily fetch/map and Firecrawl fallback.**
 
-`grok-search-rs` is an **MCP stdio server** — your client (Claude Code, Codex, Cursor, VS Code, …) launches it; you do not run it directly. It exposes one set of tools (`web_search`, `get_sources`, `web_fetch`, `web_map`, `doctor`) and supports two upstream transports so you can plug into either xAI's official API or any OpenAI‑compatible relay.
+`grok-search-rs` is an **MCP stdio server** — your client (Claude Code, Codex, Cursor, VS Code, …) launches it; you do not run it directly. It exposes one set of tools (`web_search`, `get_sources`, `web_fetch`, `web_map`, `repo_metadata`, `doctor`) and supports two upstream transports so you can plug into either xAI's official API or any OpenAI-compatible relay.
 
 ---
 
@@ -12,7 +12,8 @@
 
 - 🔎 **Live web search** with cited sources, cached for follow‑up `get_sources` calls. Opt‑in `include_content` enriches the top sources with full extracted text in one call.
 - 📏 **Response budgeting** — `web_search` keeps responses inside agent context limits: only the top `max_inline_sources` carry inline text, a whole‑response char budget (`response_max_chars`, default 60k) trims tail sources with recovery notes, `response_format: "concise" | "detailed"` picks the payload size, and `get_sources` pages through cached sources with `offset`/`limit`. The session cache always keeps full content.
-- 🧩 **Structured `web_fetch`** — GitHub issues/PRs, StackExchange/MathOverflow, arXiv, and Wikipedia URLs are parsed by specialist extractors into clean Markdown (title, state/labels, accepted‑answer ordering, abstracts, vote‑sorted answers). Anything else falls back to the generic Tavily → Firecrawl chain. Output carries `source_type` and a `fallback_reason` when a specialist was skipped.
+- 🧩 **Structured `web_fetch`** — GitHub issues/PRs, StackExchange/MathOverflow, arXiv, and Wikipedia URLs are parsed by specialist extractors into clean Markdown (title, state/labels, accepted-answer ordering, abstracts, vote-sorted answers). Anything else falls back to the generic Tavily → Firecrawl chain. Output carries `source_type` and a `fallback_reason` when a specialist was skipped.
+- 📦 **Repository metadata** — `repo_metadata` returns structured GitHub repository and Hugging Face model/dataset metadata. README/model-card/dataset-card text is opt-in and truncated by the same fetch character budget.
 - 🔀 **Two transports** — native xAI Responses (`/v1/responses`) **or** any OpenAI‑compatible chat‑completions gateway (`/v1/chat/completions`). Pick by env vars; no flag.
 - 🔐 **Optional Grok OAuth mode** — `login/status/logout` commands store a local xAI OAuth token for Responses auth, so the MCP server can run without `GROK_SEARCH_API_KEY`.
 - 📥 **Tavily fetch / map** for full‑text extraction and link discovery, with **Firecrawl** as automatic fallback. `TAVILY_API_KEY` and `FIRECRAWL_API_KEY` accept comma‑separated key lists — keys rotate round‑robin with automatic failover on rate/quota errors.
@@ -167,7 +168,8 @@ Notes:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GITHUB_TOKEN` | unset | Authenticates GitHub issue/PR fetches (higher API rate limit; private repos). If unset, GrokSearch-rs tries `gh auth token`; otherwise it works unauthenticated but is rate‑limited. |
+| `GITHUB_TOKEN` | unset | Authenticates GitHub issue/PR fetches (higher API rate limit; private repos). If unset, GrokSearch-rs tries `gh auth token`; otherwise it works unauthenticated but is rate-limited. |
+| `HF_TOKEN` / `HUGGINGFACE_TOKEN` | unset | Optional Hugging Face token for `repo_metadata`. Read directly from the process environment; not stored in global config or doctor output. |
 | `GROK_SEARCH_SOURCE_MAX_ANSWERS` | `5` | StackExchange answers rendered before folding. |
 | `GROK_SEARCH_SOURCE_MAX_COMMENTS` | `30` | GitHub / StackExchange comments rendered before folding. |
 | `GROK_SEARCH_ENRICH_CONCURRENCY` | `3` | Parallel source enrichments for `web_search` `include_content` (clamped 1..5). |
@@ -184,13 +186,16 @@ for the generic fallback path.
 | `GROK_SEARCH_ACADEMIC_ENABLED` | `true` | Enables the `academic_*` MCP tools. |
 | `GROK_SEARCH_ACADEMIC_EMAIL` | unset | Contact email for Unpaywall and polite academic API usage. Without it, Unpaywall full-text lookup is skipped. |
 | `SEMANTIC_SCHOLAR_API_KEY` | unset | Optional Semantic Scholar Graph API key; anonymous mode is used when unset. |
+| `OPENALEX_API_KEY` | unset | Optional OpenAlex key; recommended for more reliable academic search and metadata enrichment. |
 | `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | `false` | Explicit opt-in for Sci-Hub as the final `academic_read` fallback. Legal risk varies by jurisdiction and use. |
 | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` | unset | Sci-Hub base URL, only read when Sci-Hub fallback is enabled. Credentials are redacted in diagnostics. |
-| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED` | `true` | Enables IEEE/ACM institutional PDF fallback for `academic_read`; automatically disables itself when no usable route is found. |
+| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED` | `true` | Enables IEEE/ACM institutional PDF fallback for academic PDF read/parse/download flows; automatically disables itself when no usable route is found. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS` | `false` | Allows invalid TLS certificates only for private/local IEEE/ACM institutional fallback routes. Public routes require HTTPS validation. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE` | `true` | Probes direct and discovered proxy routes for IEEE/ACM access before using the fallback. |
-| `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF download size for `academic_read`. |
+| `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF download size for academic PDF read/parse/download flows. |
 | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for `pdf_oxide` PDF text extraction. Falls back to `GROK_SEARCH_FETCH_MAX_CHARS`, then `200000`. |
+
+Academic providers include conservative upstream stability guards: arXiv API calls are globally spaced by 3 seconds and retry `429` responses, while OpenAlex retries transient `502`/`503`/`504` gateway failures and avoids broad date-sorted queries that OpenAlex may stop as too expensive.
 
 ### Selection rules at startup
 
@@ -222,10 +227,13 @@ Tired of duplicating `env` blocks across clients? Run `grok-search-rs --init` on
 | `web_fetch` | Page content as clean Markdown. Specialist extractors for GitHub / StackExchange / arXiv / Wikipedia; generic Tavily → Firecrawl fallback otherwise. Returns `source_type` + `fallback_reason`. |
 | `web_map` | Discover URLs on a domain via Tavily Map. |
 | `doctor` | Live connectivity probe + redacted config. Pass `verbose: true` for detailed diagnostics. |
+| `repo_metadata` | Structured metadata for GitHub repositories and Hugging Face models/datasets. Defaults to metadata only; `include_readme` / `include_card` opt into README/card text. |
 | `academic_search` | CS-focused literature search across dblp, Semantic Scholar, arXiv, OpenAlex, and Crossref with dedupe/RRF ranking. |
 | `academic_get` | Resolve one paper by DOI, arXiv ID/URL, Semantic Scholar ID, OpenAlex ID/URL, dblp URL/key, or title-like query. |
 | `academic_citations` | Citation/reference summary for one paper, using Semantic Scholar first and OpenAlex as fallback. |
-| `academic_read` | Resolve an academic PDF and return `pdf_oxide` parsed Markdown/text; Sci-Hub is used only when explicitly configured and only as last fallback. |
+| `academic_read` | Resolve an academic PDF and return `pdf_oxide` parsed Markdown/text. Optional `parse_options` can save parsed Markdown/text and attach detected code, dataset, model, demo, project, or documentation links. |
+| `academic_parse_pdf` | Artifact-focused PDF parse tool. Supports explicit Markdown/text export paths plus partial image/table artifacts. Images are exported as PNG XObjects with an `images.json` manifest; tables are exported as `tables.json` plus Markdown snippets when detected. |
+| `academic_download_pdf` | Resolve and save an academic PDF without parsing it. Uses the same full-text resolver, institutional access handling, proxy settings, and byte limit as the academic read/parse tools. |
 
 ---
 
@@ -243,7 +251,8 @@ agent configs. `grok-search-rs mcp` does the same explicitly.
 | `grok-search-rs get-sources <session_id> ...` | Page cached sources from a prior CLI/MCP `web_search`. |
 | `grok-search-rs web-fetch <url> ...` | Fetch one page as structured content. |
 | `grok-search-rs web-map <url> ...` | Discover URLs on a site/domain. |
-| `grok-search-rs academic search|get|citations|read ...` | Run the academic tools from the shell. |
+| `grok-search-rs repo-metadata --url <url> ...` | Fetch GitHub or Hugging Face repository metadata. |
+| `grok-search-rs academic search|get|citations|read|parse-pdf|download-pdf ...` | Run the academic tools from the shell. |
 
 Use `--help` on any command for the full flag list. Kebab-case and underscore
 aliases are accepted for web tool command names, for example `web-search` and

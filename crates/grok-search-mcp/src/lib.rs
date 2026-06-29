@@ -112,11 +112,16 @@ mod tests {
                 "get_sources",
                 "web_fetch",
                 "web_map",
+                "wechat_search",
+                "zhihu_search",
                 "doctor",
+                "repo_metadata",
                 "academic_search",
                 "academic_get",
                 "academic_citations",
-                "academic_read"
+                "academic_read",
+                "academic_parse_pdf",
+                "academic_download_pdf"
             ]
         );
     }

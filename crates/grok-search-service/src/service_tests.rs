@@ -73,6 +73,8 @@ mod transport_dispatch_tests {
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            wechat: None,
+            zhihu: None,
             logger: DebugLogger::disabled(),
         };
 
@@ -104,6 +106,8 @@ mod transport_dispatch_tests {
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            wechat: None,
+            zhihu: None,
             logger: DebugLogger::disabled(),
         };
 
@@ -131,6 +135,8 @@ mod transport_dispatch_tests {
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            wechat: None,
+            zhihu: None,
             logger: DebugLogger::disabled(),
         };
         let report = svc.doctor().await;
@@ -155,6 +161,8 @@ mod transport_dispatch_tests {
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            wechat: None,
+            zhihu: None,
             logger: DebugLogger::disabled(),
         };
         let report_unset = svc_unset.doctor().await;
@@ -188,6 +196,8 @@ mod transport_dispatch_tests {
                 checked_urls: vec!["https://api.x.ai/v1".to_string()],
             },
             academic: None,
+            wechat: None,
+            zhihu: None,
             logger: DebugLogger::disabled(),
         };
 
@@ -362,6 +372,8 @@ mod enrich_tests {
             source_router: Arc::new(router),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            wechat: None,
+            zhihu: None,
             logger: DebugLogger::disabled(),
         }
     }

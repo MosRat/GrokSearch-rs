@@ -12,7 +12,9 @@ use crate::logging::DebugLogger;
 use crate::response_budget::apply_response_budget;
 use grok_search_config::Config;
 use grok_search_net::proxy::ProxyDiagnostics;
-pub use grok_search_provider_core::{AcademicServiceProvider, AiProvider, SourceProvider};
+pub use grok_search_provider_core::{
+    AcademicServiceProvider, AiProvider, SourceProvider, WechatProvider, ZhihuProvider,
+};
 use grok_search_source_core::{SourceCaps, SourceRouter};
 use grok_search_types::model::search::{
     ContentBlock, SearchFilters, SearchMessage, SearchRequest, SearchResponse, SearchTool,
@@ -20,8 +22,9 @@ use grok_search_types::model::search::{
 use grok_search_types::model::source::{merge_sources, Source};
 use grok_search_types::model::tool::{GetSourcesOutput, WebSearchInput, WebSearchOutput};
 use grok_search_types::{
-    AcademicCitationsOutput, AcademicGetOutput, AcademicReadOutput, AcademicSearchInput,
-    AcademicSearchOutput,
+    AcademicCitationsOutput, AcademicDownloadPdfOutput, AcademicGetOutput, AcademicParseOptions,
+    AcademicParsePdfOutput, AcademicReadOutput, AcademicSearchInput, AcademicSearchOutput,
+    WechatSearchInput, WechatSearchOutput, ZhihuSearchInput, ZhihuSearchOutput,
 };
 use grok_search_types::{GrokSearchError, Result};
 
@@ -47,6 +50,8 @@ pub struct SearchService {
     pub(crate) source_router: Arc<SourceRouter>,
     pub(crate) proxy_diagnostics: ProxyDiagnostics,
     pub(crate) academic: Option<Arc<dyn AcademicServiceProvider>>,
+    pub(crate) wechat: Option<Arc<dyn WechatProvider>>,
+    pub(crate) zhihu: Option<Arc<dyn ZhihuProvider>>,
     pub(crate) logger: DebugLogger,
 }
 
@@ -59,6 +64,8 @@ pub struct SearchServiceParts {
     pub source_router: SourceRouter,
     pub proxy_diagnostics: ProxyDiagnostics,
     pub academic: Option<Arc<dyn AcademicServiceProvider>>,
+    pub wechat: Option<Arc<dyn WechatProvider>>,
+    pub zhihu: Option<Arc<dyn ZhihuProvider>>,
 }
 
 impl SearchService {
@@ -75,6 +82,8 @@ impl SearchService {
             source_router: Arc::new(parts.source_router),
             proxy_diagnostics: parts.proxy_diagnostics,
             academic: parts.academic,
+            wechat: parts.wechat,
+            zhihu: parts.zhihu,
             logger: DebugLogger::new(config.debug_log_path.clone()),
         }
     }
@@ -96,6 +105,8 @@ impl SearchService {
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            wechat: None,
+            zhihu: None,
             logger: DebugLogger::new(config.debug_log_path.clone()),
         }
     }
@@ -142,6 +153,8 @@ impl SearchService {
             source_router: Arc::new(SourceRouter::default()),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            wechat: None,
+            zhihu: None,
             logger: DebugLogger::new(config.debug_log_path.clone()),
         }
     }
@@ -177,8 +190,22 @@ impl SearchService {
             source_router: Arc::new(router),
             proxy_diagnostics: ProxyDiagnostics::default(),
             academic: None,
+            wechat: None,
+            zhihu: None,
             logger: DebugLogger::new(config.debug_log_path.clone()),
         }
+    }
+
+    pub fn fake_with_wechat(wechat: Arc<dyn WechatProvider>) -> Self {
+        let mut service = Self::fake_with_sources();
+        service.wechat = Some(wechat);
+        service
+    }
+
+    pub fn fake_with_zhihu(zhihu: Arc<dyn ZhihuProvider>) -> Self {
+        let mut service = Self::fake_with_sources();
+        service.zhihu = Some(zhihu);
+        service
     }
 
     pub async fn web_search(&self, input: WebSearchInput) -> Result<WebSearchOutput> {
@@ -540,17 +567,72 @@ impl SearchService {
         result
     }
 
+    pub async fn wechat_search(&self, mut input: WechatSearchInput) -> Result<WechatSearchOutput> {
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let query_chars = input.query.chars().count();
+        if input.query.trim().is_empty() {
+            return Err(GrokSearchError::InvalidParams(
+                "wechat_search.query is required".to_string(),
+            ));
+        }
+        input.max_results = Some(input.max_results.unwrap_or(10));
+        input.pages = Some(input.pages.unwrap_or(1));
+        input.max_content_chars = input
+            .max_content_chars
+            .or(self.config.fetch_max_chars)
+            .or(Some(self.config.enrich_max_chars));
+        let result = self.wechat_provider()?.search(input).await;
+        self.log_result(
+            &request_id,
+            "wechat_search",
+            start,
+            &result,
+            json!({ "query_chars": query_chars }),
+        );
+        result
+    }
+
+    pub async fn zhihu_search(&self, mut input: ZhihuSearchInput) -> Result<ZhihuSearchOutput> {
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let query_chars = input.query.chars().count();
+        if input.query.trim().is_empty() {
+            return Err(GrokSearchError::InvalidParams(
+                "zhihu_search.query is required".to_string(),
+            ));
+        }
+        input.count = Some(input.count.unwrap_or(10));
+        let result = self.zhihu_provider()?.search(input).await;
+        self.log_result(
+            &request_id,
+            "zhihu_search",
+            start,
+            &result,
+            json!({ "query_chars": query_chars }),
+        );
+        result
+    }
+
     pub async fn academic_get(
         &self,
         identifier: &str,
         include_citations: bool,
         include_open_access: bool,
+        extract_material_links: bool,
     ) -> Result<AcademicGetOutput> {
         let request_id = self.logger.request_id();
         let start = Instant::now();
         let result = self
             .academic_service()
-            .map(|service| service.get(identifier, include_citations, include_open_access))?
+            .map(|service| {
+                service.get(
+                    identifier,
+                    include_citations,
+                    include_open_access,
+                    extract_material_links,
+                )
+            })?
             .await;
         self.log_result(
             &request_id,
@@ -589,14 +671,56 @@ impl SearchService {
         url: Option<String>,
         max_chars: Option<usize>,
         output_format: Option<String>,
+        parse_options: Option<AcademicParseOptions>,
     ) -> Result<AcademicReadOutput> {
         let request_id = self.logger.request_id();
         let start = Instant::now();
         let result = self
             .academic_service()?
-            .read(identifier, url, max_chars, output_format)
+            .read(identifier, url, max_chars, output_format, parse_options)
             .await;
         self.log_result(&request_id, "academic_read", start, &result, json!({}));
+        result
+    }
+
+    pub async fn academic_parse_pdf(
+        &self,
+        identifier: Option<String>,
+        url: Option<String>,
+        max_chars: Option<usize>,
+        output_format: Option<String>,
+        parse_options: Option<AcademicParseOptions>,
+    ) -> Result<AcademicParsePdfOutput> {
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let result = self
+            .academic_service()?
+            .parse_pdf(identifier, url, max_chars, output_format, parse_options)
+            .await;
+        self.log_result(&request_id, "academic_parse_pdf", start, &result, json!({}));
+        result
+    }
+
+    pub async fn academic_download_pdf(
+        &self,
+        identifier: Option<String>,
+        url: Option<String>,
+        output_path: String,
+        overwrite: bool,
+    ) -> Result<AcademicDownloadPdfOutput> {
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let result = self
+            .academic_service()?
+            .download_pdf(identifier, url, output_path, overwrite)
+            .await;
+        self.log_result(
+            &request_id,
+            "academic_download_pdf",
+            start,
+            &result,
+            json!({}),
+        );
         result
     }
 
@@ -612,6 +736,22 @@ impl SearchService {
             .map(|service| service.as_ref())
             .ok_or(GrokSearchError::MissingConfig(
                 "GROK_SEARCH_ACADEMIC_ENABLED",
+            ))
+    }
+
+    fn wechat_provider(&self) -> Result<&dyn WechatProvider> {
+        self.wechat
+            .as_ref()
+            .map(|provider| provider.as_ref())
+            .ok_or(GrokSearchError::MissingConfig("wechat provider"))
+    }
+
+    fn zhihu_provider(&self) -> Result<&dyn ZhihuProvider> {
+        self.zhihu
+            .as_ref()
+            .map(|provider| provider.as_ref())
+            .ok_or(GrokSearchError::MissingConfig(
+                "ZHIHU_ACCESS_SECRET or ZHIHU_API_KEY",
             ))
     }
 

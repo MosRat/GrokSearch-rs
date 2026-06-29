@@ -35,7 +35,8 @@ iterating, then run the workspace suite before committing.
 | Provider core | `cargo test -p grok-search-provider-core` | provider trait object wiring and default capability errors |
 | Source core | `cargo test -p grok-search-source-core` | router order, no-match sentinel, failed extractor reasons |
 | Parse | `cargo test -p grok-search-parse` | identifier normalization, RRF/dedupe, OpenAlex abstracts, title normalization |
-| Content | `cargo test -p grok-search-content` | PDF validation, max byte guard, truncation |
+| Content | `cargo test -p grok-search-content` | generic text parsing, truncation, artifact file helpers |
+| PDF | `cargo test -p grok-search-pdf` | PDF validation, max byte guard, download guards, pdf_oxide artifacts |
 | Providers | `cargo test -p grok-search-providers` | Grok/OpenAI-compatible adapters, Tavily/Firecrawl parsing and key failover |
 | Runtime | `cargo test -p grok-search-runtime` | config-to-provider wiring and service assembly |
 | Sources | `cargo test -p grok-search-sources` | GitHub, StackExchange, arXiv, Wikipedia rendering |

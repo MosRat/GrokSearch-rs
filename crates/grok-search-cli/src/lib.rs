@@ -4,8 +4,10 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use grok_search_apps::{InitOptions, InitTarget};
 use grok_search_config::{self as config, AuthMode, Config};
 use grok_search_tools::{
-    AcademicCitationsParams, AcademicGetParams, AcademicReadParams, AcademicSearchParams,
-    GetSourcesParams, WebFetchParams, WebMapParams, WebSearchParams,
+    AcademicCitationsParams, AcademicDownloadPdfParams, AcademicGetParams,
+    AcademicParseOptionsParams, AcademicParsePdfParams, AcademicReadParams, AcademicSearchParams,
+    GetSourcesParams, RepoMetadataParams, RepoProviderParam, WebFetchParams, WebMapParams,
+    WebSearchParams, WechatSearchParams, ZhihuSearchParams,
 };
 use serde_json::Value;
 
@@ -50,6 +52,15 @@ enum Command {
     /// Discover URLs on a site/domain.
     #[command(name = "web-map", alias = "web_map")]
     WebMap(WebMapCommand),
+    /// Search WeChat public-account articles.
+    #[command(name = "wechat-search", alias = "wechat_search")]
+    WechatSearch(WechatSearchCommand),
+    /// Search Zhihu site content through Zhihu OpenAPI.
+    #[command(name = "zhihu-search", alias = "zhihu_search")]
+    ZhihuSearch(ZhihuSearchCommand),
+    /// Fetch GitHub or Hugging Face repository metadata.
+    #[command(name = "repo-metadata", alias = "repo_metadata")]
+    RepoMetadata(RepoMetadataCommand),
     /// Academic literature tools.
     Academic(AcademicCommand),
 }
@@ -142,6 +153,71 @@ struct WebMapCommand {
 }
 
 #[derive(Debug, Args)]
+struct WechatSearchCommand {
+    query: String,
+    #[arg(long)]
+    account: Option<String>,
+    #[arg(long)]
+    max_results: Option<usize>,
+    #[arg(long)]
+    pages: Option<usize>,
+    #[arg(long)]
+    include_content: Option<bool>,
+    #[arg(long)]
+    max_content_chars: Option<usize>,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, Args)]
+struct ZhihuSearchCommand {
+    query: String,
+    #[arg(long)]
+    count: Option<usize>,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, Args)]
+struct RepoMetadataCommand {
+    #[arg(long)]
+    url: Option<String>,
+    #[arg(long, value_enum)]
+    provider: Option<RepoProviderArg>,
+    #[arg(long)]
+    repo_id: Option<String>,
+    #[arg(long)]
+    owner: Option<String>,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long)]
+    repo_type: Option<String>,
+    #[arg(long)]
+    include_readme: bool,
+    #[arg(long)]
+    include_card: bool,
+    #[arg(long)]
+    max_text_chars: Option<usize>,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RepoProviderArg {
+    Github,
+    Huggingface,
+}
+
+impl From<RepoProviderArg> for RepoProviderParam {
+    fn from(value: RepoProviderArg) -> Self {
+        match value {
+            RepoProviderArg::Github => RepoProviderParam::Github,
+            RepoProviderArg::Huggingface => RepoProviderParam::Huggingface,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
 struct AcademicCommand {
     #[command(subcommand)]
     command: AcademicSubcommand,
@@ -157,6 +233,12 @@ enum AcademicSubcommand {
     Citations(AcademicCitationsCommand),
     /// Resolve and parse academic full text.
     Read(AcademicReadCommand),
+    /// Resolve academic full text and export parse artifacts.
+    #[command(name = "parse-pdf", alias = "parse_pdf")]
+    ParsePdf(AcademicParsePdfCommand),
+    /// Resolve and download an academic PDF without parsing.
+    #[command(name = "download-pdf", alias = "download_pdf")]
+    DownloadPdf(AcademicDownloadPdfCommand),
 }
 
 #[derive(Debug, Args)]
@@ -191,6 +273,8 @@ struct AcademicGetCommand {
     include_citations: bool,
     #[arg(long)]
     include_open_access: Option<bool>,
+    #[arg(long)]
+    extract_material_links: bool,
     #[command(flatten)]
     output: OutputArgs,
 }
@@ -215,7 +299,55 @@ struct AcademicReadCommand {
     #[arg(long)]
     output_format: Option<String>,
     #[command(flatten)]
+    parse: AcademicParseOptionsCommand,
+    #[command(flatten)]
     output: OutputArgs,
+}
+
+#[derive(Debug, Args)]
+struct AcademicParsePdfCommand {
+    #[arg(long)]
+    identifier: Option<String>,
+    #[arg(long)]
+    url: Option<String>,
+    #[arg(long)]
+    max_chars: Option<usize>,
+    #[arg(long)]
+    output_format: Option<String>,
+    #[command(flatten)]
+    parse: AcademicParseOptionsCommand,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, Args)]
+struct AcademicDownloadPdfCommand {
+    #[arg(long)]
+    identifier: Option<String>,
+    #[arg(long)]
+    url: Option<String>,
+    #[arg(long)]
+    output_path: String,
+    #[arg(long)]
+    overwrite: bool,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, Args, Default)]
+struct AcademicParseOptionsCommand {
+    #[arg(long)]
+    save_markdown_path: Option<String>,
+    #[arg(long)]
+    images_dir: Option<String>,
+    #[arg(long)]
+    tables_dir: Option<String>,
+    #[arg(long)]
+    extract_images: bool,
+    #[arg(long)]
+    extract_tables: bool,
+    #[arg(long)]
+    extract_material_links: bool,
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -303,6 +435,50 @@ pub async fn run() -> anyhow::Result<()> {
             )
             .await
         }
+        Some(Command::WechatSearch(command)) => {
+            invoke_and_print(
+                "wechat_search",
+                WechatSearchParams {
+                    query: command.query,
+                    account: command.account,
+                    max_results: command.max_results,
+                    pages: command.pages,
+                    include_content: command.include_content,
+                    max_content_chars: command.max_content_chars,
+                },
+                command.output.compact,
+            )
+            .await
+        }
+        Some(Command::ZhihuSearch(command)) => {
+            invoke_and_print(
+                "zhihu_search",
+                ZhihuSearchParams {
+                    query: command.query,
+                    count: command.count,
+                },
+                command.output.compact,
+            )
+            .await
+        }
+        Some(Command::RepoMetadata(command)) => {
+            invoke_and_print(
+                "repo_metadata",
+                RepoMetadataParams {
+                    url: command.url,
+                    provider: command.provider.map(Into::into),
+                    repo_id: command.repo_id,
+                    owner: command.owner,
+                    name: command.name,
+                    repo_type: command.repo_type,
+                    include_readme: command.include_readme.then_some(true),
+                    include_card: command.include_card.then_some(true),
+                    max_text_chars: command.max_text_chars,
+                },
+                command.output.compact,
+            )
+            .await
+        }
         Some(Command::Academic(command)) => run_academic(command).await,
     }
 }
@@ -350,6 +526,7 @@ async fn run_academic(command: AcademicCommand) -> anyhow::Result<()> {
                     open_access_only: command.open_access_only.then_some(true),
                     include_abstract: command.include_abstract,
                     include_citations: command.include_citations.then_some(true),
+                    extract_material_links: None,
                 },
                 command.output.compact,
             )
@@ -362,6 +539,7 @@ async fn run_academic(command: AcademicCommand) -> anyhow::Result<()> {
                     identifier: command.identifier,
                     include_citations: command.include_citations.then_some(true),
                     include_open_access: command.include_open_access,
+                    extract_material_links: command.extract_material_links.then_some(true),
                 },
                 command.output.compact,
             )
@@ -386,11 +564,61 @@ async fn run_academic(command: AcademicCommand) -> anyhow::Result<()> {
                     url: command.url,
                     max_chars: command.max_chars,
                     output_format: command.output_format,
+                    parse_options: command.parse.into_options(),
                 },
                 command.output.compact,
             )
             .await
         }
+        AcademicSubcommand::ParsePdf(command) => {
+            invoke_and_print(
+                "academic_parse_pdf",
+                AcademicParsePdfParams {
+                    identifier: command.identifier,
+                    url: command.url,
+                    max_chars: command.max_chars,
+                    output_format: command.output_format,
+                    parse_options: command.parse.into_options(),
+                },
+                command.output.compact,
+            )
+            .await
+        }
+        AcademicSubcommand::DownloadPdf(command) => {
+            invoke_and_print(
+                "academic_download_pdf",
+                AcademicDownloadPdfParams {
+                    identifier: command.identifier,
+                    url: command.url,
+                    output_path: command.output_path,
+                    overwrite: command.overwrite.then_some(true),
+                },
+                command.output.compact,
+            )
+            .await
+        }
+    }
+}
+
+impl AcademicParseOptionsCommand {
+    fn into_options(self) -> Option<AcademicParseOptionsParams> {
+        if self.save_markdown_path.is_none()
+            && self.images_dir.is_none()
+            && self.tables_dir.is_none()
+            && !self.extract_images
+            && !self.extract_tables
+            && !self.extract_material_links
+        {
+            return None;
+        }
+        Some(AcademicParseOptionsParams {
+            save_markdown_path: self.save_markdown_path,
+            images_dir: self.images_dir,
+            tables_dir: self.tables_dir,
+            extract_images: self.extract_images.then_some(true),
+            extract_tables: self.extract_tables.then_some(true),
+            extract_material_links: self.extract_material_links.then_some(true),
+        })
     }
 }
 
@@ -608,6 +836,58 @@ mod tests {
                 .command,
             Some(Command::WebMap(_))
         ));
+        match Cli::try_parse_from([
+            "grok-search-rs",
+            "wechat-search",
+            "OpenAI",
+            "--account",
+            "机器之心",
+            "--max-results",
+            "5",
+            "--pages",
+            "2",
+        ])
+        .unwrap()
+        .command
+        {
+            Some(Command::WechatSearch(command)) => {
+                assert_eq!(command.query, "OpenAI");
+                assert_eq!(command.account.as_deref(), Some("机器之心"));
+                assert_eq!(command.max_results, Some(5));
+                assert_eq!(command.pages, Some(2));
+            }
+            other => panic!("expected wechat search command, got {other:?}"),
+        }
+        match Cli::try_parse_from(["grok-search-rs", "zhihu-search", "OpenAI", "--count", "5"])
+            .unwrap()
+            .command
+        {
+            Some(Command::ZhihuSearch(command)) => {
+                assert_eq!(command.query, "OpenAI");
+                assert_eq!(command.count, Some(5));
+            }
+            other => panic!("expected zhihu search command, got {other:?}"),
+        }
+        assert!(matches!(
+            Cli::try_parse_from(["grok-search-rs", "zhihu_search", "OpenAI"])
+                .unwrap()
+                .command,
+            Some(Command::ZhihuSearch(_))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "grok-search-rs",
+                "repo-metadata",
+                "--provider",
+                "huggingface",
+                "--repo-id",
+                "bert-base-uncased",
+                "--include-card"
+            ])
+            .unwrap()
+            .command,
+            Some(Command::RepoMetadata(_))
+        ));
     }
 
     #[test]
@@ -652,6 +932,20 @@ mod tests {
                 "read",
                 "--url",
                 "https://arxiv.org/pdf/1706.03762",
+            ])
+            .unwrap()
+            .command,
+            Some(Command::Academic(_))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "grok-search-rs",
+                "academic",
+                "download-pdf",
+                "--url",
+                "https://arxiv.org/pdf/1706.03762",
+                "--output-path",
+                "paper.pdf",
             ])
             .unwrap()
             .command,

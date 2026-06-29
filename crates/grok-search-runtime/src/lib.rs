@@ -4,11 +4,13 @@ use grok_search_academic::AcademicService;
 use grok_search_auth::{OAuthCredential, StaticApiKeyCredential};
 use grok_search_config::{AuthMode, Config, Transport};
 use grok_search_net::proxy::ProxyDiagnostics;
-use grok_search_provider_core::{AiProvider, SourceProvider};
+use grok_search_provider_core::{AiProvider, SourceProvider, WechatProvider, ZhihuProvider};
 use grok_search_providers::providers::firecrawl::FirecrawlProvider;
 use grok_search_providers::providers::grok::GrokResponsesProvider;
 use grok_search_providers::providers::openai_compatible::OpenAICompatProvider;
 use grok_search_providers::providers::tavily::TavilyProvider;
+use grok_search_providers::providers::wechat::WechatSearchProvider;
+use grok_search_providers::providers::zhihu::ZhihuSearchProvider;
 use grok_search_service::{SearchService, SearchServiceParts};
 use grok_search_types::{GrokSearchError, Result};
 
@@ -30,6 +32,8 @@ pub fn new_with_http(
         Arc::new(AcademicService::new(http.clone(), config.clone()))
             as Arc<dyn grok_search_provider_core::AcademicServiceProvider>
     });
+    let wechat = wechat_provider(&config, &http);
+    let zhihu = zhihu_provider(&config, &http);
 
     Ok(SearchService::from_parts(SearchServiceParts {
         config,
@@ -40,6 +44,8 @@ pub fn new_with_http(
         source_router,
         proxy_diagnostics,
         academic,
+        wechat,
+        zhihu,
     }))
 }
 
@@ -137,6 +143,25 @@ fn fallback_source_provider(
             key,
             config.max_response_bytes,
         )) as Arc<dyn SourceProvider>
+    })
+}
+
+fn wechat_provider(config: &Config, http: &reqwest::Client) -> Option<Arc<dyn WechatProvider>> {
+    Some(Arc::new(WechatSearchProvider::with_client_and_limit(
+        http.clone(),
+        config.max_response_bytes,
+    )) as Arc<dyn WechatProvider>)
+}
+
+fn zhihu_provider(config: &Config, http: &reqwest::Client) -> Option<Arc<dyn ZhihuProvider>> {
+    config.zhihu_api_key.clone().map(|key| {
+        Arc::new(ZhihuSearchProvider::with_client_base_url_and_limit(
+            http.clone(),
+            key,
+            config.zhihu_openapi_base_url.clone(),
+            config.zhihu_search_url.clone(),
+            config.max_response_bytes,
+        )) as Arc<dyn ZhihuProvider>
     })
 }
 

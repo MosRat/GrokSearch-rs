@@ -194,6 +194,7 @@ grok_api_key = "xai-from-file"
 grok_model   = "grok-5-test"
 tavily_api_key = "tvly-from-file"
 openalex_api_key = "oa-file-a,oa-file-b"
+zhihu_api_key = "zhihu-from-file"
 default_extra_sources = 7
 timeout_seconds = 42
 proxy = "http://file-user:file-pass@127.0.0.1:7890"
@@ -207,6 +208,7 @@ proxy = "http://file-user:file-pass@127.0.0.1:7890"
     assert_eq!(cfg.grok_model, "grok-5-test");
     assert_eq!(cfg.tavily_api_key.as_deref(), Some("tvly-from-file"));
     assert_eq!(cfg.openalex_api_key.as_deref(), Some("oa-file-a,oa-file-b"));
+    assert_eq!(cfg.zhihu_api_key.as_deref(), Some("zhihu-from-file"));
     assert_eq!(cfg.default_extra_sources, 7);
     assert_eq!(cfg.timeout.as_secs(), 42);
     assert_eq!(cfg.proxy, "http://file-user:file-pass@127.0.0.1:7890");
@@ -237,6 +239,26 @@ default_extra_sources = 7
     assert_eq!(cfg.default_extra_sources, 2);
     assert_eq!(cfg.grok_api_key.as_deref(), Some("grok-env-key"));
     assert_eq!(cfg.proxy, "off");
+}
+
+#[test]
+fn zhihu_access_secret_and_api_key_env_override_config_file() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    fs::write(&path, r#"zhihu_api_key = "zhihu-from-file""#).unwrap();
+
+    let cfg = Config::load_from([
+        ("GROK_SEARCH_CONFIG", path.to_string_lossy().to_string()),
+        ("ZHIHU_API_KEY", "zhihu-from-env".into()),
+    ]);
+    assert_eq!(cfg.zhihu_api_key.as_deref(), Some("zhihu-from-env"));
+
+    let cfg = Config::load_from([
+        ("GROK_SEARCH_CONFIG", path.to_string_lossy().to_string()),
+        ("ZHIHU_API_KEY", "zhihu-from-env".into()),
+        ("ZHIHU_ACCESS_SECRET", "zhihu-access-secret".into()),
+    ]);
+    assert_eq!(cfg.zhihu_api_key.as_deref(), Some("zhihu-access-secret"));
 }
 
 #[test]
@@ -280,6 +302,9 @@ firecrawl_enabled     = false
 academic_email        = "person@example.com"
 semantic_scholar_api_key = "s2-full"
 openalex_api_key      = "oa-full-a,oa-full-b"
+zhihu_api_key         = "zhihu-full"
+zhihu_openapi_base_url = "https://developer.zhihu.example"
+zhihu_search_url      = "https://gateway.example/zhihu_search"
 default_extra_sources = 4
 fallback_sources      = 9
 fetch_max_chars       = 12345
@@ -313,6 +338,15 @@ max_response_bytes    = 2097152
     assert_eq!(cfg.academic_email.as_deref(), Some("person@example.com"));
     assert_eq!(cfg.semantic_scholar_api_key.as_deref(), Some("s2-full"));
     assert_eq!(cfg.openalex_api_key.as_deref(), Some("oa-full-a,oa-full-b"));
+    assert_eq!(cfg.zhihu_api_key.as_deref(), Some("zhihu-full"));
+    assert_eq!(
+        cfg.zhihu_openapi_base_url,
+        "https://developer.zhihu.example"
+    );
+    assert_eq!(
+        cfg.zhihu_search_url.as_deref(),
+        Some("https://gateway.example/zhihu_search")
+    );
     assert_eq!(cfg.default_extra_sources, 4);
     assert_eq!(cfg.fallback_sources, 9);
     assert_eq!(cfg.fetch_max_chars, Some(12345));

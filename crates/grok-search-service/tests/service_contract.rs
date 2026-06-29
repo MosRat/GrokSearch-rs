@@ -1,10 +1,15 @@
 use async_trait::async_trait;
-use grok_search_service::{AiProvider, SearchService, SourceProvider};
+use grok_search_service::{
+    AiProvider, SearchService, SourceProvider, WechatProvider, ZhihuProvider,
+};
 use grok_search_source_core::{SourceCaps, SourceExtractor, SourceRouter, SourceType};
 use grok_search_types::model::search::{SearchFilters, SearchRequest, SearchResponse};
 use grok_search_types::model::source::Source;
 use grok_search_types::model::tool::WebSearchInput;
-use grok_search_types::{GrokSearchError, Result};
+use grok_search_types::{
+    GrokSearchError, Result, WechatArticle, WechatArticleQuality, WechatSearchInput,
+    WechatSearchOutput, ZhihuSearchInput, ZhihuSearchItem, ZhihuSearchOutput,
+};
 use reqwest::Client;
 use std::sync::{Arc, Mutex};
 use url::Url;
@@ -40,6 +45,128 @@ async fn web_search_returns_content_and_caches_sources() {
         .await
         .expect("sources");
     assert_eq!(sources.sources_count, output.sources_count);
+}
+
+struct FakeWechatProvider;
+
+#[async_trait]
+impl WechatProvider for FakeWechatProvider {
+    async fn search(&self, input: WechatSearchInput) -> Result<WechatSearchOutput> {
+        Ok(WechatSearchOutput {
+            query: input.query,
+            account: input.account,
+            articles_count: 1,
+            articles: vec![WechatArticle {
+                title: "OpenAI article".to_string(),
+                snippet: "snippet".to_string(),
+                source: "机器之心".to_string(),
+                published_date: "2026-06-29 00:00:00".to_string(),
+                url: Some("https://mp.weixin.qq.com/s?__biz=x".to_string()),
+                sogou_url: "https://weixin.sogou.com/link?url=x".to_string(),
+                content: Some("content".to_string()),
+                content_original_length: Some(7),
+                content_truncated: false,
+                quality: WechatArticleQuality {
+                    source_match: true,
+                    url_resolved: true,
+                    content_fetched: true,
+                    warnings: Vec::new(),
+                },
+            }],
+            warnings: Vec::new(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn wechat_search_calls_provider_and_returns_shape() {
+    let service = SearchService::fake_with_wechat(Arc::new(FakeWechatProvider));
+
+    let output = service
+        .wechat_search(WechatSearchInput {
+            query: "OpenAI".to_string(),
+            account: Some("机器之心".to_string()),
+            max_results: Some(1),
+            pages: Some(1),
+            include_content: Some(true),
+            max_content_chars: Some(100),
+        })
+        .await
+        .expect("wechat search");
+
+    assert_eq!(output.query, "OpenAI");
+    assert_eq!(output.account.as_deref(), Some("机器之心"));
+    assert_eq!(output.articles_count, 1);
+    assert!(output.articles[0].quality.content_fetched);
+}
+
+#[tokio::test]
+async fn wechat_search_requires_provider() {
+    let service = SearchService::fake_with_sources();
+    let err = service
+        .wechat_search(WechatSearchInput {
+            query: "OpenAI".to_string(),
+            ..Default::default()
+        })
+        .await
+        .expect_err("missing wechat provider should fail");
+
+    assert!(matches!(err, GrokSearchError::MissingConfig(_)));
+}
+
+struct FakeZhihuProvider;
+
+#[async_trait]
+impl ZhihuProvider for FakeZhihuProvider {
+    async fn search(&self, input: ZhihuSearchInput) -> Result<ZhihuSearchOutput> {
+        Ok(ZhihuSearchOutput {
+            query: input.query,
+            code: 0,
+            message: "success".to_string(),
+            item_count: 1,
+            items: vec![ZhihuSearchItem {
+                title: "OpenAI on Zhihu".to_string(),
+                summary: "summary".to_string(),
+                url: "https://www.zhihu.com/question/1/answer/2".to_string(),
+                author_name: "author".to_string(),
+                vote_up_count: 10,
+                comment_count: 2,
+                edit_time: 1710000000,
+            }],
+        })
+    }
+}
+
+#[tokio::test]
+async fn zhihu_search_calls_provider_and_returns_shape() {
+    let service = SearchService::fake_with_zhihu(Arc::new(FakeZhihuProvider));
+
+    let output = service
+        .zhihu_search(ZhihuSearchInput {
+            query: "OpenAI".to_string(),
+            count: Some(5),
+        })
+        .await
+        .expect("zhihu search");
+
+    assert_eq!(output.query, "OpenAI");
+    assert_eq!(output.code, 0);
+    assert_eq!(output.item_count, 1);
+    assert_eq!(output.items[0].author_name, "author");
+}
+
+#[tokio::test]
+async fn zhihu_search_requires_provider() {
+    let service = SearchService::fake_with_sources();
+    let err = service
+        .zhihu_search(ZhihuSearchInput {
+            query: "OpenAI".to_string(),
+            ..Default::default()
+        })
+        .await
+        .expect_err("missing zhihu provider should fail");
+
+    assert!(matches!(err, GrokSearchError::MissingConfig(_)));
 }
 
 #[derive(Default)]

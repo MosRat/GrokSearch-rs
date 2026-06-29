@@ -4,6 +4,35 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.3.0 - 2026-06-29
+
+### Added
+
+- Added dedicated WeChat public-account article search via `wechat_search`,
+  backed by Sogou Weixin recall with resolved `mp.weixin.qq.com` URLs and
+  best-effort article content extraction.
+- Added dedicated Zhihu OpenAPI site search via `zhihu_search`, including
+  `zhihu_api_key` config support and compatible `ZHIHU_ACCESS_SECRET` /
+  `ZHIHU_API_KEY` environment aliases.
+- Added repository metadata lookup for GitHub and Hugging Face repositories,
+  models, and datasets.
+- Added academic PDF parse/download artifact workflows and PDF parser
+  extraction support.
+- Added repo-local GrokSearch skills covering web research, academic
+  literature, social search, repository intelligence, and diagnostics.
+
+### Changed
+
+- Moved MCP tool descriptions and input schemas into embedded JSON specs so
+  agent-facing tool documentation can be updated without editing Rust dispatch
+  code.
+- Refactored configuration into schema-driven modules. A single Rust schema now
+  drives TOML/env mapping, alias precedence, redaction, generated config
+  templates, and generated configuration reference documentation.
+- Split configuration internals into focused model, reader, loader, paths,
+  diagnostics, template, docs, and utility modules while preserving the public
+  config API.
+
 ## 0.2.1 - 2026-06-28
 
 ### Fixed

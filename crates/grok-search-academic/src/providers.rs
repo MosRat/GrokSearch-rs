@@ -4,7 +4,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use grok_search_net::http::{get_json, get_json_limited, get_text, DEFAULT_MAX_RESPONSE_BYTES};
+use grok_search_net::http::{get_json, get_json_limited, DEFAULT_MAX_RESPONSE_BYTES};
 use grok_search_net::key_pool::{is_key_scoped_status, KeyPool};
 use grok_search_parse::{clean_html_title, extract_arxiv_id_from_path, openalex_abstract};
 use grok_search_provider_core::{
@@ -220,7 +220,7 @@ impl SemanticProvider {
             }
         }
         *last_request = Some(Instant::now());
-        wait_for_global_semantic_rate_limit(SEMANTIC_MIN_INTERVAL).await;
+        wait_for_global_provider_rate_limit("semantic-scholar", SEMANTIC_MIN_INTERVAL).await;
     }
 }
 
@@ -233,10 +233,10 @@ fn retry_after_delay(response: &reqwest::Response) -> Option<Duration> {
         .map(Duration::from_secs)
 }
 
-async fn wait_for_global_semantic_rate_limit(min_interval: Duration) {
+async fn wait_for_global_provider_rate_limit(provider: &str, min_interval: Duration) {
     let base = std::env::temp_dir();
-    let stamp_path = base.join("grok-search-rs-semantic-scholar.timestamp");
-    let lock_path = base.join("grok-search-rs-semantic-scholar.lock");
+    let stamp_path = base.join(format!("grok-search-rs-{provider}.timestamp"));
+    let lock_path = base.join(format!("grok-search-rs-{provider}.lock"));
 
     loop {
         match OpenOptions::new()
@@ -245,7 +245,7 @@ async fn wait_for_global_semantic_rate_limit(min_interval: Duration) {
             .open(&lock_path)
         {
             Ok(_lock) => {
-                let _guard = SemanticRateLimitLock { path: lock_path };
+                let _guard = ProviderRateLimitLock { path: lock_path };
                 if let Ok(last) = fs::read_to_string(&stamp_path)
                     .ok()
                     .and_then(|raw| raw.trim().parse::<u128>().ok())
@@ -283,14 +283,66 @@ fn unix_millis() -> u128 {
         .as_millis()
 }
 
-struct SemanticRateLimitLock {
+struct ProviderRateLimitLock {
     path: std::path::PathBuf,
 }
 
-impl Drop for SemanticRateLimitLock {
+impl Drop for ProviderRateLimitLock {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
+}
+
+struct GetBytesFailure {
+    status: Option<u16>,
+    retry_after: Option<Duration>,
+    error: GrokSearchError,
+}
+
+async fn get_bytes_with_status(
+    client: &reqwest::Client,
+    url: &str,
+    label: &str,
+    max_response_bytes: usize,
+) -> std::result::Result<Vec<u8>, GetBytesFailure> {
+    let response = client
+        .get(url)
+        .header(USER_AGENT, UA)
+        .send()
+        .await
+        .map_err(|err| GetBytesFailure {
+            status: None,
+            retry_after: None,
+            error: if err.is_timeout() {
+                GrokSearchError::Timeout(format!("{label} GET timed out: {err}"))
+            } else {
+                GrokSearchError::Upstream(format!("{label} GET failed: {err}"))
+            },
+        })?;
+    let status = response.status();
+    let retry_after = retry_after_delay(&response);
+    let bytes = read_response_bytes_limited(response, label, max_response_bytes)
+        .await
+        .map_err(|error| GetBytesFailure {
+            status: None,
+            retry_after: None,
+            error,
+        })?;
+    if !status.is_success() {
+        return Err(GetBytesFailure {
+            status: Some(status.as_u16()),
+            retry_after,
+            error: GrokSearchError::Upstream(format!(
+                "{label} returned HTTP {status}: {}",
+                String::from_utf8_lossy(&bytes)
+            )),
+        });
+    }
+    Ok(bytes)
+}
+
+fn retry_delay(retry_after: Option<Duration>, fallback: Duration) -> Duration {
+    retry_after.unwrap_or(fallback)
 }
 
 #[async_trait]
@@ -521,6 +573,40 @@ impl ArxivProvider {
     pub(crate) fn new(client: reqwest::Client) -> Self {
         Self { client }
     }
+
+    async fn get_text_with_rate_limit(&self, url: &str) -> Result<String> {
+        self.get_text_with_rate_limit_interval(url, ARXIV_MIN_INTERVAL)
+            .await
+    }
+
+    async fn get_text_with_rate_limit_interval(
+        &self,
+        url: &str,
+        min_interval: Duration,
+    ) -> Result<String> {
+        let mut last_rate_limit = None;
+        for attempt in 0..=ARXIV_MAX_RETRIES {
+            wait_for_global_provider_rate_limit("arxiv", min_interval).await;
+            match get_bytes_with_status(&self.client, url, "arxiv", DEFAULT_MAX_RESPONSE_BYTES)
+                .await
+            {
+                Ok(bytes) => return Ok(String::from_utf8_lossy(&bytes).into_owned()),
+                Err(failure) if failure.status == Some(429) && attempt < ARXIV_MAX_RETRIES => {
+                    last_rate_limit = Some(failure.error.to_string());
+                    tokio::time::sleep(retry_delay(
+                        failure.retry_after,
+                        Duration::from_secs(3 * (attempt as u64 + 1)),
+                    ))
+                    .await;
+                }
+                Err(failure) => return Err(failure.error),
+            }
+        }
+        Err(GrokSearchError::Upstream(format!(
+            "arxiv returned HTTP 429 after retries: {}",
+            last_rate_limit.unwrap_or_else(|| "rate limited".to_string())
+        )))
+    }
 }
 
 #[async_trait]
@@ -541,7 +627,7 @@ impl AcademicProvider for ArxivProvider {
             .append_pair("max_results", &limit.to_string())
             .append_pair("sortBy", arxiv_sort_by(input.sort_by.as_deref()))
             .append_pair("sortOrder", "descending");
-        let xml = get_text(&self.client, url.as_str(), &[(USER_AGENT, UA)], "arxiv").await?;
+        let xml = self.get_text_with_rate_limit(url.as_str()).await?;
         parse_arxiv_atom(&xml)
     }
 
@@ -551,7 +637,7 @@ impl AcademicProvider for ArxivProvider {
         };
         let mut url = Url::parse("https://export.arxiv.org/api/query").unwrap();
         url.query_pairs_mut().append_pair("id_list", id);
-        let xml = get_text(&self.client, url.as_str(), &[(USER_AGENT, UA)], "arxiv").await?;
+        let xml = self.get_text_with_rate_limit(url.as_str()).await?;
         Ok(parse_arxiv_atom(&xml)?.into_iter().next())
     }
 
@@ -604,6 +690,10 @@ const ARXIV_QUERY_STOPWORDS: &[&str] = &[
     "a", "all", "an", "and", "are", "for", "from", "how", "into", "is", "not", "of", "on", "or",
     "the", "this", "to", "with", "you",
 ];
+
+const ARXIV_MIN_INTERVAL: Duration = Duration::from_secs(3);
+const ARXIV_MAX_RETRIES: usize = 2;
+const OPENALEX_TRANSIENT_MAX_RETRIES: usize = 2;
 
 pub(crate) fn arxiv_sort_by(sort_by: Option<&str>) -> &'static str {
     if sort_is(sort_by, "date") {
@@ -747,6 +837,7 @@ pub(crate) fn parse_arxiv_atom(xml: &str) -> Result<Vec<AcademicPaper>> {
 
 struct GetJsonFailure {
     status: Option<u16>,
+    retry_after: Option<Duration>,
     error: GrokSearchError,
 }
 
@@ -763,6 +854,7 @@ async fn get_json_with_status(
         .await
         .map_err(|err| GetJsonFailure {
             status: None,
+            retry_after: None,
             error: if err.is_timeout() {
                 GrokSearchError::Timeout(format!("{label} GET timed out: {err}"))
             } else {
@@ -770,15 +862,18 @@ async fn get_json_with_status(
             },
         })?;
     let status = response.status();
+    let retry_after = retry_after_delay(&response);
     let bytes = read_response_bytes_limited(response, label, max_response_bytes)
         .await
         .map_err(|error| GetJsonFailure {
             status: None,
+            retry_after: None,
             error,
         })?;
     if !status.is_success() {
         return Err(GetJsonFailure {
             status: Some(status.as_u16()),
+            retry_after,
             error: GrokSearchError::Upstream(format!(
                 "{label} returned HTTP {status}: {}",
                 String::from_utf8_lossy(&bytes)
@@ -787,6 +882,7 @@ async fn get_json_with_status(
     }
     serde_json::from_slice(&bytes).map_err(|err| GetJsonFailure {
         status: None,
+        retry_after: None,
         error: GrokSearchError::Parse(format!("invalid {label} JSON: {err}")),
     })
 }
@@ -859,23 +955,14 @@ impl OpenAlexProvider {
 
     async fn get_json(&self, base_url: &Url, label: &str) -> Result<Value> {
         let Some(keys) = &self.keys else {
-            return get_json_limited(
-                &self.client,
-                base_url.as_str(),
-                &[(USER_AGENT, UA)],
-                label,
-                self.max_response_bytes,
-            )
-            .await;
+            return self.get_json_with_transient_retries(base_url, label).await;
         };
         let start = keys.start();
         let mut last_key_error = None;
         for offset in 0..keys.len() {
             let mut url = base_url.clone();
             self.add_key(&mut url, start + offset);
-            match get_json_with_status(&self.client, url.as_str(), label, self.max_response_bytes)
-                .await
-            {
+            match self.get_json_with_key_retries(&url, label).await {
                 Ok(value) => return Ok(value),
                 Err(failure) => {
                     if failure.status.is_some_and(is_key_scoped_status) && offset + 1 < keys.len() {
@@ -889,6 +976,56 @@ impl OpenAlexProvider {
         Err(last_key_error.unwrap_or_else(|| {
             GrokSearchError::Config(format!("{label} request failed with no configured key"))
         }))
+    }
+
+    async fn get_json_with_transient_retries(&self, url: &Url, label: &str) -> Result<Value> {
+        for attempt in 0..=OPENALEX_TRANSIENT_MAX_RETRIES {
+            match get_json_with_status(&self.client, url.as_str(), label, self.max_response_bytes)
+                .await
+            {
+                Ok(value) => return Ok(value),
+                Err(failure)
+                    if failure.status.is_some_and(is_transient_gateway_status)
+                        && attempt < OPENALEX_TRANSIENT_MAX_RETRIES =>
+                {
+                    tokio::time::sleep(retry_delay(
+                        failure.retry_after,
+                        openalex_transient_delay(attempt),
+                    ))
+                    .await;
+                }
+                Err(failure) => return Err(failure.error),
+            }
+        }
+        Err(GrokSearchError::Upstream(format!(
+            "{label} transient gateway failure after retries"
+        )))
+    }
+
+    async fn get_json_with_key_retries(
+        &self,
+        url: &Url,
+        label: &str,
+    ) -> std::result::Result<Value, GetJsonFailure> {
+        for attempt in 0..=OPENALEX_TRANSIENT_MAX_RETRIES {
+            match get_json_with_status(&self.client, url.as_str(), label, self.max_response_bytes)
+                .await
+            {
+                Ok(value) => return Ok(value),
+                Err(failure)
+                    if failure.status.is_some_and(is_transient_gateway_status)
+                        && attempt < OPENALEX_TRANSIENT_MAX_RETRIES =>
+                {
+                    tokio::time::sleep(retry_delay(
+                        failure.retry_after,
+                        openalex_transient_delay(attempt),
+                    ))
+                    .await;
+                }
+                Err(failure) => return Err(failure),
+            }
+        }
+        unreachable!("OpenAlex transient retry loop always returns from match arms")
     }
 }
 
@@ -910,7 +1047,7 @@ impl AcademicProvider for OpenAlexProvider {
         if let Some(filter) = openalex_filter(input) {
             url.query_pairs_mut().append_pair("filter", &filter);
         }
-        if let Some(sort) = openalex_sort(input.sort_by.as_deref()) {
+        if let Some(sort) = openalex_sort(input) {
             url.query_pairs_mut().append_pair("sort", sort);
         }
         self.add_mailto(&mut url);
@@ -1019,13 +1156,26 @@ pub(crate) fn openalex_filter(input: &AcademicSearchInput) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(","))
 }
 
-pub(crate) fn openalex_sort(sort_by: Option<&str>) -> Option<&'static str> {
-    if sort_is(sort_by, "citations") {
+pub(crate) fn openalex_sort(input: &AcademicSearchInput) -> Option<&'static str> {
+    if sort_is(input.sort_by.as_deref(), "citations") {
         Some("cited_by_count:desc")
-    } else if sort_is(sort_by, "date") {
+    } else if sort_is(input.sort_by.as_deref(), "date")
+        && (input.year_from.is_some() || input.year_to.is_some())
+    {
         Some("publication_date:desc")
     } else {
         None
+    }
+}
+
+fn is_transient_gateway_status(status: u16) -> bool {
+    matches!(status, 502..=504)
+}
+
+fn openalex_transient_delay(attempt: usize) -> Duration {
+    match attempt {
+        0 => Duration::from_secs(1),
+        _ => Duration::from_secs(3),
     }
 }
 
@@ -1339,8 +1489,89 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration as StdDuration;
+
+    const ARXIV_OK_BODY: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.00001v1</id>
+    <title>Test Paper</title>
+    <summary>Test summary</summary>
+    <published>2024-01-01T00:00:00Z</published>
+    <author><name>Ada Lovelace</name></author>
+    <link href="http://arxiv.org/pdf/2401.00001v1" type="application/pdf"/>
+  </entry>
+</feed>"#;
+
+    const OPENALEX_OK_BODY: &str = r#"{"id":"https://openalex.org/W1","title":"Test Work","results":[{"id":"https://openalex.org/W1","title":"Test Work"}]}"#;
+
+    struct MockResponse {
+        status: u16,
+        body: &'static str,
+        headers: Vec<(&'static str, &'static str)>,
+    }
+
+    fn spawn_mock_server(responses: Vec<MockResponse>) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let request_log = Arc::clone(&requests);
+        thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let mut buf = [0u8; 4096];
+                let read = stream.read(&mut buf).expect("read request");
+                request_log
+                    .lock()
+                    .expect("request log")
+                    .push(String::from_utf8_lossy(&buf[..read]).into_owned());
+                let reason = match response.status {
+                    200 => "OK",
+                    429 => "Too Many Requests",
+                    502 => "Bad Gateway",
+                    503 => "Service Unavailable",
+                    504 => "Gateway Timeout",
+                    _ => "Status",
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+                    response.status,
+                    reason,
+                    response.body.len()
+                )
+                .expect("write status");
+                for (name, value) in response.headers {
+                    write!(stream, "{name}: {value}\r\n").expect("write header");
+                }
+                write!(stream, "\r\n{}", response.body).expect("write body");
+                stream.flush().expect("flush response");
+            }
+        });
+        (base, requests)
+    }
+
+    fn response(status: u16, body: &'static str) -> MockResponse {
+        MockResponse {
+            status,
+            body,
+            headers: Vec::new(),
+        }
+    }
+
+    fn response_with_headers(
+        status: u16,
+        body: &'static str,
+        headers: Vec<(&'static str, &'static str)>,
+    ) -> MockResponse {
+        MockResponse {
+            status,
+            body,
+            headers,
+        }
+    }
 
     #[test]
     fn openalex_adds_rotated_api_key_query_parameter() {
@@ -1406,11 +1637,28 @@ mod tests {
         assert_eq!(semantic_sort(Some("relevance")), None);
         assert_eq!(arxiv_sort_by(Some("date")), "submittedDate");
         assert_eq!(arxiv_sort_by(Some("citations")), "relevance");
+        let openalex_citations = AcademicSearchInput {
+            sort_by: Some("citations".to_string()),
+            ..Default::default()
+        };
         assert_eq!(
-            openalex_sort(Some("citations")),
+            openalex_sort(&openalex_citations),
             Some("cited_by_count:desc")
         );
-        assert_eq!(openalex_sort(Some("date")), Some("publication_date:desc"));
+        let openalex_broad_date = AcademicSearchInput {
+            sort_by: Some("date".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(openalex_sort(&openalex_broad_date), None);
+        let openalex_filtered_date = AcademicSearchInput {
+            sort_by: Some("date".to_string()),
+            year_from: Some(2024),
+            ..Default::default()
+        };
+        assert_eq!(
+            openalex_sort(&openalex_filtered_date),
+            Some("publication_date:desc")
+        );
         assert_eq!(
             crossref_sort(Some("citations")),
             Some(("is-referenced-by-count", "desc"))
@@ -1465,6 +1713,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn arxiv_429_retries_and_returns_xml() {
+        let (base, requests) = spawn_mock_server(vec![
+            response_with_headers(429, "rate limited", vec![("Retry-After", "0")]),
+            response(200, ARXIV_OK_BODY),
+        ]);
+        let provider = ArxivProvider::new(reqwest::Client::builder().build().unwrap());
+        let papers = provider
+            .get_text_with_rate_limit_interval(
+                &format!("{base}/api/query?id_list=2401.00001"),
+                Duration::ZERO,
+            )
+            .await
+            .and_then(|xml| parse_arxiv_atom(&xml))
+            .expect("arxiv retry should succeed");
+
+        assert_eq!(papers.len(), 1);
+        assert_eq!(papers[0].arxiv_id.as_deref(), Some("2401.00001v1"));
+        assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn arxiv_429_after_retries_keeps_status_in_error() {
+        let (base, requests) = spawn_mock_server(vec![
+            response_with_headers(429, "rate limited", vec![("Retry-After", "0")]),
+            response_with_headers(429, "still limited", vec![("Retry-After", "0")]),
+            response_with_headers(429, "still limited", vec![("Retry-After", "0")]),
+        ]);
+        let provider = ArxivProvider::new(reqwest::Client::builder().build().unwrap());
+        let err = provider
+            .get_text_with_rate_limit_interval(
+                &format!("{base}/api/query?id_list=2401.00001"),
+                Duration::ZERO,
+            )
+            .await
+            .expect_err("429 should remain visible after retries");
+
+        assert!(err.to_string().contains("HTTP 429"), "{err}");
+        assert_eq!(requests.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn openalex_504_retries_without_key_rotation() {
+        let (base, requests) = spawn_mock_server(vec![
+            response(504, r#"{"error":"Gateway timeout"}"#),
+            response(200, OPENALEX_OK_BODY),
+        ]);
+        let provider = OpenAlexProvider::new_with_limit(
+            reqwest::Client::new(),
+            None,
+            Some("oa-a,oa-b".to_string()),
+            DEFAULT_MAX_RESPONSE_BYTES,
+        );
+        let url = Url::parse(&format!("{base}/works/W1")).unwrap();
+        let value = provider.get_json(&url, "openalex").await.unwrap();
+
+        assert_eq!(value["id"], "https://openalex.org/W1");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.contains("api_key=oa-a")),
+            "{requests:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn openalex_429_with_keys_rotates_without_transient_retry() {
+        let (base, requests) = spawn_mock_server(vec![
+            response(429, r#"{"error":"rate limited"}"#),
+            response(200, OPENALEX_OK_BODY),
+        ]);
+        let provider = OpenAlexProvider::new_with_limit(
+            reqwest::Client::new(),
+            None,
+            Some("oa-a,oa-b".to_string()),
+            DEFAULT_MAX_RESPONSE_BYTES,
+        );
+        let url = Url::parse(&format!("{base}/works/W1")).unwrap();
+        let value = provider.get_json(&url, "openalex").await.unwrap();
+
+        assert_eq!(value["id"], "https://openalex.org/W1");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].contains("api_key=oa-a"), "{requests:?}");
+        assert!(requests[1].contains("api_key=oa-b"), "{requests:?}");
+    }
+
+    #[tokio::test]
     async fn semantic_request_sends_api_key_header() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
         let url = format!("http://{}/paper", listener.local_addr().unwrap());
@@ -1505,6 +1842,18 @@ mod tests {
         assert!(
             start.elapsed() >= StdDuration::from_millis(1000),
             "second S2 request should be delayed below the 1 rps threshold"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_rate_limit_serializes_consecutive_requests() {
+        let provider = format!("test-provider-{}", unix_millis());
+        let start = Instant::now();
+        wait_for_global_provider_rate_limit(&provider, Duration::from_millis(80)).await;
+        wait_for_global_provider_rate_limit(&provider, Duration::from_millis(80)).await;
+        assert!(
+            start.elapsed() >= StdDuration::from_millis(70),
+            "second provider request should be delayed by the global limiter"
         );
     }
 }

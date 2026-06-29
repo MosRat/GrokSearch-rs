@@ -1,0 +1,379 @@
+{
+  "tools": [
+    {
+      "name": "web_search",
+      "description": "Use for discovery when you don't have a specific URL and need to find information, debug an error, research a topic, or track down an issue or news item. Returns an AI-synthesised answer plus a source list. By default the first few sources carry inline content (max_inline_sources, default 5); the rest are metadata-only. Drill into any source with web_fetch(url). The whole response is capped by a character budget; when truncated=true, trimmed sources carry a note telling you how to recover the full text via web_fetch or get_sources. Pass response_format=concise for answer plus source metadata only. If you already know the exact page URL, use web_fetch instead.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string" },
+          "platform": { "type": "string" },
+          "model": { "type": "string" },
+          "extra_sources": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional supplemental source count. Tavily is primary; Firecrawl is fallback. If omitted, GROK_SEARCH_EXTRA_SOURCES is used."
+          },
+          "recency_days": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Restrict supplemental results to sources published within the last N days. Forwarded to Tavily as days+topic=news; also hinted to Grok prompt."
+          },
+          "include_domains": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Only return supplemental results from these domains. Tavily honors strictly; Grok receives as soft preference."
+          },
+          "exclude_domains": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Suppress supplemental results from these domains. Tavily honors strictly; Grok receives as soft instruction."
+          },
+          "include_content": {
+            "type": "boolean",
+            "default": true,
+            "description": "Inline source content via the resolve_content pipeline. Default true. Pass false to get summary plus source-list only. Superseded by response_format when both are set."
+          },
+          "response_format": {
+            "type": "string",
+            "enum": ["concise", "detailed"],
+            "description": "concise = synthesized answer plus source metadata only; detailed = inline source content, subject to the response budget. Takes precedence over include_content."
+          }
+        }
+      }
+    },
+    {
+      "name": "get_sources",
+      "description": "Return cached sources from a previous web_search call by session_id. Use to re-examine sources already retrieved without issuing a new search. Paginate with offset/limit: the response reports total_sources and, when more pages remain, next_offset to pass as the next offset.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["session_id"],
+        "properties": {
+          "session_id": { "type": "string" },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0,
+            "description": "Index of the first source to return. Use next_offset from the previous page to continue."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Max sources in this page. Omit to return all remaining sources, still subject to the response budget."
+          }
+        }
+      }
+    },
+    {
+      "name": "web_fetch",
+      "description": "Use when you already have a specific URL and want to read a single page in depth. GitHub issue/PR, StackOverflow (StackExchange), arXiv, and Wikipedia URLs are automatically parsed into structured, de-noised Markdown ready to feed an LLM; all other pages fall back to generic extraction. Returns {url, content, original_length, truncated, source_type, fallback_reason?}. If you do not have a URL yet and need to discover sources, use web_search instead.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string" },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional character cap on returned content. Falls back to GROK_SEARCH_FETCH_MAX_CHARS, otherwise unlimited."
+          }
+        }
+      }
+    },
+    {
+      "name": "web_map",
+      "description": "Map/discover URLs through Tavily Map.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string" },
+          "max_results": { "type": "integer", "minimum": 1, "maximum": 50 }
+        }
+      }
+    },
+    {
+      "name": "wechat_search",
+      "description": "Search WeChat public-account articles via Sogou Weixin. Returns article metadata, resolved mp.weixin.qq.com URLs when available, and article content by default. Query is ordinary keyword recall; account/source filtering is applied locally with the account parameter rather than relying on unsupported field syntax.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Plain keyword query for Sogou Weixin recall. Boolean operators and field syntax are not guaranteed by the upstream."
+          },
+          "account": {
+            "type": "string",
+            "description": "Optional exact public-account/source filter, for example 机器之心, Datawhale, or 量子位."
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 10
+          },
+          "pages": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 1,
+            "description": "Sogou result pages to scan before local filtering and de-duplication."
+          },
+          "include_content": {
+            "type": "boolean",
+            "default": true,
+            "description": "Fetch and extract each resolved WeChat article body when possible. Failures are reported per article without failing the search."
+          },
+          "max_content_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional per-article content cap. Defaults to GROK_SEARCH_FETCH_MAX_CHARS, then GROK_SEARCH_ENRICH_MAX_CHARS."
+          }
+        }
+      }
+    },
+    {
+      "name": "zhihu_search",
+      "description": "Search Zhihu site content through Zhihu OpenAPI. Returns normalized metadata only: title, URL, author, summary, vote count, comment count, and edit time. Does not fetch full Zhihu page content.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Plain keyword query for Zhihu OpenAPI search."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 10,
+            "description": "Maximum number of Zhihu items to return."
+          }
+        }
+      }
+    },
+    {
+      "name": "doctor",
+      "description": "Diagnostic probe: live connectivity check for Grok, Tavily, and Firecrawl backends, plus masked configuration. Use to verify the server is wired up and reachable.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "verbose": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include detailed limits, logging status, provider wiring, and URL policy diagnostics."
+          }
+        }
+      }
+    },
+    {
+      "name": "repo_metadata",
+      "description": "Fetch structured metadata for a GitHub repository or a Hugging Face model/dataset. Defaults to metadata only; pass include_readme for GitHub README text or include_card for Hugging Face model/dataset card text. This tool does not crawl commits, issues, files, releases, Spaces, or external links.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Repository URL. Supports https://github.com/{owner}/{repo}, https://huggingface.co/{repo_id}, and https://huggingface.co/datasets/{repo_id}."
+          },
+          "provider": {
+            "type": "string",
+            "enum": ["github", "huggingface"],
+            "description": "Provider to use when url is omitted."
+          },
+          "repo_id": {
+            "type": "string",
+            "description": "Full provider repo id when url is omitted, for example owner/repo or bert-base-uncased."
+          },
+          "owner": {
+            "type": "string",
+            "description": "Repository owner or Hugging Face namespace when using owner plus name input."
+          },
+          "name": {
+            "type": "string",
+            "description": "Repository name when using owner plus name input."
+          },
+          "repo_type": {
+            "type": "string",
+            "enum": ["model", "dataset"],
+            "description": "Hugging Face repo type when url does not make it obvious. Defaults to model."
+          },
+          "include_readme": {
+            "type": "boolean",
+            "default": false,
+            "description": "For GitHub, fetch README text when available."
+          },
+          "include_card": {
+            "type": "boolean",
+            "default": false,
+            "description": "For Hugging Face, fetch model or dataset card text when available."
+          },
+          "max_text_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional character cap for README/card text. Falls back to GROK_SEARCH_FETCH_MAX_CHARS."
+          }
+        }
+      }
+    },
+    {
+      "name": "academic_search",
+      "description": "Search computer-science academic literature across dblp, Semantic Scholar, arXiv, OpenAlex, and Crossref. Results are deduplicated by DOI/arXiv/title and ranked with reciprocal rank fusion; OpenAlex/Crossref/Semantic metadata is used to enrich papers when available.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string" },
+          "sources": {
+            "type": "array",
+            "items": { "type": "string", "enum": ["dblp", "semantic", "arxiv", "openalex", "crossref"] },
+            "description": "Selected sources. Defaults depend on search_mode; balanced uses dblp, Semantic Scholar, and arXiv as primary sources and enriches from OpenAlex/Crossref when possible."
+          },
+          "search_mode": {
+            "type": "string",
+            "enum": ["balanced", "broad", "precise"],
+            "default": "balanced",
+            "description": "balanced = stable CS discovery with metadata enrichment; broad = include all providers for maximum recall; precise = stricter title/query matching for known-paper lookups."
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": ["relevance", "citations", "date"],
+            "default": "relevance",
+            "description": "Final ranking preference. relevance keeps query match first, citations boosts highly cited relevant papers, date boosts recent relevant papers. Provider APIs use matching native sort parameters when available."
+          },
+          "max_results": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 },
+          "year_from": { "type": "integer", "minimum": 1 },
+          "year_to": { "type": "integer", "minimum": 1 },
+          "open_access_only": { "type": "boolean" },
+          "include_abstract": { "type": "boolean", "default": true },
+          "include_citations": { "type": "boolean", "default": false },
+          "extract_material_links": {
+            "type": "boolean",
+            "default": false,
+            "description": "Attach detected code, dataset, model, demo, project, and documentation links from paper metadata without fetching those URLs."
+          }
+        }
+      }
+    },
+    {
+      "name": "academic_get",
+      "description": "Resolve one academic paper by DOI, arXiv ID/URL, Semantic Scholar paperId, OpenAlex ID/URL, dblp URL/key, or title-like query. Returns normalized metadata and optionally citation/open-access enrichment.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["identifier"],
+        "properties": {
+          "identifier": { "type": "string" },
+          "include_citations": { "type": "boolean", "default": false },
+          "include_open_access": { "type": "boolean", "default": true },
+          "extract_material_links": {
+            "type": "boolean",
+            "default": false,
+            "description": "Attach detected code, dataset, model, demo, project, and documentation links from resolved paper metadata without fetching those URLs."
+          }
+        }
+      }
+    },
+    {
+      "name": "academic_citations",
+      "description": "Return a summary of citing and referenced papers for one academic identifier. Uses Semantic Scholar first and OpenAlex as fallback; this is an overview, not a full citation graph crawl.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["identifier"],
+        "properties": {
+          "identifier": { "type": "string" },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 }
+        }
+      }
+    },
+    {
+      "name": "academic_read",
+      "description": "Resolve and read an academic PDF as Markdown or text. Open-access sources are tried first: arXiv, Semantic Scholar, OpenAlex, Unpaywall. Sci-Hub is only considered when explicitly enabled in configuration and remains the last fallback.",
+      "inputSchema": {
+        "type": "object",
+        "$defs": {
+          "AcademicParseOptions": {
+            "type": "object",
+            "properties": {
+              "save_markdown_path": {
+                "type": "string",
+                "description": "Write parsed Markdown/text to this file. Parent directories are created; existing files are rejected."
+              },
+              "images_dir": { "type": "string" },
+              "tables_dir": { "type": "string" },
+              "extract_images": { "type": "boolean", "default": false },
+              "extract_tables": { "type": "boolean", "default": false },
+              "extract_material_links": { "type": "boolean", "default": false }
+            }
+          }
+        },
+        "properties": {
+          "identifier": { "type": "string" },
+          "url": { "type": "string" },
+          "max_chars": { "type": "integer", "minimum": 1 },
+          "output_format": { "type": "string", "enum": ["markdown", "text"], "default": "markdown" },
+          "parse_options": { "$ref": "#/$defs/AcademicParseOptions" }
+        }
+      }
+    },
+    {
+      "name": "academic_parse_pdf",
+      "description": "Resolve an academic PDF and return detailed parse metadata. Can save parsed Markdown to a requested path, prepare requested image/table output directories, report unsupported image/table extraction capabilities, and extract code/dataset/model/project links from metadata and parsed Markdown.",
+      "inputSchema": {
+        "type": "object",
+        "$defs": {
+          "AcademicParseOptions": {
+            "type": "object",
+            "properties": {
+              "save_markdown_path": {
+                "type": "string",
+                "description": "Write parsed Markdown/text to this file. Parent directories are created; existing files are rejected."
+              },
+              "images_dir": {
+                "type": "string",
+                "description": "Directory for future extracted images. Created when supplied; current engine reports unsupported for extraction."
+              },
+              "tables_dir": {
+                "type": "string",
+                "description": "Directory for future extracted tables. Created when supplied; current engine reports unsupported for extraction."
+              },
+              "extract_images": { "type": "boolean", "default": false },
+              "extract_tables": { "type": "boolean", "default": false },
+              "extract_material_links": { "type": "boolean", "default": true }
+            }
+          }
+        },
+        "properties": {
+          "identifier": { "type": "string" },
+          "url": { "type": "string" },
+          "max_chars": { "type": "integer", "minimum": 1 },
+          "output_format": { "type": "string", "enum": ["markdown", "text"], "default": "markdown" },
+          "parse_options": { "$ref": "#/$defs/AcademicParseOptions" }
+        }
+      }
+    },
+    {
+      "name": "academic_download_pdf",
+      "description": "Resolve and download an academic PDF to a local path without parsing it. Reuses the same full-text resolver, institutional access handling, proxy configuration, and PDF byte validation as academic_read/academic_parse_pdf. Existing files are rejected unless overwrite=true.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["output_path"],
+        "properties": {
+          "identifier": { "type": "string" },
+          "url": { "type": "string" },
+          "output_path": {
+            "type": "string",
+            "description": "Target PDF file path. Parent directories are created."
+          },
+          "overwrite": {
+            "type": "boolean",
+            "default": false,
+            "description": "Allow replacing an existing output_path."
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+display_name: GrokSearch Repo Intelligence
+short_description: Use GrokSearch-rs repository metadata for GitHub and Hugging Face.
+default_prompt: Use GrokSearch-rs repo metadata to inspect this GitHub or Hugging Face project.

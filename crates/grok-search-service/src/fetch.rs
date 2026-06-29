@@ -201,7 +201,7 @@ fn apply_fetch_limit(
     }
 }
 
-fn summarize_url(raw: &str) -> serde_json::Value {
+pub(crate) fn summarize_url(raw: &str) -> serde_json::Value {
     match url::Url::parse(raw) {
         Ok(parsed) => serde_json::json!({
             "scheme": parsed.scheme(),

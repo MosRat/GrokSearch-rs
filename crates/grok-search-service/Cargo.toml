@@ -21,6 +21,7 @@ grok-search-config = { path = "../grok-search-config" }
 grok-search-net = { path = "../grok-search-net" }
 grok-search-provider-core = { path = "../grok-search-provider-core" }
 grok-search-source-core = { path = "../grok-search-source-core" }
+grok-search-sources = { path = "../grok-search-sources" }
 grok-search-types = { path = "../grok-search-types" }
 
 [dev-dependencies]

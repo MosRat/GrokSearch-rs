@@ -9,6 +9,7 @@ use grok_search_types::{GrokSearchError, Result};
 
 pub mod arxiv;
 pub mod github;
+pub mod huggingface;
 pub mod stackexchange;
 pub mod wikipedia;
 

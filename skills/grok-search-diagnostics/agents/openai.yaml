@@ -1,0 +1,3 @@
+display_name: GrokSearch Diagnostics
+short_description: Use GrokSearch-rs doctor diagnostics for setup and provider troubleshooting.
+default_prompt: Use GrokSearch-rs doctor diagnostics to troubleshoot this setup or connectivity issue.

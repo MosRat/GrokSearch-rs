@@ -14,7 +14,8 @@ Run `grok-search-rs init` to create the shared config if it is missing and keep 
 - Agent config: only `type = "stdio"` and `command = "grok-search-rs"`; add `GROK_SEARCH_CONFIG` only when you intentionally use a non-default config path.
 
 The same global config is used by both MCP mode and direct CLI tool calls such
-as `grok-search-rs doctor`, `grok-search-rs web-search "query"`, and
+as `grok-search-rs doctor`, `grok-search-rs web-search "query"`,
+`grok-search-rs repo-metadata --url "https://github.com/owner/repo"`, and
 `grok-search-rs academic search "query"`. Direct CLI tool calls print pretty
 JSON by default; pass `--compact` for single-line JSON. Use
 `grok-search-rs doctor --verbose` for detailed limits, logging status,
@@ -104,17 +105,23 @@ Proxy discovery is cross-platform and conservative: environment variables win fi
 
 ## Source extraction
 
-Specialist `web_fetch` extractors (GitHub, StackExchange, arXiv, Wikipedia) and
-`web_search` inline enrichment. The specialists call public APIs directly — no
+Specialist `web_fetch` extractors (GitHub, StackExchange, arXiv, Wikipedia),
+`repo_metadata`, and `web_search` inline enrichment. The specialists call public APIs directly — no
 Tavily/Firecrawl key required.
 
 | Variable | Default | Description |
 |---|---|---|
-| `GITHUB_TOKEN` | unset | GitHub token for issue/PR fetches. If unset, GrokSearch-rs tries `gh auth token`; otherwise anonymous works but is capped at ~60 req/hr. |
+| `GITHUB_TOKEN` | unset | GitHub token for issue/PR/repo metadata fetches. If unset, GrokSearch-rs tries `gh auth token`; otherwise anonymous works but is capped at ~60 req/hr. |
+| `HF_TOKEN` / `HUGGINGFACE_TOKEN` | unset | Optional Hugging Face token for `repo_metadata` model/dataset metadata and card fetches. These are read directly from process env and are not global config fields or doctor probes. |
 | `GROK_SEARCH_SOURCE_MAX_ANSWERS` | `5` | StackExchange answers rendered before the "more answers" fold. |
 | `GROK_SEARCH_SOURCE_MAX_COMMENTS` | `30` | GitHub / StackExchange comments rendered before folding. |
 | `GROK_SEARCH_ENRICH_CONCURRENCY` | `3` | Parallel source enrichments when `web_search` is called with `include_content: true`. Clamped to `1..=5`. |
 | `GROK_SEARCH_ENRICH_MAX_CHARS` | `15000` | Character cap per enriched source body. |
+
+`repo_metadata` supports GitHub repositories and Hugging Face models/datasets.
+It returns metadata only by default. GitHub README text is fetched only with
+`include_readme`; Hugging Face model/dataset card text is fetched only with
+`include_card`. Hugging Face Spaces are intentionally rejected in this version.
 
 ## Response budget
 
@@ -134,16 +141,21 @@ The `academic_*` MCP tools are independent of `web_*` and focus on computer-scie
 
 | Variable | Default | Description |
 |---|---|---|
-| `GROK_SEARCH_ACADEMIC_ENABLED` | `true` | Enables `academic_search`, `academic_get`, `academic_citations`, and `academic_read`. |
+| `GROK_SEARCH_ACADEMIC_ENABLED` | `true` | Enables `academic_search`, `academic_get`, `academic_citations`, `academic_read`, `academic_parse_pdf`, and `academic_download_pdf`. |
 | `GROK_SEARCH_ACADEMIC_EMAIL` | unset | Contact email for Unpaywall and polite OpenAlex/Crossref usage. Unpaywall is skipped when absent. Legacy `UNPAYWALL_EMAIL` is also accepted. |
 | `SEMANTIC_SCHOLAR_API_KEY` | unset | Optional Semantic Scholar key. When unset, anonymous Graph API requests are used. |
+| `OPENALEX_API_KEY` / `GROK_SEARCH_OPENALEX_API_KEY` | unset | Optional OpenAlex key. Recommended for more reliable OpenAlex search, citation, full-text metadata, and enrichment calls. |
 | `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | `false` | Explicit opt-in for Sci-Hub fallback in `academic_read`. It is never used by default. |
 | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` | unset | Sci-Hub base URL, only used when Sci-Hub fallback is enabled. User/password components are redacted in Debug and doctor output. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED` | `true` | Enables IEEE/ACM institutional PDF fallback for `academic_read`; automatically disables itself when no usable route is found. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS` | `false` | Allows invalid TLS certificates only for private/local IEEE/ACM institutional fallback routes. Public routes require HTTPS validation. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE` | `true` | Probes direct and discovered proxy routes for IEEE/ACM access before using the fallback. |
-| `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF bytes downloaded for `academic_read`. |
+| `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF bytes downloaded for `academic_read`, `academic_parse_pdf`, and `academic_download_pdf`. |
 | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for parsed PDF output. Falls back to `GROK_SEARCH_FETCH_MAX_CHARS`, then `200000`. |
+
+`academic_read` accepts optional `parse_options` for detailed parsing, and `academic_parse_pdf` exposes the same options for artifact-focused workflows. Markdown/text extraction can be saved to an explicit file path; missing parent directories are created and existing files are rejected. Image extraction is partial: `extract_images=true` requires `images_dir`, exports filtered bitmap XObjects as PNG files, and writes `images.json`; it does not reconstruct semantic figures or vector graphics. Table extraction is partial: `extract_tables=true` requires `tables_dir`, writes `tables.json` and Markdown snippets for detected tables, and may miss or filter layout-heavy tables. `academic_download_pdf` saves the resolved PDF directly to an explicit file path without parsing it; parent directories are created and existing files are rejected unless `overwrite=true`. Material link extraction is local URL/text classification only and does not fetch GitHub, Hugging Face, dataset, model, demo, or project URLs.
+
+Academic provider calls use conservative built-in stability guards. arXiv API requests are globally spaced by 3 seconds and retry `429` responses. OpenAlex requests retry transient `502`/`503`/`504` gateway failures, and broad `sort_by=date` searches without an explicit year filter avoid OpenAlex's `publication_date:desc` server-side sort to reduce 504 slow-query failures.
 
 ## Config file
 
@@ -198,6 +210,83 @@ Env vars use `UPPER_CASE` because that is the Unix shell tradition (`PATH`, `HOM
 
 Unknown keys are rejected by the loader — typos surface as parse errors instead of silently dropping.
 
+<!-- config-schema:start -->
+### Generated config reference
+
+This section is generated from the Rust config schema in `grok-search-config`. Update the schema first, then refresh this block.
+
+#### Grok Responses
+
+| TOML key | Env aliases | Default | Description |
+|---|---|---|---|
+| `grok_api_url` | `GROK_SEARCH_URL` | https://api.x.ai | Root URL, /v1 base URL, or full endpoint. Normalized to /v1 for Responses calls. |
+| `grok_api_key` | `GROK_SEARCH_API_KEY` | unset | Bearer token for the configured Grok/xAI-compatible Responses gateway. |
+| `grok_auth_mode` | `GROK_SEARCH_AUTH_MODE` | api_key | Authentication mode. Use api_key for static keys or oauth for the local OAuth token file. |
+| `grok_auth_file` | `GROK_SEARCH_AUTH_FILE` | default auth.json next to config.toml | Optional OAuth token file override. |
+| `grok_model` | `GROK_SEARCH_MODEL` | grok-4-1-fast-reasoning | Model sent in the Responses payload. |
+| `web_search_enabled` | `GROK_SEARCH_WEB_SEARCH` | true | Enables the upstream Responses web_search tool. |
+| `x_search_enabled` | `GROK_SEARCH_X_SEARCH` | false | Enables the upstream Responses x_search tool when the gateway supports it. |
+#### Source providers
+
+| TOML key | Env aliases | Default | Description |
+|---|---|---|---|
+| `tavily_api_url` | `TAVILY_API_URL` | https://api.tavily.com | Tavily API base URL. |
+| `tavily_api_key` | `TAVILY_API_KEY` | unset | Tavily key for enrichment, fallback, fetch, and map. |
+| `tavily_enabled` | `TAVILY_ENABLED` | true | Optional Tavily enable override. |
+| `firecrawl_api_url` | `FIRECRAWL_API_URL` | https://api.firecrawl.dev | Firecrawl API base URL. Normalized to /v1. |
+| `firecrawl_api_key` | `FIRECRAWL_API_KEY` | unset | Firecrawl key for fetch fallback and supplemental fallback sources. |
+| `firecrawl_enabled` | `FIRECRAWL_ENABLED` | true | Optional Firecrawl enable override. |
+| `default_extra_sources` | `GROK_SEARCH_EXTRA_SOURCES` | 3 | Adds Tavily enrichment sources after a verifiable Grok result. |
+| `fallback_sources` | `GROK_SEARCH_FALLBACK_SOURCES` | 5 | Number of fallback sources to cache when Grok is unverifiable. |
+#### Runtime limits
+
+| TOML key | Env aliases | Default | Description |
+|---|---|---|---|
+| `fetch_max_chars` | `GROK_SEARCH_FETCH_MAX_CHARS` | unset | Default character cap on web_fetch content. Unset means no truncation. |
+| `cache_size` | `GROK_SEARCH_CACHE_SIZE` | 256 | Maximum cached web_search sessions for get_sources. |
+| `timeout_seconds` | `GROK_SEARCH_TIMEOUT_SECONDS` | 60 | HTTP timeout in seconds for upstream requests. |
+| `proxy` | `GROK_SEARCH_PROXY` | auto | Proxy mode: auto, off, or an explicit proxy URL. |
+| `max_response_bytes` | `GROK_SEARCH_MAX_RESPONSE_BYTES` | 10485760 | Global upstream response body byte cap before parsing or trimming. |
+| `debug_log_path` | `GROK_SEARCH_DEBUG_LOG_PATH` | unset | Optional JSONL debug log path. |
+#### OpenAI-compatible transport
+
+| TOML key | Env aliases | Default | Description |
+|---|---|---|---|
+| `openai_compatible_api_url` | `OPENAI_COMPATIBLE_API_URL` | unset | OpenAI-compatible chat-completions gateway base URL. |
+| `openai_compatible_api_key` | `OPENAI_COMPATIBLE_API_KEY` | unset | OpenAI-compatible gateway bearer token. |
+| `openai_compatible_model` | `OPENAI_COMPATIBLE_MODEL` | falls back to grok_model | OpenAI-compatible model name. |
+#### Source extraction
+
+| TOML key | Env aliases | Default | Description |
+|---|---|---|---|
+| `github_token` | `GITHUB_TOKEN` | unset | GitHub token for issue, PR, and repo metadata fetches. |
+| `source_max_answers` | `GROK_SEARCH_SOURCE_MAX_ANSWERS` | 5 | StackExchange answers rendered before folding. |
+| `source_max_comments` | `GROK_SEARCH_SOURCE_MAX_COMMENTS` | 30 | GitHub and StackExchange comments rendered before folding. |
+| `enrich_concurrency` | `GROK_SEARCH_ENRICH_CONCURRENCY` | 3 | Parallel source enrichments when web_search includes content. |
+| `enrich_max_chars` | `GROK_SEARCH_ENRICH_MAX_CHARS` | 15000 | Character cap per enriched source body. |
+| `max_inline_sources` | `GROK_SEARCH_MAX_INLINE_SOURCES` | 5 | Maximum sources carrying inline content per web_search response. |
+| `response_max_chars` | `GROK_SEARCH_RESPONSE_MAX_CHARS` | 60000 | Whole-response character budget for web_search. |
+#### Academic and social search
+
+| TOML key | Env aliases | Default | Description |
+|---|---|---|---|
+| `academic_enabled` | `GROK_SEARCH_ACADEMIC_ENABLED` | true | Enables the academic_* MCP tools. |
+| `academic_email` | `GROK_SEARCH_ACADEMIC_EMAIL`<br>`UNPAYWALL_EMAIL` | unset | Contact email for Unpaywall and polite academic API usage. |
+| `semantic_scholar_api_key` | `SEMANTIC_SCHOLAR_API_KEY` | unset | Optional Semantic Scholar API key. |
+| `openalex_api_key` | `OPENALEX_API_KEY`<br>`GROK_SEARCH_OPENALEX_API_KEY` | unset | Optional OpenAlex key. Comma-separated lists rotate keys round-robin. |
+| `zhihu_api_key` | `ZHIHU_ACCESS_SECRET`<br>`ZHIHU_API_KEY` | unset | Zhihu OpenAPI Access Secret for zhihu_search. |
+| `zhihu_openapi_base_url` | `ZHIHU_OPENAPI_BASE_URL` | https://developer.zhihu.com | Zhihu OpenAPI base URL. |
+| `zhihu_search_url` | `ZHIHU_ZHIHU_SEARCH_URL` | unset | Full Zhihu search endpoint override. |
+| `academic_scihub_enabled` | `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | false | Explicit opt-in for Sci-Hub fallback. Legal risk varies by jurisdiction. |
+| `academic_scihub_base_url` | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` | unset | Sci-Hub base URL, used only when academic_scihub_enabled is true. |
+| `academic_institutional_enabled` | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED` | true | Enables IEEE/ACM institutional PDF fallback. |
+| `academic_institutional_accept_invalid_certs` | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS` | false | Allows invalid TLS certificates only for private institutional fallback routes. |
+| `academic_institutional_probe` | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE` | true | Probes direct and discovered proxy routes for IEEE/ACM access. |
+| `academic_max_pdf_bytes` | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | 52428800 | Maximum PDF bytes downloaded for academic PDF read, parse, and download flows. |
+| `academic_pdf_max_chars` | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for parsed PDF output. |
+
+<!-- config-schema:end -->
+
 | TOML key | Env equivalent |
 |---|---|
 | `grok_api_url` | `GROK_SEARCH_URL` |
@@ -232,6 +321,9 @@ Unknown keys are rejected by the loader — typos surface as parse errors instea
 | `academic_email` | `GROK_SEARCH_ACADEMIC_EMAIL` |
 | `semantic_scholar_api_key` | `SEMANTIC_SCHOLAR_API_KEY` |
 | `openalex_api_key` | `OPENALEX_API_KEY` or `GROK_SEARCH_OPENALEX_API_KEY` |
+| `zhihu_api_key` | `ZHIHU_ACCESS_SECRET` or `ZHIHU_API_KEY` |
+| `zhihu_openapi_base_url` | `ZHIHU_OPENAPI_BASE_URL` |
+| `zhihu_search_url` | `ZHIHU_ZHIHU_SEARCH_URL` |
 | `academic_scihub_enabled` | `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` |
 | `academic_scihub_base_url` | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` |
 | `academic_max_pdf_bytes` | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` |
@@ -241,6 +333,9 @@ Unknown keys are rejected by the loader — typos surface as parse errors instea
 header. Semantic Scholar allows 1 request per second per key across all
 endpoints; GrokSearch-rs serializes Semantic Scholar calls with a built-in
 1.1 second minimum interval to stay below that threshold.
+
+`zhihu_api_key` is sent to Zhihu OpenAPI as a Bearer token for the
+`zhihu_search` tool. `zhihu_search_url` overrides the full endpoint when set.
 
 Example — minimum useful file:
 

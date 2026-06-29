@@ -3,8 +3,7 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use grok_search_config::Config;
-use grok_search_content::download_pdf_bytes_limited;
-use grok_search_content::ParsedContent;
+use grok_search_pdf::{download_pdf_bytes_limited, parse_pdf_bytes_detailed, ParsedPdfDetails};
 use grok_search_parse::{
     normalize_title, parse_academic_identifier as parse_identifier, rrf_merge_papers as rrf_merge,
 };
@@ -12,7 +11,8 @@ use grok_search_provider_core::{
     AcademicIdentifier as Identifier, AcademicProvider, AcademicServiceProvider, FullTextLocation,
 };
 use grok_search_types::{
-    AcademicCitationSummary, AcademicCitationsOutput, AcademicGetOutput, AcademicPaper,
+    AcademicCitationSummary, AcademicCitationsOutput, AcademicDownloadPdfOutput, AcademicGetOutput,
+    AcademicMaterialLink, AcademicPaper, AcademicParseOptions, AcademicParsePdfOutput,
     AcademicReadOutput, AcademicSearchInput, AcademicSearchOutput, GrokSearchError, Result, Source,
 };
 use uuid::Uuid;
@@ -62,6 +62,24 @@ struct ProviderSet {
 struct ResolvedPaper {
     paper: AcademicPaper,
     chain: Vec<String>,
+}
+
+struct ReadDetails {
+    identifier: Option<String>,
+    url: Option<String>,
+    pdf_url: String,
+    parsed: ParsedPdfDetails,
+    source: String,
+    fulltext_status: String,
+    resolver_chain: Vec<String>,
+    metadata_materials: Vec<AcademicMaterialLink>,
+}
+
+struct PdfDownloadDetails {
+    identifier: Option<String>,
+    url: Option<String>,
+    location: FullTextLocation,
+    resolver_chain: Vec<String>,
 }
 
 impl AcademicService {
@@ -168,6 +186,11 @@ impl AcademicService {
             }
         }
         papers.truncate(limit);
+        if input.extract_material_links.unwrap_or(false) {
+            for paper in &mut papers {
+                paper.materials = material_links_for_paper(paper);
+            }
+        }
 
         if input.include_citations.unwrap_or(false) {
             for paper in &mut papers {
@@ -204,6 +227,7 @@ impl AcademicService {
         identifier: &str,
         include_citations: bool,
         include_open_access: bool,
+        extract_material_links: bool,
     ) -> Result<AcademicGetOutput> {
         let mut resolved = self.resolve_canonical_paper(identifier).await?;
         resolved.paper = without_openalex_reference_sources(resolved.paper);
@@ -220,6 +244,9 @@ impl AcademicService {
         } else {
             None
         };
+        if extract_material_links {
+            resolved.paper.materials = material_links_for_paper(&resolved.paper);
+        }
         Ok(AcademicGetOutput {
             paper: resolved.paper,
             citations,
@@ -268,82 +295,127 @@ impl AcademicService {
         url: Option<String>,
         max_chars: Option<usize>,
         output_format: Option<String>,
+        parse_options: Option<AcademicParseOptions>,
     ) -> Result<AcademicReadOutput> {
-        let format = output_format.unwrap_or_else(|| "markdown".to_string());
-        if format != "markdown" && format != "text" {
-            return Err(GrokSearchError::InvalidParams(
-                "output_format must be \"markdown\" or \"text\"".to_string(),
-            ));
-        }
-        let mut chain = Vec::new();
-        let locations = if let Some(url) = url.clone() {
-            if let Some(location) = self.institutional.resolve_url_location(&url).await {
-                vec![location]
-            } else {
-                vec![FullTextLocation {
-                    url,
-                    source: "direct_url".to_string(),
-                    status: "direct_url".to_string(),
-                }]
-            }
+        let include_parse_details = parse_options.is_some();
+        let include_materials = parse_options
+            .as_ref()
+            .and_then(|options| options.extract_material_links)
+            .unwrap_or(false);
+        let details = self
+            .read_pdf_details(
+                identifier,
+                url,
+                max_chars,
+                output_format,
+                parse_options.clone(),
+            )
+            .await?;
+        let materials = if include_materials {
+            merge_materials(
+                details.metadata_materials,
+                material_links_from_text(&details.parsed.content, "pdf_content"),
+            )
         } else {
-            let identifier = identifier.as_deref().ok_or_else(|| {
-                GrokSearchError::InvalidParams("academic_read requires identifier or url".into())
-            })?;
-            let get = self.get(identifier, false, true).await?;
-            chain.extend(get.resolver_chain);
-            let locations = self.resolve_fulltext_locations(&get.paper).await?;
-            if locations.is_empty() {
-                return Err(GrokSearchError::NotFound(
-                    "no full-text PDF URL found".into(),
-                ));
-            }
-            locations
+            Vec::new()
         };
-        let locations = prefer_institutional_locations(locations);
+        Ok(AcademicReadOutput {
+            identifier: details.identifier,
+            url: details.url,
+            pdf_url: details.pdf_url,
+            content: details.parsed.content,
+            original_length: details.parsed.original_length,
+            truncated: details.parsed.truncated,
+            source: details.source,
+            fulltext_status: details.fulltext_status,
+            resolver_chain: details.resolver_chain,
+            artifacts: details.parsed.artifacts,
+            parse_capabilities: include_parse_details.then_some(details.parsed.capabilities),
+            materials,
+        })
+    }
 
-        let limit = max_chars
-            .or(self.config.academic_pdf_max_chars)
-            .or(self.config.fetch_max_chars)
-            .unwrap_or(200_000);
-        let mut failures = Vec::new();
-        for location in locations {
-            match self
-                .download_and_parse_pdf(&location, format.clone(), limit)
-                .await
-            {
-                Ok(parsed) => {
-                    chain.push(location.source.clone());
-                    return Ok(AcademicReadOutput {
-                        identifier,
-                        url,
-                        pdf_url: location.url,
-                        content: parsed.content,
-                        original_length: parsed.original_length,
-                        truncated: parsed.truncated,
-                        source: location.source,
-                        fulltext_status: location.status,
-                        resolver_chain: chain,
-                    });
-                }
-                Err(err) => {
-                    failures.push((err.kind().to_string(), format!("{}: {err}", location.url)))
-                }
-            }
+    pub async fn parse_pdf(
+        &self,
+        identifier: Option<String>,
+        url: Option<String>,
+        max_chars: Option<usize>,
+        output_format: Option<String>,
+        parse_options: Option<AcademicParseOptions>,
+    ) -> Result<AcademicParsePdfOutput> {
+        let include_materials = parse_options
+            .as_ref()
+            .and_then(|options| options.extract_material_links)
+            .unwrap_or(true);
+        let details = self
+            .read_pdf_details(identifier, url, max_chars, output_format, parse_options)
+            .await?;
+        let materials = if include_materials {
+            merge_materials(
+                details.metadata_materials,
+                material_links_from_text(&details.parsed.content, "pdf_content"),
+            )
+        } else {
+            Vec::new()
+        };
+        Ok(AcademicParsePdfOutput {
+            identifier: details.identifier,
+            url: details.url,
+            pdf_url: details.pdf_url,
+            content: details.parsed.content,
+            original_length: details.parsed.original_length,
+            truncated: details.parsed.truncated,
+            source: details.source,
+            fulltext_status: details.fulltext_status,
+            resolver_chain: details.resolver_chain,
+            artifacts: details.parsed.artifacts,
+            parse_capabilities: details.parsed.capabilities,
+            materials,
+        })
+    }
+
+    pub async fn download_pdf(
+        &self,
+        identifier: Option<String>,
+        url: Option<String>,
+        output_path: String,
+        overwrite: bool,
+    ) -> Result<AcademicDownloadPdfOutput> {
+        let details = self.resolve_pdf_download_details(identifier, url).await?;
+        let path = std::path::PathBuf::from(output_path);
+        if path.exists() && !overwrite {
+            return Err(GrokSearchError::InvalidParams(format!(
+                "PDF output path already exists: {}",
+                path.display()
+            )));
         }
-        let message = failures
-            .iter()
-            .map(|(_, message)| message.as_str())
-            .collect::<Vec<_>>()
-            .join("; ");
-        let err = format!("academic_read PDF fetch failed for all candidates: {message}");
-        if failures.iter().any(|(kind, _)| kind == "timeout") {
-            return Err(GrokSearchError::Timeout(err));
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                GrokSearchError::Io(format!(
+                    "create PDF output directory {}: {err}",
+                    parent.display()
+                ))
+            })?;
         }
-        if failures.iter().any(|(kind, _)| kind == "upstream") {
-            return Err(GrokSearchError::Upstream(err));
-        }
-        Err(GrokSearchError::Provider(err))
+        let bytes = self
+            .download_pdf_bytes_for_location(&details.location)
+            .await?;
+        std::fs::write(&path, &bytes).map_err(|err| {
+            GrokSearchError::Io(format!("write PDF output {}: {err}", path.display()))
+        })?;
+        Ok(AcademicDownloadPdfOutput {
+            identifier: details.identifier,
+            url: details.url,
+            pdf_url: details.location.url,
+            source: details.location.source,
+            fulltext_status: details.location.status,
+            resolver_chain: details.resolver_chain,
+            path: path.display().to_string(),
+            bytes: bytes.len() as u64,
+        })
     }
 
     pub fn diagnostics(&self) -> serde_json::Value {
@@ -478,8 +550,25 @@ impl AcademicService {
         location: &FullTextLocation,
         format: String,
         limit: usize,
-    ) -> Result<ParsedContent> {
-        let bytes = if matches!(
+        options: Option<&AcademicParseOptions>,
+    ) -> Result<ParsedPdfDetails> {
+        let bytes = self.download_pdf_bytes_for_location(location).await?;
+        parse_pdf_bytes_with_timeout(
+            bytes,
+            format,
+            limit,
+            options,
+            self.config.timeout,
+            &location.url,
+        )
+        .await
+    }
+
+    async fn download_pdf_bytes_for_location(
+        &self,
+        location: &FullTextLocation,
+    ) -> Result<Vec<u8>> {
+        if matches!(
             location.source.as_str(),
             "ieee_institutional" | "acm_institutional"
         ) {
@@ -494,7 +583,7 @@ impl AcademicService {
                     "academic_read PDF download timed out for {}",
                     location.url
                 ))
-            })??
+            })?
         } else {
             tokio::time::timeout(
                 self.config.timeout,
@@ -511,9 +600,140 @@ impl AcademicService {
                     "academic_read PDF download timed out for {}",
                     location.url
                 ))
-            })??
+            })?
+        }
+    }
+
+    async fn resolve_pdf_download_details(
+        &self,
+        identifier: Option<String>,
+        url: Option<String>,
+    ) -> Result<PdfDownloadDetails> {
+        let mut chain = Vec::new();
+        let locations = if let Some(url) = url.clone() {
+            if let Some(location) = self.institutional.resolve_url_location(&url).await {
+                vec![location]
+            } else {
+                vec![FullTextLocation {
+                    url,
+                    source: "direct_url".to_string(),
+                    status: "direct_url".to_string(),
+                }]
+            }
+        } else {
+            let identifier_ref = identifier.as_deref().ok_or_else(|| {
+                GrokSearchError::InvalidParams(
+                    "academic_download_pdf requires identifier or url".into(),
+                )
+            })?;
+            let get = self.get(identifier_ref, false, true, true).await?;
+            chain.extend(get.resolver_chain);
+            let locations = self.resolve_fulltext_locations(&get.paper).await?;
+            if locations.is_empty() {
+                return Err(GrokSearchError::NotFound(
+                    "no full-text PDF URL found".into(),
+                ));
+            }
+            locations
         };
-        parse_pdf_bytes_with_timeout(bytes, format, limit, self.config.timeout, &location.url).await
+        let mut locations = prefer_institutional_locations(locations);
+        let location = locations
+            .drain(..)
+            .next()
+            .ok_or_else(|| GrokSearchError::NotFound("no full-text PDF URL found".into()))?;
+        chain.push(location.source.clone());
+        Ok(PdfDownloadDetails {
+            identifier,
+            url,
+            location,
+            resolver_chain: chain,
+        })
+    }
+
+    async fn read_pdf_details(
+        &self,
+        identifier: Option<String>,
+        url: Option<String>,
+        max_chars: Option<usize>,
+        output_format: Option<String>,
+        parse_options: Option<AcademicParseOptions>,
+    ) -> Result<ReadDetails> {
+        let format = output_format.unwrap_or_else(|| "markdown".to_string());
+        if format != "markdown" && format != "text" {
+            return Err(GrokSearchError::InvalidParams(
+                "output_format must be \"markdown\" or \"text\"".to_string(),
+            ));
+        }
+        let mut chain = Vec::new();
+        let mut metadata_materials = Vec::new();
+        let locations = if let Some(url) = url.clone() {
+            metadata_materials.extend(material_links_from_url(&url, "input_url"));
+            if let Some(location) = self.institutional.resolve_url_location(&url).await {
+                vec![location]
+            } else {
+                vec![FullTextLocation {
+                    url,
+                    source: "direct_url".to_string(),
+                    status: "direct_url".to_string(),
+                }]
+            }
+        } else {
+            let identifier_ref = identifier.as_deref().ok_or_else(|| {
+                GrokSearchError::InvalidParams("academic_read requires identifier or url".into())
+            })?;
+            let get = self.get(identifier_ref, false, true, true).await?;
+            metadata_materials.extend(material_links_for_paper(&get.paper));
+            chain.extend(get.resolver_chain);
+            let locations = self.resolve_fulltext_locations(&get.paper).await?;
+            if locations.is_empty() {
+                return Err(GrokSearchError::NotFound(
+                    "no full-text PDF URL found".into(),
+                ));
+            }
+            locations
+        };
+        let locations = prefer_institutional_locations(locations);
+        let limit = max_chars
+            .or(self.config.academic_pdf_max_chars)
+            .or(self.config.fetch_max_chars)
+            .unwrap_or(200_000);
+        let mut failures = Vec::new();
+        for location in locations {
+            match self
+                .download_and_parse_pdf(&location, format.clone(), limit, parse_options.as_ref())
+                .await
+            {
+                Ok(parsed) => {
+                    chain.push(location.source.clone());
+                    return Ok(ReadDetails {
+                        identifier,
+                        url,
+                        pdf_url: location.url,
+                        parsed,
+                        source: location.source,
+                        fulltext_status: location.status,
+                        resolver_chain: chain,
+                        metadata_materials,
+                    });
+                }
+                Err(err) => {
+                    failures.push((err.kind().to_string(), format!("{}: {err}", location.url)))
+                }
+            }
+        }
+        let message = failures
+            .iter()
+            .map(|(_, message)| message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let err = format!("academic_read PDF fetch failed for all candidates: {message}");
+        if failures.iter().any(|(kind, _)| kind == "timeout") {
+            return Err(GrokSearchError::Timeout(err));
+        }
+        if failures.iter().any(|(kind, _)| kind == "upstream") {
+            return Err(GrokSearchError::Upstream(err));
+        }
+        Err(GrokSearchError::Provider(err))
     }
 
     fn get_providers(&self) -> Vec<&dyn AcademicProvider> {
@@ -595,8 +815,16 @@ impl AcademicServiceProvider for AcademicService {
         identifier: &str,
         include_citations: bool,
         include_open_access: bool,
+        extract_material_links: bool,
     ) -> Result<AcademicGetOutput> {
-        AcademicService::get(self, identifier, include_citations, include_open_access).await
+        AcademicService::get(
+            self,
+            identifier,
+            include_citations,
+            include_open_access,
+            extract_material_links,
+        )
+        .await
     }
 
     async fn citations(&self, identifier: &str, limit: usize) -> Result<AcademicCitationsOutput> {
@@ -609,8 +837,46 @@ impl AcademicServiceProvider for AcademicService {
         url: Option<String>,
         max_chars: Option<usize>,
         output_format: Option<String>,
+        parse_options: Option<AcademicParseOptions>,
     ) -> Result<AcademicReadOutput> {
-        AcademicService::read(self, identifier, url, max_chars, output_format).await
+        AcademicService::read(
+            self,
+            identifier,
+            url,
+            max_chars,
+            output_format,
+            parse_options,
+        )
+        .await
+    }
+
+    async fn parse_pdf(
+        &self,
+        identifier: Option<String>,
+        url: Option<String>,
+        max_chars: Option<usize>,
+        output_format: Option<String>,
+        parse_options: Option<AcademicParseOptions>,
+    ) -> Result<AcademicParsePdfOutput> {
+        AcademicService::parse_pdf(
+            self,
+            identifier,
+            url,
+            max_chars,
+            output_format,
+            parse_options,
+        )
+        .await
+    }
+
+    async fn download_pdf(
+        &self,
+        identifier: Option<String>,
+        url: Option<String>,
+        output_path: String,
+        overwrite: bool,
+    ) -> Result<AcademicDownloadPdfOutput> {
+        AcademicService::download_pdf(self, identifier, url, output_path, overwrite).await
     }
 
     fn diagnostics(&self) -> serde_json::Value {
@@ -873,14 +1139,144 @@ fn is_institutional_source(source: &str) -> bool {
     matches!(source, "ieee_institutional" | "acm_institutional")
 }
 
+fn material_links_for_paper(paper: &AcademicPaper) -> Vec<AcademicMaterialLink> {
+    let mut materials = Vec::new();
+    for (url, source) in [
+        (paper.url.as_deref(), "paper_url"),
+        (paper.pdf_url.as_deref(), "paper_pdf_url"),
+    ] {
+        if let Some(url) = url {
+            materials.extend(material_links_from_url(url, source));
+        }
+    }
+    if let Some(abstract_text) = &paper.abstract_text {
+        materials.extend(material_links_from_text(abstract_text, "abstract"));
+    }
+    for source in &paper.sources {
+        materials.extend(material_links_from_url(
+            &source.url,
+            source.provider.as_ref(),
+        ));
+    }
+    merge_materials(Vec::new(), materials)
+}
+
+fn material_links_from_text(text: &str, source: &str) -> Vec<AcademicMaterialLink> {
+    text.split_whitespace()
+        .filter_map(|token| {
+            let url = token
+                .trim_matches(|ch: char| {
+                    matches!(
+                        ch,
+                        '"' | '\''
+                            | '('
+                            | ')'
+                            | '['
+                            | ']'
+                            | '{'
+                            | '}'
+                            | '<'
+                            | '>'
+                            | ','
+                            | '.'
+                            | ';'
+                    )
+                })
+                .trim_end_matches('/');
+            material_links_from_url(url, source).into_iter().next()
+        })
+        .collect()
+}
+
+fn material_links_from_url(url: &str, source: &str) -> Vec<AcademicMaterialLink> {
+    let Some(kind) = classify_material_url(url) else {
+        return Vec::new();
+    };
+    vec![AcademicMaterialLink {
+        url: url.to_string(),
+        kind: kind.to_string(),
+        source: source.to_string(),
+        confidence: material_confidence(kind).to_string(),
+        title: None,
+    }]
+}
+
+fn classify_material_url(url: &str) -> Option<&'static str> {
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return None;
+    }
+    if lower.contains("github.com/") || lower.contains("gitlab.com/") {
+        return Some("code");
+    }
+    if lower.contains("huggingface.co/") {
+        if lower.contains("/datasets/") {
+            return Some("dataset");
+        }
+        if lower.contains("/spaces/") {
+            return Some("demo");
+        }
+        return Some("model");
+    }
+    if lower.contains("paperswithcode.com/") {
+        return Some("code");
+    }
+    if lower.contains("zenodo.org/") || lower.contains("figshare.com/") {
+        return Some("dataset");
+    }
+    if lower.contains("arxiv.org/src/") || lower.contains("arxiv.org/e-print/") {
+        return Some("supplement");
+    }
+    if lower.contains("colab.research.google.com/") {
+        return Some("demo");
+    }
+    if lower.contains("docs.") || lower.contains("/docs") || lower.contains("readthedocs.io/") {
+        return Some("documentation");
+    }
+    if lower.contains("project")
+        || lower.contains("demo")
+        || lower.contains("dataset")
+        || lower.contains("code")
+    {
+        return Some("project");
+    }
+    None
+}
+
+fn material_confidence(kind: &str) -> &'static str {
+    match kind {
+        "code" | "dataset" | "model" | "demo" | "supplement" => "high",
+        "documentation" => "medium",
+        _ => "low",
+    }
+}
+
+fn merge_materials(
+    first: Vec<AcademicMaterialLink>,
+    second: Vec<AcademicMaterialLink>,
+) -> Vec<AcademicMaterialLink> {
+    let mut out = Vec::new();
+    for material in first.into_iter().chain(second) {
+        if !out
+            .iter()
+            .any(|existing: &AcademicMaterialLink| existing.url.eq_ignore_ascii_case(&material.url))
+        {
+            out.push(material);
+        }
+    }
+    out
+}
+
 async fn parse_pdf_bytes_with_timeout(
     bytes: Vec<u8>,
     format: String,
     limit: usize,
+    options: Option<&AcademicParseOptions>,
     timeout: std::time::Duration,
     url: &str,
-) -> Result<ParsedContent> {
+) -> Result<ParsedPdfDetails> {
     let url = url.to_string();
+    let options = options.cloned();
     if timeout.is_zero() {
         return Err(GrokSearchError::Timeout(format!(
             "academic_read PDF parse timed out for {url}"
@@ -889,7 +1285,7 @@ async fn parse_pdf_bytes_with_timeout(
     tokio::time::timeout(
         timeout,
         tokio::task::spawn_blocking(move || {
-            grok_search_content::parse_pdf_bytes(&bytes, &format, Some(limit))
+            parse_pdf_bytes_detailed(&bytes, &format, Some(limit), options.as_ref())
         }),
     )
     .await
@@ -1554,7 +1950,7 @@ mod tests {
             config,
         );
         let err = service
-            .read(None, Some(url), Some(10), Some("text".to_string()))
+            .read(None, Some(url), Some(10), Some("text".to_string()), None)
             .await
             .expect_err("download should time out");
         assert!(
@@ -1569,6 +1965,7 @@ mod tests {
             b"%PDF-1.7\n".to_vec(),
             "text".to_string(),
             10,
+            None,
             std::time::Duration::from_secs(0),
             "https://example.com/paper.pdf",
         )
@@ -1598,6 +1995,7 @@ mod tests {
                 Some("http://127.0.0.1:1/paper.pdf".to_string()),
                 Some(10),
                 Some("html".to_string()),
+                None,
             )
             .await
             .expect_err("invalid format should fail before network fetch");
@@ -1605,6 +2003,15 @@ mod tests {
             matches!(err, GrokSearchError::InvalidParams(_)),
             "expected invalid params, got {err:?}"
         );
+    }
+
+    #[test]
+    fn material_links_detect_common_research_artifacts() {
+        let text = "Code: https://github.com/example/repo Dataset https://huggingface.co/datasets/org/data Demo https://huggingface.co/spaces/org/demo";
+        let links = material_links_from_text(text, "abstract");
+        let kinds: Vec<_> = links.iter().map(|link| link.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["code", "dataset", "demo"]);
+        assert!(links.iter().all(|link| link.confidence == "high"));
     }
 
     #[tokio::test]

@@ -9,6 +9,7 @@ members = [
     "crates/grok-search-mcp",
     "crates/grok-search-net",
     "crates/grok-search-parse",
+    "crates/grok-search-pdf",
     "crates/grok-search-provider-core",
     "crates/grok-search-providers",
     "crates/grok-search-runtime",
@@ -46,6 +47,8 @@ ring = "0.17"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+scraper = "0.23"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "rt", "sync", "time"] }

@@ -5,7 +5,9 @@ use reqwest::Client;
 use url::Url;
 
 use crate::sources::{get_json, SourceCaps, SourceExtractor, SourceType};
-use grok_search_types::{GrokSearchError, Result};
+use grok_search_types::{
+    GrokSearchError, RepoKind, RepoLinks, RepoMetadataOutput, RepoProvider, RepoText, Result,
+};
 
 const UA: &str = "grok-search-rs/0.1 (https://github.com/MosRat/GrokSearch-rs)";
 
@@ -51,6 +53,12 @@ pub struct GithubRepoExtractor {
     pub token: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubRepoLocator {
+    pub owner: String,
+    pub repo: String,
+}
+
 fn matches_github(url: &Url, segment_kind: &str) -> bool {
     if url.host_str() != Some("github.com") {
         return false;
@@ -71,6 +79,46 @@ fn matches_github_repo(url: &Url) -> bool {
         None => return false,
     };
     segs.len() == 2
+}
+
+pub fn parse_repo_url(url: &Url) -> Result<GithubRepoLocator> {
+    if url.host_str() != Some("github.com") {
+        return Err(GrokSearchError::InvalidParams(
+            "github repo URL must use github.com".into(),
+        ));
+    }
+    let segs: Vec<String> = url
+        .path_segments()
+        .map(|it| it.filter(|s| !s.is_empty()).map(String::from).collect())
+        .unwrap_or_default();
+    if segs.len() != 2 {
+        return Err(GrokSearchError::InvalidParams(
+            "github repo URL must be https://github.com/{owner}/{repo}".into(),
+        ));
+    }
+    Ok(GithubRepoLocator {
+        owner: segs[0].clone(),
+        repo: segs[1].clone(),
+    })
+}
+
+pub fn repo_locator(owner: &str, repo: &str) -> Result<GithubRepoLocator> {
+    let owner = owner.trim();
+    let repo = repo.trim();
+    if owner.is_empty() || repo.is_empty() {
+        return Err(GrokSearchError::InvalidParams(
+            "github owner and name are required".into(),
+        ));
+    }
+    if owner.contains('/') || repo.contains('/') {
+        return Err(GrokSearchError::InvalidParams(
+            "github owner and name must not contain '/'".into(),
+        ));
+    }
+    Ok(GithubRepoLocator {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+    })
 }
 
 /// Page size for any comment list. `/comments` endpoints default to 30 results
@@ -255,16 +303,10 @@ pub(crate) async fn fetch_repo(
     url: &Url,
     token: Option<&str>,
 ) -> Result<GithubRepoRaw> {
-    let segs: Vec<String> = url
-        .path_segments()
-        .map(|it| it.filter(|s| !s.is_empty()).map(String::from).collect())
-        .unwrap_or_default();
-    if segs.len() != 2 {
-        return Err(GrokSearchError::Parse(
-            "github repo: unexpected URL shape".into(),
-        ));
-    }
-    let (owner, repo) = (&segs[0], &segs[1]);
+    let locator = parse_repo_url(url)
+        .map_err(|_| GrokSearchError::Parse("github repo: unexpected URL shape".into()))?;
+    let owner = &locator.owner;
+    let repo = &locator.repo;
     let auth = token.map(|t| format!("Bearer {t}"));
     let mut headers: Vec<(reqwest::header::HeaderName, &str)> = vec![(USER_AGENT, UA)];
     if let Some(ref a) = auth {
@@ -283,27 +325,81 @@ pub(crate) async fn fetch_repo(
     if readme.trim().is_empty() {
         return Err(GrokSearchError::Parse("github readme empty".into()));
     }
-    Ok(GithubRepoRaw {
-        full_name: str_field(&repo_json, "full_name"),
-        description: repo_json
-            .get("description")
+    let meta = parse_repo_raw(&repo_json);
+    Ok(GithubRepoRaw { readme, ..meta })
+}
+
+pub async fn fetch_repo_metadata(
+    client: &Client,
+    locator: &GithubRepoLocator,
+    token: Option<&str>,
+    include_readme: bool,
+    max_text_chars: Option<usize>,
+) -> Result<RepoMetadataOutput> {
+    let auth = token.map(|t| format!("Bearer {t}"));
+    let mut headers: Vec<(reqwest::header::HeaderName, &str)> = vec![(USER_AGENT, UA)];
+    if let Some(ref a) = auth {
+        headers.push((AUTHORIZATION, a.as_str()));
+    }
+
+    let repo_url = format!(
+        "https://api.github.com/repos/{}/{}",
+        locator.owner, locator.repo
+    );
+    let repo_json = get_json(client, &repo_url, &headers, "github_repo").await?;
+    let raw = parse_repo_raw(&repo_json);
+    let html = format!("https://github.com/{}", raw.full_name);
+    let mut warnings = Vec::new();
+    let mut readme = None;
+    let readme_api = format!(
+        "https://api.github.com/repos/{}/{}/readme",
+        locator.owner, locator.repo
+    );
+
+    if include_readme {
+        match get_json(client, &readme_api, &headers, "github_readme").await {
+            Ok(json) => match decode_readme(&json) {
+                Ok(text) if !text.trim().is_empty() => {
+                    readme = Some(limit_repo_text(text, max_text_chars));
+                }
+                Ok(_) => warnings.push("github readme empty".to_string()),
+                Err(err) => warnings.push(format!("github readme skipped: {err}")),
+            },
+            Err(err) => warnings.push(format!("github readme skipped: {err}")),
+        }
+    }
+
+    Ok(RepoMetadataOutput {
+        provider: RepoProvider::Github,
+        kind: RepoKind::GithubRepository,
+        id: raw.full_name.clone(),
+        name: locator.repo.clone(),
+        owner: Some(locator.owner.clone()),
+        description: raw.description,
+        license: raw.license,
+        tags: Vec::new(),
+        stars: Some(raw.stars),
+        forks: Some(raw.forks),
+        downloads: None,
+        likes: None,
+        created_at: repo_json
+            .get("created_at")
             .and_then(|v| v.as_str())
             .map(str::to_string),
-        default_branch: str_field(&repo_json, "default_branch"),
-        stars: repo_json
-            .get("stargazers_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        forks: repo_json
-            .get("forks_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        license: repo_json
-            .pointer("/license/spdx_id")
+        updated_at: repo_json
+            .get("updated_at")
             .and_then(|v| v.as_str())
-            .filter(|v| *v != "NOASSERTION")
             .map(str::to_string),
+        default_branch: Some(raw.default_branch),
+        links: RepoLinks {
+            html,
+            api: repo_url,
+            readme: include_readme.then_some(readme_api),
+            card: None,
+        },
         readme,
+        card: None,
+        warnings,
     })
 }
 
@@ -326,6 +422,69 @@ fn decode_readme(json: &serde_json::Value) -> Result<String> {
         .decode(compact)
         .map_err(|err| GrokSearchError::Parse(format!("github readme base64 decode: {err}")))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn parse_repo_raw(repo_json: &serde_json::Value) -> GithubRepoRaw {
+    GithubRepoRaw {
+        full_name: str_field(repo_json, "full_name"),
+        description: repo_json
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        default_branch: str_field(repo_json, "default_branch"),
+        stars: repo_json
+            .get("stargazers_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        forks: repo_json
+            .get("forks_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        license: repo_json
+            .pointer("/license/spdx_id")
+            .and_then(|v| v.as_str())
+            .filter(|v| *v != "NOASSERTION")
+            .map(str::to_string),
+        readme: String::new(),
+    }
+}
+
+pub(crate) fn limit_repo_text(mut content: String, max_chars: Option<usize>) -> RepoText {
+    let Some(limit) = max_chars else {
+        let original_length = content.chars().count();
+        return RepoText {
+            content,
+            original_length,
+            truncated: false,
+        };
+    };
+
+    let mut count = 0usize;
+    let mut cutoff = None;
+    for (byte_idx, _) in content.char_indices() {
+        if count == limit {
+            cutoff = Some(byte_idx);
+            break;
+        }
+        count += 1;
+    }
+
+    match cutoff {
+        Some(byte_idx) => {
+            let extra = content[byte_idx..].chars().count();
+            content.truncate(byte_idx);
+            RepoText {
+                content,
+                original_length: limit + extra,
+                truncated: true,
+            }
+        }
+        None => RepoText {
+            content,
+            original_length: count,
+            truncated: false,
+        },
+    }
 }
 
 pub fn render(raw: &GithubRaw, caps: &SourceCaps) -> String {
@@ -489,5 +648,44 @@ mod tests {
         });
         let err = decode_readme(&json).expect_err("unknown encoding should fail");
         assert!(err.to_string().contains("unsupported encoding"));
+    }
+
+    #[test]
+    fn parse_repo_url_accepts_owner_repo_only() {
+        let url = Url::parse("https://github.com/owner/repo").unwrap();
+        let locator = parse_repo_url(&url).unwrap();
+        assert_eq!(locator.owner, "owner");
+        assert_eq!(locator.repo, "repo");
+    }
+
+    #[test]
+    fn parse_repo_url_rejects_deeper_paths() {
+        let url = Url::parse("https://github.com/owner/repo/issues/1").unwrap();
+        let err = parse_repo_url(&url).unwrap_err();
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+    }
+
+    #[test]
+    fn parse_repo_raw_maps_metadata() {
+        let json = serde_json::json!({
+            "full_name": "owner/repo",
+            "description": "desc",
+            "default_branch": "main",
+            "stargazers_count": 42,
+            "forks_count": 3,
+            "license": { "spdx_id": "MIT" }
+        });
+        let raw = parse_repo_raw(&json);
+        assert_eq!(raw.full_name, "owner/repo");
+        assert_eq!(raw.license.as_deref(), Some("MIT"));
+        assert_eq!(raw.stars, 42);
+    }
+
+    #[test]
+    fn limit_repo_text_truncates_by_chars() {
+        let text = limit_repo_text("abcdef".to_string(), Some(3));
+        assert_eq!(text.content, "abc");
+        assert_eq!(text.original_length, 6);
+        assert!(text.truncated);
     }
 }

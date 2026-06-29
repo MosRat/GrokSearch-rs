@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use grok_search_config::Config;
-use grok_search_content::{download_pdf_bytes_with_options_limited, PdfDownloadOptions};
+use grok_search_pdf::{download_pdf_bytes_with_options_limited, PdfDownloadOptions};
 use grok_search_net::http::{
     build_client_direct_with_options, build_client_with_proxy_options, ClientOptions,
 };
