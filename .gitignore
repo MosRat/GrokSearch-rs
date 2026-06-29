@@ -42,3 +42,5 @@ PypiSerects
 # Stray build/output dumps
 /rust_out
 /stdin
+
+/ref_repos
