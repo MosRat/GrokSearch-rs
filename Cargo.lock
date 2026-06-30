@@ -1014,7 +1014,7 @@ checksum = "b40ca9252762c466af32d0b1002e91e4e1bc5398f77455e55474deb466355ff5"
 
 [[package]]
 name = "grok-search-academic"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "grok-search-cache",
@@ -1038,7 +1038,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-apps"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "grok-search-config",
@@ -1047,7 +1047,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-auth"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -1066,7 +1066,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-cache"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "grok-search-types",
  "redb",
@@ -1077,7 +1077,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-config"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "grok-search-types",
  "serde",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-content"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "grok-search-types",
  "tempfile",
@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-llm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "grok-search-types",
@@ -1128,7 +1128,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-mcp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "grok-search-service",
@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-net"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "grok-search-config",
  "grok-search-types",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-parse"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "grok-search-provider-core",
  "grok-search-types",
@@ -1163,7 +1163,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-pdf"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "grok-search-content",
  "grok-search-net",
@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-provider-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "grok-search-types",
@@ -1190,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-providers"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "grok-search-auth",
@@ -1208,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-rs"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "grok-search-cli",
@@ -1218,7 +1218,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-runtime"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "grok-search-academic",
  "grok-search-auth",
@@ -1235,7 +1235,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-service"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "grok-search-config",
@@ -1256,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-source-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "grok-search-types",
@@ -1267,7 +1267,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-sources"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -1285,7 +1285,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-tools"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "grok-search-service",
  "grok-search-types",
@@ -1297,7 +1297,7 @@ dependencies = [
 
 [[package]]
 name = "grok-search-types"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
