@@ -153,7 +153,7 @@ The `academic_*` MCP tools are independent of `web_*` and focus on computer-scie
 | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF bytes downloaded for `academic_read`, `academic_parse_pdf`, and `academic_download_pdf`. |
 | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for parsed PDF output. Falls back to `GROK_SEARCH_FETCH_MAX_CHARS`, then `200000`. |
 
-`academic_read` accepts optional `parse_options` for detailed parsing, and `academic_parse_pdf` exposes the same options for artifact-focused workflows. Markdown/text extraction can be saved to an explicit file path; missing parent directories are created and existing files are rejected. Image extraction is partial: `extract_images=true` requires `images_dir`, exports filtered bitmap XObjects as PNG files, and writes `images.json`; it does not reconstruct semantic figures or vector graphics. Table extraction is partial: `extract_tables=true` requires `tables_dir`, writes `tables.json` and Markdown snippets for detected tables, and may miss or filter layout-heavy tables. `academic_download_pdf` saves the resolved PDF directly to an explicit file path without parsing it; parent directories are created and existing files are rejected unless `overwrite=true`. Material link extraction is local URL/text classification only and does not fetch GitHub, Hugging Face, dataset, model, demo, or project URLs.
+`academic_read` accepts optional `parse_options` for detailed parsing, and `academic_parse_pdf` exposes the same options for artifact-focused workflows. PDF text now flows through a local pipeline: raw `pdf_oxide` extraction, text signal analysis, and `text_processing_mode` cleanup. The default mode is `clean`; use `text_processing_mode="none"` for raw extraction or `include_raw_content=true` / `save_raw_content_path` when comparing raw and processed text. `save_markdown_path` writes the final processed Markdown/text; missing parent directories are created and existing files are rejected. Image extraction is partial: `extract_images=true` requires `images_dir`, exports filtered bitmap XObjects as PNG files, and writes `images.json`; it does not reconstruct semantic figures or vector graphics. Table extraction is partial: `extract_tables=true` requires `tables_dir`, writes `tables.json` and Markdown snippets for detected tables, and may miss or filter layout-heavy tables. `academic_download_pdf` saves the resolved PDF directly to an explicit file path without parsing it; parent directories are created and existing files are rejected unless `overwrite=true`. Material link extraction is local URL/text classification only and does not fetch GitHub, Hugging Face, dataset, model, demo, or project URLs.
 
 Academic provider calls use conservative built-in stability guards. arXiv API requests are globally spaced by 3 seconds and retry `429` responses. OpenAlex requests retry transient `502`/`503`/`504` gateway failures, and broad `sort_by=date` searches without an explicit year filter avoid OpenAlex's `publication_date:desc` server-side sort to reduce 504 slow-query failures.
 
@@ -255,6 +255,15 @@ This section is generated from the Rust config schema in `grok-search-config`. U
 | `openai_compatible_api_url` | `OPENAI_COMPATIBLE_API_URL` | unset | OpenAI-compatible chat-completions gateway base URL. |
 | `openai_compatible_api_key` | `OPENAI_COMPATIBLE_API_KEY` | unset | OpenAI-compatible gateway bearer token. |
 | `openai_compatible_model` | `OPENAI_COMPATIBLE_MODEL` | falls back to grok_model | OpenAI-compatible model name. |
+#### LLM providers
+
+| TOML key | Env aliases | Default | Description |
+|---|---|---|---|
+| `llm_provider` | `GROK_SEARCH_LLM_PROVIDER` | minimax | Default LLM provider used by experimental PDF progressive reading. |
+| `llm_api_key` | `GROK_SEARCH_LLM_API_KEY`<br>`ANTHROPIC_API_KEY`<br>`MINIMAX_API_KEY` | unset | LLM API key for experimental PDF progressive reading. |
+| `llm_base_url` | `GROK_SEARCH_LLM_BASE_URL`<br>`ANTHROPIC_BASE_URL` | https://api.minimaxi.com/anthropic | Anthropic-compatible base URL for experimental PDF progressive reading. |
+| `llm_model` | `GROK_SEARCH_LLM_MODEL`<br>`ANTHROPIC_MODEL` | MiniMax-M3 | Default LLM model for experimental PDF progressive reading. |
+| `llm_auth_scheme` | `GROK_SEARCH_LLM_AUTH_SCHEME` | bearer | Authentication scheme for Anthropic-compatible LLM calls. |
 #### Source extraction
 
 | TOML key | Env aliases | Default | Description |
@@ -284,6 +293,12 @@ This section is generated from the Rust config schema in `grok-search-config`. U
 | `academic_institutional_probe` | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE` | true | Probes direct and discovered proxy routes for IEEE/ACM access. |
 | `academic_max_pdf_bytes` | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | 52428800 | Maximum PDF bytes downloaded for academic PDF read, parse, and download flows. |
 | `academic_pdf_max_chars` | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for parsed PDF output. |
+| `progressive_cache_enabled` | `GROK_SEARCH_PROGRESSIVE_CACHE_ENABLED` | true | Enables persistent KV cache for LLM progressive PDF reading structures. |
+| `progressive_cache_path` | `GROK_SEARCH_PROGRESSIVE_CACHE_PATH` | default progressive-cache.redb next to config.toml | Persistent KV cache path for LLM progressive PDF reading structures. |
+| `progressive_cache_ttl_seconds` | `GROK_SEARCH_PROGRESSIVE_CACHE_TTL_SECONDS` | 2592000 | Seconds before progressive reading cache entries expire. |
+| `progressive_cache_max_entries` | `GROK_SEARCH_PROGRESSIVE_CACHE_MAX_ENTRIES` | 512 | Maximum progressive reading cache entries retained after writes. |
+| `progressive_default_model` | `GROK_SEARCH_PROGRESSIVE_DEFAULT_MODEL` | MiniMax-M3 | Default model for LLM progressive PDF reading when the tool does not pass one. |
+| `progressive_default_profile` | `GROK_SEARCH_PROGRESSIVE_DEFAULT_PROFILE` | balanced | Default profile for LLM progressive PDF reading. |
 
 <!-- config-schema:end -->
 
@@ -328,6 +343,12 @@ This section is generated from the Rust config schema in `grok-search-config`. U
 | `academic_scihub_base_url` | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` |
 | `academic_max_pdf_bytes` | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` |
 | `academic_pdf_max_chars` | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` |
+| `progressive_cache_enabled` | `GROK_SEARCH_PROGRESSIVE_CACHE_ENABLED` |
+| `progressive_cache_path` | `GROK_SEARCH_PROGRESSIVE_CACHE_PATH` |
+| `progressive_cache_ttl_seconds` | `GROK_SEARCH_PROGRESSIVE_CACHE_TTL_SECONDS` |
+| `progressive_cache_max_entries` | `GROK_SEARCH_PROGRESSIVE_CACHE_MAX_ENTRIES` |
+| `progressive_default_model` | `GROK_SEARCH_PROGRESSIVE_DEFAULT_MODEL` |
+| `progressive_default_profile` | `GROK_SEARCH_PROGRESSIVE_DEFAULT_PROFILE` |
 
 `semantic_scholar_api_key` is sent to Semantic Scholar as the `x-api-key`
 header. Semantic Scholar allows 1 request per second per key across all
@@ -336,6 +357,11 @@ endpoints; GrokSearch-rs serializes Semantic Scholar calls with a built-in
 
 `zhihu_api_key` is sent to Zhihu OpenAPI as a Bearer token for the
 `zhihu_search` tool. `zhihu_search_url` overrides the full endpoint when set.
+
+`progressive_cache_*` controls the local embedded KV store used by the
+experimental LLM progressive PDF reading pass. The cache stores structured
+progressive reading JSON keyed by PDF/input/strategy hashes, not raw PDF bytes
+or provider credentials.
 
 Example — minimum useful file:
 

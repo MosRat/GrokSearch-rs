@@ -125,15 +125,24 @@ fn config_redacts_grok_tavily_and_firecrawl_keys() {
         ("GROK_SEARCH_API_KEY", "grok-1234567890"),
         ("TAVILY_API_KEY", "tvly-abcdefghi"),
         ("FIRECRAWL_API_KEY", "fc-abcdefghi"),
+        ("GROK_SEARCH_LLM_API_KEY", "llm-secret-token"),
+        (
+            "GROK_SEARCH_LLM_BASE_URL",
+            "https://user:pass@example.com/anthropic?token=secret",
+        ),
     ]);
 
     let info = cfg.redacted_diagnostics();
     assert!(info.contains("grok_api_key=set"));
     assert!(info.contains("tavily_api_key=set"));
     assert!(info.contains("firecrawl_api_key=set"));
+    assert!(info.contains("llm_api_key=set"));
     assert!(!info.contains("tvly"));
     assert!(!info.contains("fc-"));
     assert!(!info.contains("grok-1234567890"));
+    assert!(!info.contains("llm-secret-token"));
+    assert!(!info.contains("user:pass"));
+    assert!(!info.contains("token=secret"));
     assert!(!info.contains("1234567890"));
     assert!(!info.contains("abcdefghi"));
 }
@@ -262,6 +271,95 @@ fn zhihu_access_secret_and_api_key_env_override_config_file() {
 }
 
 #[test]
+fn llm_config_reads_canonical_and_legacy_env_aliases() {
+    let cfg = Config::from_env_map([
+        ("GROK_SEARCH_LLM_API_KEY", "llm-key"),
+        ("GROK_SEARCH_LLM_BASE_URL", "https://llm.example/anthropic"),
+        ("GROK_SEARCH_LLM_MODEL", "MiniMax-M3"),
+        ("GROK_SEARCH_LLM_AUTH_SCHEME", "both"),
+    ]);
+
+    assert_eq!(cfg.llm_api_key.as_deref(), Some("llm-key"));
+    assert_eq!(cfg.llm_base_url, "https://llm.example/anthropic");
+    assert_eq!(cfg.llm_model, "MiniMax-M3");
+    assert_eq!(cfg.llm_auth_scheme, "both");
+    assert_eq!(cfg.progressive_default_model, "MiniMax-M3");
+
+    let cfg = Config::from_env_map([
+        ("ANTHROPIC_API_KEY", "anthropic-key"),
+        ("MINIMAX_API_KEY", "minimax-key"),
+        ("ANTHROPIC_BASE_URL", "https://legacy.example/anthropic"),
+        ("ANTHROPIC_MODEL", "legacy-model"),
+    ]);
+
+    assert_eq!(cfg.llm_api_key.as_deref(), Some("anthropic-key"));
+    assert_eq!(cfg.llm_base_url, "https://legacy.example/anthropic");
+    assert_eq!(cfg.llm_model, "legacy-model");
+}
+
+#[test]
+fn llm_env_overrides_config_file_even_for_legacy_alias() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+llm_api_key = "file-key"
+llm_model = "file-model"
+"#,
+    )
+    .unwrap();
+
+    let cfg = Config::load_from([
+        ("GROK_SEARCH_CONFIG", path.to_string_lossy().to_string()),
+        ("ANTHROPIC_API_KEY", "env-key".into()),
+        ("ANTHROPIC_MODEL", "env-model".into()),
+    ]);
+
+    assert_eq!(cfg.llm_api_key.as_deref(), Some("env-key"));
+    assert_eq!(cfg.llm_model, "env-model");
+}
+
+#[test]
+fn progressive_cache_path_defaults_next_to_config() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("nested").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "").unwrap();
+
+    let cfg = Config::try_load_from([
+        ("GROK_SEARCH_CONFIG", path.to_string_lossy().to_string()),
+        ("GROK_SEARCH_API_KEY", "fake".into()),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        cfg.progressive_cache_path,
+        path.with_file_name("progressive-cache.redb")
+    );
+}
+
+#[test]
+fn progressive_cache_path_env_overrides_default() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let cache = dir.path().join("custom.redb");
+    fs::write(&path, "").unwrap();
+
+    let cfg = Config::try_load_from([
+        ("GROK_SEARCH_CONFIG", path.to_string_lossy().to_string()),
+        ("GROK_SEARCH_API_KEY", "fake".into()),
+        (
+            "GROK_SEARCH_PROGRESSIVE_CACHE_PATH",
+            cache.to_string_lossy().to_string(),
+        ),
+    ])
+    .unwrap();
+
+    assert_eq!(cfg.progressive_cache_path, cache);
+}
+
+#[test]
 fn missing_config_file_falls_back_to_env_and_defaults() {
     let dir = tempdir().unwrap();
     let nonexistent = dir.path().join("nope.toml");
@@ -305,6 +403,15 @@ openalex_api_key      = "oa-full-a,oa-full-b"
 zhihu_api_key         = "zhihu-full"
 zhihu_openapi_base_url = "https://developer.zhihu.example"
 zhihu_search_url      = "https://gateway.example/zhihu_search"
+llm_provider          = "minimax"
+llm_api_key           = "llm-full"
+llm_base_url          = "https://llm.example/anthropic"
+llm_model             = "MiniMax-M3"
+llm_auth_scheme       = "bearer"
+progressive_cache_enabled = false
+progressive_cache_path = "custom-progressive.redb"
+progressive_cache_ttl_seconds = 60
+progressive_cache_max_entries = 7
 default_extra_sources = 4
 fallback_sources      = 9
 fetch_max_chars       = 12345
@@ -347,12 +454,24 @@ max_response_bytes    = 2097152
         cfg.zhihu_search_url.as_deref(),
         Some("https://gateway.example/zhihu_search")
     );
+    assert_eq!(cfg.llm_provider, "minimax");
+    assert_eq!(cfg.llm_api_key.as_deref(), Some("llm-full"));
+    assert_eq!(cfg.llm_base_url, "https://llm.example/anthropic");
+    assert_eq!(cfg.llm_model, "MiniMax-M3");
+    assert_eq!(cfg.llm_auth_scheme, "bearer");
     assert_eq!(cfg.default_extra_sources, 4);
     assert_eq!(cfg.fallback_sources, 9);
     assert_eq!(cfg.fetch_max_chars, Some(12345));
     assert_eq!(cfg.cache_size, 128);
     assert_eq!(cfg.timeout.as_secs(), 30);
     assert_eq!(cfg.max_response_bytes, 2 * 1024 * 1024);
+    assert!(!cfg.progressive_cache_enabled);
+    assert_eq!(
+        cfg.progressive_cache_path,
+        std::path::PathBuf::from("custom-progressive.redb")
+    );
+    assert_eq!(cfg.progressive_cache_ttl_seconds, 60);
+    assert_eq!(cfg.progressive_cache_max_entries, 7);
 }
 
 #[test]

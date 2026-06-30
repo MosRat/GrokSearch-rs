@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::diagnostics::{diagnostic_pair, DebugRedacted, DiagnosticField};
 use crate::loader::{try_load_from_env_map, ConfigLoadError};
+use crate::paths;
 use crate::reader::ConfigReader;
 use crate::schema::*;
 use crate::util::{
@@ -49,6 +50,11 @@ pub struct Config {
     pub openai_compatible_api_key: Option<String>,
     pub openai_compatible_model: Option<String>,
     pub transport: Transport,
+    pub llm_provider: String,
+    pub llm_api_key: Option<String>,
+    pub llm_base_url: String,
+    pub llm_model: String,
+    pub llm_auth_scheme: String,
     pub github_token: Option<String>,
     pub source_max_answers: usize,
     pub source_max_comments: usize,
@@ -72,6 +78,12 @@ pub struct Config {
     pub academic_institutional_probe: bool,
     pub academic_max_pdf_bytes: usize,
     pub academic_pdf_max_chars: Option<usize>,
+    pub progressive_cache_enabled: bool,
+    pub progressive_cache_path: PathBuf,
+    pub progressive_cache_ttl_seconds: u64,
+    pub progressive_cache_max_entries: usize,
+    pub progressive_default_model: String,
+    pub progressive_default_profile: String,
 }
 
 /// Hand-written `Debug` that masks secret-bearing fields so a stray
@@ -121,6 +133,17 @@ impl std::fmt::Debug for Config {
             )
             .field("openai_compatible_model", &self.openai_compatible_model)
             .field("transport", &self.transport)
+            .field("llm_provider", &self.llm_provider)
+            .field(
+                "llm_api_key",
+                &self.llm_api_key.fmt_debug_redacted(LLM_API_KEY),
+            )
+            .field(
+                "llm_base_url",
+                &self.llm_base_url.fmt_debug_redacted(LLM_BASE_URL),
+            )
+            .field("llm_model", &self.llm_model)
+            .field("llm_auth_scheme", &self.llm_auth_scheme)
             .field(
                 "github_token",
                 &self.github_token.fmt_debug_redacted(GITHUB_TOKEN),
@@ -180,6 +203,21 @@ impl std::fmt::Debug for Config {
             )
             .field("academic_max_pdf_bytes", &self.academic_max_pdf_bytes)
             .field("academic_pdf_max_chars", &self.academic_pdf_max_chars)
+            .field("progressive_cache_enabled", &self.progressive_cache_enabled)
+            .field("progressive_cache_path", &self.progressive_cache_path)
+            .field(
+                "progressive_cache_ttl_seconds",
+                &self.progressive_cache_ttl_seconds,
+            )
+            .field(
+                "progressive_cache_max_entries",
+                &self.progressive_cache_max_entries,
+            )
+            .field("progressive_default_model", &self.progressive_default_model)
+            .field(
+                "progressive_default_profile",
+                &self.progressive_default_profile,
+            )
             .finish()
     }
 }
@@ -245,6 +283,9 @@ impl Config {
             .into_iter()
             .map(|(k, v)| (k.into(), v.into()))
             .collect();
+        let default_progressive_cache_path =
+            paths::progressive_cache_path_for(map.iter().map(|(k, v)| (k.clone(), v.clone())))
+                .unwrap_or_else(|| PathBuf::from("progressive-cache.redb"));
         let reader = ConfigReader::new(&map);
         let grok_auth_mode = auth_mode_value(&reader);
 
@@ -274,6 +315,11 @@ impl Config {
             openai_compatible_api_key: reader.secret(OPENAI_COMPATIBLE_API_KEY),
             openai_compatible_model: reader.optional(OPENAI_COMPATIBLE_MODEL),
             transport: decide_transport(&reader, grok_auth_mode),
+            llm_provider: reader.string(LLM_PROVIDER, default_str(LLM_PROVIDER)),
+            llm_api_key: reader.secret(LLM_API_KEY),
+            llm_base_url: reader.plain_base_url(LLM_BASE_URL, default_str(LLM_BASE_URL)),
+            llm_model: reader.string(LLM_MODEL, default_str(LLM_MODEL)),
+            llm_auth_scheme: reader.string(LLM_AUTH_SCHEME, default_str(LLM_AUTH_SCHEME)),
             github_token: reader.secret(GITHUB_TOKEN),
             source_max_answers: reader.usize(SOURCE_MAX_ANSWERS, default_usize(SOURCE_MAX_ANSWERS)),
             source_max_comments: reader
@@ -318,6 +364,29 @@ impl Config {
                 default_usize(ACADEMIC_MAX_PDF_BYTES),
             ),
             academic_pdf_max_chars: reader.positive_usize(ACADEMIC_PDF_MAX_CHARS),
+            progressive_cache_enabled: reader.bool(
+                PROGRESSIVE_CACHE_ENABLED,
+                default_bool(PROGRESSIVE_CACHE_ENABLED),
+            ),
+            progressive_cache_path: reader
+                .path(PROGRESSIVE_CACHE_PATH)
+                .unwrap_or(default_progressive_cache_path),
+            progressive_cache_ttl_seconds: reader.u64(
+                PROGRESSIVE_CACHE_TTL_SECONDS,
+                default_u64(PROGRESSIVE_CACHE_TTL_SECONDS),
+            ),
+            progressive_cache_max_entries: reader.usize(
+                PROGRESSIVE_CACHE_MAX_ENTRIES,
+                default_usize(PROGRESSIVE_CACHE_MAX_ENTRIES),
+            ),
+            progressive_default_model: reader.string(
+                PROGRESSIVE_DEFAULT_MODEL,
+                &reader.string(LLM_MODEL, default_str(LLM_MODEL)),
+            ),
+            progressive_default_profile: reader.string(
+                PROGRESSIVE_DEFAULT_PROFILE,
+                default_str(PROGRESSIVE_DEFAULT_PROFILE),
+            ),
         }
     }
 
@@ -383,6 +452,11 @@ impl Config {
             diagnostic_pair(FALLBACK_SOURCES, Some(self.fallback_sources.to_string())),
             diagnostic_pair(TIMEOUT_SECONDS, Some(self.timeout.as_secs().to_string())),
             diagnostic_pair(PROXY, Some(self.proxy.clone())),
+            diagnostic_pair(LLM_PROVIDER, Some(self.llm_provider.clone())),
+            diagnostic_pair(LLM_API_KEY, self.llm_api_key.clone()),
+            diagnostic_pair(LLM_BASE_URL, Some(self.llm_base_url.clone())),
+            diagnostic_pair(LLM_MODEL, Some(self.llm_model.clone())),
+            diagnostic_pair(LLM_AUTH_SCHEME, Some(self.llm_auth_scheme.clone())),
             diagnostic_pair(GITHUB_TOKEN, self.github_token.clone()),
             diagnostic_pair(
                 MAX_RESPONSE_BYTES,
@@ -429,6 +503,30 @@ impl Config {
             diagnostic_pair(
                 ACADEMIC_INSTITUTIONAL_PROBE,
                 Some(self.academic_institutional_probe.to_string()),
+            ),
+            diagnostic_pair(
+                PROGRESSIVE_CACHE_ENABLED,
+                Some(self.progressive_cache_enabled.to_string()),
+            ),
+            diagnostic_pair(
+                PROGRESSIVE_CACHE_PATH,
+                Some(self.progressive_cache_path.display().to_string()),
+            ),
+            diagnostic_pair(
+                PROGRESSIVE_CACHE_TTL_SECONDS,
+                Some(self.progressive_cache_ttl_seconds.to_string()),
+            ),
+            diagnostic_pair(
+                PROGRESSIVE_CACHE_MAX_ENTRIES,
+                Some(self.progressive_cache_max_entries.to_string()),
+            ),
+            diagnostic_pair(
+                PROGRESSIVE_DEFAULT_MODEL,
+                Some(self.progressive_default_model.clone()),
+            ),
+            diagnostic_pair(
+                PROGRESSIVE_DEFAULT_PROFILE,
+                Some(self.progressive_default_profile.clone()),
             ),
         ];
         fields

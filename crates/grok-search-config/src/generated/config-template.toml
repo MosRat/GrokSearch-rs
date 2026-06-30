@@ -64,6 +64,18 @@
 # OpenAI-compatible model name.
 # openai_compatible_model = "grok-4.3-fast" # default: falls back to grok_model
 
+# -- LLM providers --
+# Default LLM provider used by experimental PDF progressive reading.
+# llm_provider = "minimax" # default: minimax
+# LLM API key for experimental PDF progressive reading.
+# llm_api_key = "sk-..."
+# Anthropic-compatible base URL for experimental PDF progressive reading.
+# llm_base_url = "https://api.minimaxi.com/anthropic" # default: https://api.minimaxi.com/anthropic
+# Default LLM model for experimental PDF progressive reading.
+# llm_model = "MiniMax-M3" # default: MiniMax-M3
+# Authentication scheme for Anthropic-compatible LLM calls.
+# llm_auth_scheme = "bearer" # default: bearer
+
 # -- Source extraction --
 # GitHub token for issue, PR, and repo metadata fetches.
 # github_token = "ghp_..."
@@ -109,3 +121,15 @@
 # academic_max_pdf_bytes = 52428800 # default: 52428800
 # Character cap for parsed PDF output.
 # academic_pdf_max_chars = 200000
+# Enables persistent KV cache for LLM progressive PDF reading structures.
+# progressive_cache_enabled = true # default: true
+# Persistent KV cache path for LLM progressive PDF reading structures.
+# progressive_cache_path = "/path/to/progressive-cache.redb" # default: default progressive-cache.redb next to config.toml
+# Seconds before progressive reading cache entries expire.
+# progressive_cache_ttl_seconds = 2592000 # default: 2592000
+# Maximum progressive reading cache entries retained after writes.
+# progressive_cache_max_entries = 512 # default: 512
+# Default model for LLM progressive PDF reading when the tool does not pass one.
+# progressive_default_model = "MiniMax-M3" # default: MiniMax-M3
+# Default profile for LLM progressive PDF reading.
+# progressive_default_profile = "balanced" # default: balanced

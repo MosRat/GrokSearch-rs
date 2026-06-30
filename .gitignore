@@ -44,3 +44,5 @@ PypiSerects
 /stdin
 
 /ref_repos
+
+.env.llm

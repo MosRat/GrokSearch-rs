@@ -476,6 +476,69 @@ config_schema! {
         }
     }
 
+    group "LLM providers" {
+        /// Default LLM provider used by experimental PDF progressive reading.
+        LLM_PROVIDER {
+            field: llm_provider,
+            type: String,
+            toml: "llm_provider",
+            env: "GROK_SEARCH_LLM_PROVIDER",
+            aliases: ["GROK_SEARCH_LLM_PROVIDER"],
+            kind: String,
+            redaction: None,
+            default: "minimax",
+            sample: "\"minimax\"",
+        }
+        /// LLM API key for experimental PDF progressive reading.
+        LLM_API_KEY {
+            field: llm_api_key,
+            type: String,
+            toml: "llm_api_key",
+            env: "GROK_SEARCH_LLM_API_KEY",
+            aliases: ["GROK_SEARCH_LLM_API_KEY", "ANTHROPIC_API_KEY", "MINIMAX_API_KEY"],
+            kind: Secret,
+            redaction: SecretStatus,
+            default: "unset",
+            sample: "\"sk-...\"",
+        }
+        /// Anthropic-compatible base URL for experimental PDF progressive reading.
+        LLM_BASE_URL {
+            field: llm_base_url,
+            type: String,
+            toml: "llm_base_url",
+            env: "GROK_SEARCH_LLM_BASE_URL",
+            aliases: ["GROK_SEARCH_LLM_BASE_URL", "ANTHROPIC_BASE_URL"],
+            kind: UrlBase,
+            redaction: Url,
+            default: "https://api.minimaxi.com/anthropic",
+            sample: "\"https://api.minimaxi.com/anthropic\"",
+        }
+        /// Default LLM model for experimental PDF progressive reading.
+        LLM_MODEL {
+            field: llm_model,
+            type: String,
+            toml: "llm_model",
+            env: "GROK_SEARCH_LLM_MODEL",
+            aliases: ["GROK_SEARCH_LLM_MODEL", "ANTHROPIC_MODEL"],
+            kind: String,
+            redaction: None,
+            default: "MiniMax-M3",
+            sample: "\"MiniMax-M3\"",
+        }
+        /// Authentication scheme for Anthropic-compatible LLM calls.
+        LLM_AUTH_SCHEME {
+            field: llm_auth_scheme,
+            type: String,
+            toml: "llm_auth_scheme",
+            env: "GROK_SEARCH_LLM_AUTH_SCHEME",
+            aliases: ["GROK_SEARCH_LLM_AUTH_SCHEME"],
+            kind: String,
+            redaction: None,
+            default: "bearer",
+            sample: "\"bearer\"",
+        }
+    }
+
     group "Source extraction" {
         /// GitHub token for issue, PR, and repo metadata fetches.
         GITHUB_TOKEN {
@@ -731,6 +794,78 @@ config_schema! {
             redaction: None,
             default: "unset",
             sample: "200000",
+        }
+        /// Enables persistent KV cache for LLM progressive PDF reading structures.
+        PROGRESSIVE_CACHE_ENABLED {
+            field: progressive_cache_enabled,
+            type: bool,
+            toml: "progressive_cache_enabled",
+            env: "GROK_SEARCH_PROGRESSIVE_CACHE_ENABLED",
+            aliases: ["GROK_SEARCH_PROGRESSIVE_CACHE_ENABLED"],
+            kind: Bool,
+            redaction: None,
+            default: "true",
+            sample: "true",
+        }
+        /// Persistent KV cache path for LLM progressive PDF reading structures.
+        PROGRESSIVE_CACHE_PATH {
+            field: progressive_cache_path,
+            type: String,
+            toml: "progressive_cache_path",
+            env: "GROK_SEARCH_PROGRESSIVE_CACHE_PATH",
+            aliases: ["GROK_SEARCH_PROGRESSIVE_CACHE_PATH"],
+            kind: Path,
+            redaction: Path,
+            default: "default progressive-cache.redb next to config.toml",
+            sample: "\"/path/to/progressive-cache.redb\"",
+        }
+        /// Seconds before progressive reading cache entries expire.
+        PROGRESSIVE_CACHE_TTL_SECONDS {
+            field: progressive_cache_ttl_seconds,
+            type: u64,
+            toml: "progressive_cache_ttl_seconds",
+            env: "GROK_SEARCH_PROGRESSIVE_CACHE_TTL_SECONDS",
+            aliases: ["GROK_SEARCH_PROGRESSIVE_CACHE_TTL_SECONDS"],
+            kind: DurationSeconds,
+            redaction: None,
+            default: "2592000",
+            sample: "2592000",
+        }
+        /// Maximum progressive reading cache entries retained after writes.
+        PROGRESSIVE_CACHE_MAX_ENTRIES {
+            field: progressive_cache_max_entries,
+            type: usize,
+            toml: "progressive_cache_max_entries",
+            env: "GROK_SEARCH_PROGRESSIVE_CACHE_MAX_ENTRIES",
+            aliases: ["GROK_SEARCH_PROGRESSIVE_CACHE_MAX_ENTRIES"],
+            kind: Usize,
+            redaction: None,
+            default: "512",
+            sample: "512",
+        }
+        /// Default model for LLM progressive PDF reading when the tool does not pass one.
+        PROGRESSIVE_DEFAULT_MODEL {
+            field: progressive_default_model,
+            type: String,
+            toml: "progressive_default_model",
+            env: "GROK_SEARCH_PROGRESSIVE_DEFAULT_MODEL",
+            aliases: ["GROK_SEARCH_PROGRESSIVE_DEFAULT_MODEL"],
+            kind: String,
+            redaction: None,
+            default: "MiniMax-M3",
+            sample: "\"MiniMax-M3\"",
+        }
+        /// Default profile for LLM progressive PDF reading.
+        PROGRESSIVE_DEFAULT_PROFILE {
+            field: progressive_default_profile,
+            type: String,
+            toml: "progressive_default_profile",
+            env: "GROK_SEARCH_PROGRESSIVE_DEFAULT_PROFILE",
+            aliases: ["GROK_SEARCH_PROGRESSIVE_DEFAULT_PROFILE"],
+            kind: String,
+            redaction: None,
+            default: "balanced",
+            sample: "\"balanced\"",
         }
     }
 }

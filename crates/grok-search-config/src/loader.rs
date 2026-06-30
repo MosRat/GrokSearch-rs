@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::model::Config;
 use crate::paths::resolve_config_path;
-use crate::schema::ConfigFile;
+use crate::schema::{ConfigFile, CONFIG_ITEMS};
 use crate::template;
 
 #[derive(Debug, thiserror::Error)]
@@ -92,6 +92,16 @@ fn merge_env_over_file(
     mut base: HashMap<String, String>,
     overlay: HashMap<String, String>,
 ) -> HashMap<String, String> {
+    for item in CONFIG_ITEMS {
+        if let Some(value) = item
+            .key
+            .env_aliases
+            .iter()
+            .find_map(|alias| overlay.get(*alias).filter(|value| !value.trim().is_empty()))
+        {
+            base.insert(item.key.canonical_env.to_string(), value.clone());
+        }
+    }
     for (k, v) in overlay {
         base.insert(k, v);
     }

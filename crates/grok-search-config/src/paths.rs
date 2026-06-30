@@ -43,6 +43,10 @@ pub fn auth_path() -> Option<PathBuf> {
     auth_path_for(std::env::vars())
 }
 
+pub fn progressive_cache_path() -> Option<PathBuf> {
+    progressive_cache_path_for(std::env::vars())
+}
+
 pub fn auth_path_for<I, K, V>(env_vars: I) -> Option<PathBuf>
 where
     I: IntoIterator<Item = (K, V)>,
@@ -57,6 +61,25 @@ where
         return Some(PathBuf::from(explicit));
     }
     resolve_config_path(&env).map(|path| path.with_file_name("auth.json"))
+}
+
+pub fn progressive_cache_path_for<I, K, V>(env_vars: I) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: Into<String>,
+    V: Into<String>,
+{
+    let env: HashMap<String, String> = env_vars
+        .into_iter()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
+    if let Some(explicit) = env
+        .get("GROK_SEARCH_PROGRESSIVE_CACHE_PATH")
+        .filter(|v| !v.is_empty())
+    {
+        return Some(PathBuf::from(explicit));
+    }
+    resolve_config_path(&env).map(|path| path.with_file_name("progressive-cache.redb"))
 }
 
 /// Test-friendly variant of [`config_path`] that takes an explicit env map.

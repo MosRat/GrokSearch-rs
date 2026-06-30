@@ -46,6 +46,8 @@ pub(crate) fn redact_proxy_url_for_config(raw: &str) -> String {
     if url.password().is_some() {
         let _ = url.set_password(Some("***"));
     }
+    url.set_query(None);
+    url.set_fragment(None);
     url.to_string()
 }
 
@@ -64,6 +66,8 @@ pub(crate) fn redact_url(raw: &str) -> String {
     if url.password().is_some() {
         let _ = url.set_password(Some("***"));
     }
+    url.set_query(None);
+    url.set_fragment(None);
     url.to_string()
 }
 
