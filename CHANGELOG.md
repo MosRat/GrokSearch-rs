@@ -4,6 +4,39 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.3.1 - 2026-07-01
+
+### Added
+
+- Added intent-oriented academic PDF tools: `academic_pdf_read`,
+  `academic_pdf_structure`, `academic_pdf_artifacts`, and
+  `academic_pdf_download`, while keeping the legacy academic PDF commands
+  compatible.
+- Added LLM-assisted progressive paper reading for PDF structure extraction,
+  backed by Anthropic-compatible clients, profile-based defaults, structured
+  output, and local KV caching.
+- Added redb-backed PDF byte caching with TTL, max-entry, max-size, refresh,
+  bypass, and diagnostics support.
+- Added global configuration for LLM and progressive/PDF cache defaults.
+
+### Changed
+
+- Refactored PDF parsing into pass-based pipelines for raw extraction, text
+  cleaning, image/table artifacts, manifests, and final output truncation.
+- Improved image and table artifact extraction with staged manifests, caption
+  diagnostics, duplicate detection, table quality scoring, and markdown table
+  fallback.
+- Simplified agent-facing PDF workflows so reading text, generating structure,
+  extracting artifacts, and downloading PDFs no longer depend on users calling
+  another tool first.
+- Optimized PDF downloads with retry backoff, elapsed-time diagnostics,
+  host-aware adaptive range/full strategies, and direct-client fallback.
+
+### Fixed
+
+- Improved LLM progressive parsing resilience with bounded retries, JSON repair
+  handling, nonfatal chunk failures, and safer local patch validation.
+
 ## 0.3.0 - 2026-06-29
 
 ### Added
