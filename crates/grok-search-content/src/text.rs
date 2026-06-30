@@ -45,4 +45,3 @@ mod tests {
         assert!(!parsed.truncated);
     }
 }
-

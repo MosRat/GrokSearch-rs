@@ -83,4 +83,3 @@ mod tests {
         assert!(matches!(err, GrokSearchError::Parse(_)));
     }
 }
-

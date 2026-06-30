@@ -30,4 +30,3 @@ mod tests {
         assert!(validate_pdf_bytes(b"%PDF-1.7", 3).is_err());
     }
 }
-

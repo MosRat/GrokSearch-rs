@@ -50,7 +50,7 @@ This returns an overview, not a full citation graph crawl.
 
 ## `academic_read`
 
-Read a paper as Markdown:
+Read a paper as processed Markdown. The PDF pipeline defaults to `clean` mode, which removes common layout noise and repairs conservative line breaks:
 
 ```json
 {
@@ -62,9 +62,23 @@ Read a paper as Markdown:
 
 Use `url` instead of `identifier` when the user provides a direct PDF URL.
 
+Inspect raw extraction alongside processed output:
+
+```json
+{
+  "identifier":"1706.03762",
+  "max_chars":30000,
+  "output_format":"markdown",
+  "parse_options":{
+    "include_raw_content":true,
+    "text_processing_mode":"clean"
+  }
+}
+```
+
 ## `academic_parse_pdf`
 
-Parse and save Markdown:
+Parse and save processed Markdown:
 
 ```json
 {
@@ -72,12 +86,29 @@ Parse and save Markdown:
   "output_format":"markdown",
   "parse_options":{
     "save_markdown_path":"tmp/attention.md",
+    "text_processing_mode":"clean",
     "extract_material_links":true
   }
 }
 ```
 
-Image/table extraction options may report unsupported capabilities depending on the parser.
+Save processed and raw text for parser quality review:
+
+```json
+{
+  "identifier":"1706.03762",
+  "max_chars":50000,
+  "output_format":"markdown",
+  "parse_options":{
+    "save_markdown_path":"tmp/attention.processed.md",
+    "save_raw_content_path":"tmp/attention.raw.md",
+    "include_raw_content":true,
+    "text_processing_mode":"clean"
+  }
+}
+```
+
+Use `text_processing_mode:"none"` when the task is debugging `pdf_oxide` extraction itself. Image/table extraction is partial: bitmap images and detected tables can be exported, but vector-only figures may only appear as text/caption evidence.
 
 ## `academic_download_pdf`
 
