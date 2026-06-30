@@ -259,8 +259,10 @@ async fn run_inner(
     for handle in handles {
         match handle.await {
             Ok(Ok(result)) => chunk_results.push(result),
-            Ok(Err(err)) => chunk_results.push(fallback_chunk_result(format!("{err}"))),
-            Err(err) => chunk_results.push(fallback_chunk_result(format!("join error: {err}"))),
+            Ok(Err(err)) => chunk_results.push(fallback_chunk_result(None, format!("{err}"))),
+            Err(err) => {
+                chunk_results.push(fallback_chunk_result(None, format!("join error: {err}")))
+            }
         }
     }
     let mut paper = assemble_paper(
@@ -423,9 +425,10 @@ async fn process_chunk(
                 true,
             )
             .or_else(|err| {
-                Ok(fallback_chunk_result(format!(
-                    "invalid_llm_json: {first_err}; repair_failed: {err}"
-                )))
+                Ok(fallback_chunk_result(
+                    Some(&chunk),
+                    format!("invalid_llm_json: {first_err}; repair_failed: {err}"),
+                ))
             })
         }
     }
