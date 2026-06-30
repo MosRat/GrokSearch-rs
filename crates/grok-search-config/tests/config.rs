@@ -340,6 +340,25 @@ fn progressive_cache_path_defaults_next_to_config() {
 }
 
 #[test]
+fn academic_pdf_cache_path_defaults_next_to_config() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("nested").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "").unwrap();
+
+    let cfg = Config::try_load_from([
+        ("GROK_SEARCH_CONFIG", path.to_string_lossy().to_string()),
+        ("GROK_SEARCH_API_KEY", "fake".into()),
+    ])
+    .unwrap();
+
+    assert_eq!(
+        cfg.academic_pdf_cache_path,
+        path.with_file_name("academic-pdf-cache.redb")
+    );
+}
+
+#[test]
 fn progressive_cache_path_env_overrides_default() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("config.toml");
@@ -357,6 +376,26 @@ fn progressive_cache_path_env_overrides_default() {
     .unwrap();
 
     assert_eq!(cfg.progressive_cache_path, cache);
+}
+
+#[test]
+fn academic_pdf_cache_path_env_overrides_default() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let cache = dir.path().join("pdf-cache.redb");
+    fs::write(&path, "").unwrap();
+
+    let cfg = Config::try_load_from([
+        ("GROK_SEARCH_CONFIG", path.to_string_lossy().to_string()),
+        ("GROK_SEARCH_API_KEY", "fake".into()),
+        (
+            "GROK_SEARCH_ACADEMIC_PDF_CACHE_PATH",
+            cache.to_string_lossy().to_string(),
+        ),
+    ])
+    .unwrap();
+
+    assert_eq!(cfg.academic_pdf_cache_path, cache);
 }
 
 #[test]
@@ -412,6 +451,11 @@ progressive_cache_enabled = false
 progressive_cache_path = "custom-progressive.redb"
 progressive_cache_ttl_seconds = 60
 progressive_cache_max_entries = 7
+academic_pdf_cache_enabled = false
+academic_pdf_cache_path = "custom-pdf-cache.redb"
+academic_pdf_cache_ttl_seconds = 120
+academic_pdf_cache_max_entries = 11
+academic_pdf_cache_max_bytes = 123456
 default_extra_sources = 4
 fallback_sources      = 9
 fetch_max_chars       = 12345
@@ -472,6 +516,14 @@ max_response_bytes    = 2097152
     );
     assert_eq!(cfg.progressive_cache_ttl_seconds, 60);
     assert_eq!(cfg.progressive_cache_max_entries, 7);
+    assert!(!cfg.academic_pdf_cache_enabled);
+    assert_eq!(
+        cfg.academic_pdf_cache_path,
+        std::path::PathBuf::from("custom-pdf-cache.redb")
+    );
+    assert_eq!(cfg.academic_pdf_cache_ttl_seconds, 120);
+    assert_eq!(cfg.academic_pdf_cache_max_entries, 11);
+    assert_eq!(cfg.academic_pdf_cache_max_bytes, 123456);
 }
 
 #[test]

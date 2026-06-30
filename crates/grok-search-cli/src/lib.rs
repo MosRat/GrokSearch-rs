@@ -294,6 +294,8 @@ struct AcademicGetCommand {
     include_open_access: Option<bool>,
     #[arg(long)]
     extract_material_links: bool,
+    #[arg(long, value_enum)]
+    cache_policy: Option<AcademicPdfCachePolicyArg>,
     #[command(flatten)]
     output: OutputArgs,
 }
@@ -331,6 +333,8 @@ struct AcademicPdfReadCommand {
     include_processing: bool,
     #[arg(long)]
     extract_material_links: bool,
+    #[arg(long, value_enum)]
+    cache_policy: Option<AcademicPdfCachePolicyArg>,
     #[command(flatten)]
     output: OutputArgs,
 }
@@ -409,6 +413,8 @@ struct AcademicPdfArtifactsCommand {
     text_mode: Option<String>,
     #[arg(long)]
     max_chars: Option<usize>,
+    #[arg(long, value_enum)]
+    cache_policy: Option<AcademicPdfCachePolicyArg>,
     #[command(flatten)]
     output: OutputArgs,
 }
@@ -421,6 +427,8 @@ struct AcademicPdfDownloadCommand {
     output_path: String,
     #[arg(long)]
     overwrite: bool,
+    #[arg(long, value_enum)]
+    cache_policy: Option<AcademicPdfCachePolicyArg>,
     #[command(flatten)]
     output: OutputArgs,
 }
@@ -750,6 +758,7 @@ async fn run_academic(command: AcademicCommand) -> anyhow::Result<()> {
                     include_raw_content: command.include_raw_content.then_some(true),
                     include_processing: command.include_processing.then_some(true),
                     extract_material_links: command.extract_material_links.then_some(true),
+                    cache_policy: command.cache_policy.map(Into::into),
                 },
                 command.output.compact,
             )
@@ -788,6 +797,7 @@ async fn run_academic(command: AcademicCommand) -> anyhow::Result<()> {
                     extract_tables: command.extract_tables.then_some(true),
                     text_mode: command.text_mode,
                     max_chars: command.max_chars,
+                    cache_policy: command.cache_policy.map(Into::into),
                 },
                 command.output.compact,
             )
@@ -802,6 +812,7 @@ async fn run_academic(command: AcademicCommand) -> anyhow::Result<()> {
                     pdf_url: command.locator.pdf_url,
                     output_path: command.output_path,
                     overwrite: command.overwrite.then_some(true),
+                    cache_policy: command.cache_policy.map(Into::into),
                 },
                 command.output.compact,
             )
@@ -1245,6 +1256,8 @@ mod tests {
                 "--text-mode",
                 "clean",
                 "--include-raw-content",
+                "--cache-policy",
+                "refresh",
             ])
             .unwrap()
             .command,
@@ -1288,6 +1301,8 @@ mod tests {
                 "--extract-tables",
                 "--tables-dir",
                 "tables",
+                "--cache-policy",
+                "refresh",
             ])
             .unwrap()
             .command,
@@ -1304,6 +1319,8 @@ mod tests {
                 "https://arxiv.org/pdf/1706.03762",
                 "--output-path",
                 "paper.pdf",
+                "--cache-policy",
+                "refresh",
             ])
             .unwrap()
             .command,

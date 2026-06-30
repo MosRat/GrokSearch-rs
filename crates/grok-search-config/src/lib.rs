@@ -13,7 +13,7 @@ pub const MAX_INLINE_SOURCES_LIMIT: usize = 20;
 pub use loader::{config_template, write_template, ConfigLoadError, InitOutcome, CONFIG_TEMPLATE};
 pub use model::{AuthMode, Config, Transport};
 pub use paths::{
-    auth_path, auth_path_for, config_path, config_path_for, progressive_cache_path,
-    progressive_cache_path_for,
+    academic_pdf_cache_path, academic_pdf_cache_path_for, auth_path, auth_path_for, config_path,
+    config_path_for, progressive_cache_path, progressive_cache_path_for,
 };
 pub use util::normalize_v1_base;

@@ -78,6 +78,11 @@ pub struct Config {
     pub academic_institutional_probe: bool,
     pub academic_max_pdf_bytes: usize,
     pub academic_pdf_max_chars: Option<usize>,
+    pub academic_pdf_cache_enabled: bool,
+    pub academic_pdf_cache_path: PathBuf,
+    pub academic_pdf_cache_ttl_seconds: u64,
+    pub academic_pdf_cache_max_entries: usize,
+    pub academic_pdf_cache_max_bytes: usize,
     pub progressive_cache_enabled: bool,
     pub progressive_cache_path: PathBuf,
     pub progressive_cache_ttl_seconds: u64,
@@ -203,6 +208,23 @@ impl std::fmt::Debug for Config {
             )
             .field("academic_max_pdf_bytes", &self.academic_max_pdf_bytes)
             .field("academic_pdf_max_chars", &self.academic_pdf_max_chars)
+            .field(
+                "academic_pdf_cache_enabled",
+                &self.academic_pdf_cache_enabled,
+            )
+            .field("academic_pdf_cache_path", &self.academic_pdf_cache_path)
+            .field(
+                "academic_pdf_cache_ttl_seconds",
+                &self.academic_pdf_cache_ttl_seconds,
+            )
+            .field(
+                "academic_pdf_cache_max_entries",
+                &self.academic_pdf_cache_max_entries,
+            )
+            .field(
+                "academic_pdf_cache_max_bytes",
+                &self.academic_pdf_cache_max_bytes,
+            )
             .field("progressive_cache_enabled", &self.progressive_cache_enabled)
             .field("progressive_cache_path", &self.progressive_cache_path)
             .field(
@@ -286,6 +308,9 @@ impl Config {
         let default_progressive_cache_path =
             paths::progressive_cache_path_for(map.iter().map(|(k, v)| (k.clone(), v.clone())))
                 .unwrap_or_else(|| PathBuf::from("progressive-cache.redb"));
+        let default_academic_pdf_cache_path =
+            paths::academic_pdf_cache_path_for(map.iter().map(|(k, v)| (k.clone(), v.clone())))
+                .unwrap_or_else(|| PathBuf::from("academic-pdf-cache.redb"));
         let reader = ConfigReader::new(&map);
         let grok_auth_mode = auth_mode_value(&reader);
 
@@ -364,6 +389,25 @@ impl Config {
                 default_usize(ACADEMIC_MAX_PDF_BYTES),
             ),
             academic_pdf_max_chars: reader.positive_usize(ACADEMIC_PDF_MAX_CHARS),
+            academic_pdf_cache_enabled: reader.bool(
+                ACADEMIC_PDF_CACHE_ENABLED,
+                default_bool(ACADEMIC_PDF_CACHE_ENABLED),
+            ),
+            academic_pdf_cache_path: reader
+                .path(ACADEMIC_PDF_CACHE_PATH)
+                .unwrap_or(default_academic_pdf_cache_path),
+            academic_pdf_cache_ttl_seconds: reader.u64(
+                ACADEMIC_PDF_CACHE_TTL_SECONDS,
+                default_u64(ACADEMIC_PDF_CACHE_TTL_SECONDS),
+            ),
+            academic_pdf_cache_max_entries: reader.usize(
+                ACADEMIC_PDF_CACHE_MAX_ENTRIES,
+                default_usize(ACADEMIC_PDF_CACHE_MAX_ENTRIES),
+            ),
+            academic_pdf_cache_max_bytes: reader.usize(
+                ACADEMIC_PDF_CACHE_MAX_BYTES,
+                default_usize(ACADEMIC_PDF_CACHE_MAX_BYTES),
+            ),
             progressive_cache_enabled: reader.bool(
                 PROGRESSIVE_CACHE_ENABLED,
                 default_bool(PROGRESSIVE_CACHE_ENABLED),
@@ -503,6 +547,26 @@ impl Config {
             diagnostic_pair(
                 ACADEMIC_INSTITUTIONAL_PROBE,
                 Some(self.academic_institutional_probe.to_string()),
+            ),
+            diagnostic_pair(
+                ACADEMIC_PDF_CACHE_ENABLED,
+                Some(self.academic_pdf_cache_enabled.to_string()),
+            ),
+            diagnostic_pair(
+                ACADEMIC_PDF_CACHE_PATH,
+                Some(self.academic_pdf_cache_path.display().to_string()),
+            ),
+            diagnostic_pair(
+                ACADEMIC_PDF_CACHE_TTL_SECONDS,
+                Some(self.academic_pdf_cache_ttl_seconds.to_string()),
+            ),
+            diagnostic_pair(
+                ACADEMIC_PDF_CACHE_MAX_ENTRIES,
+                Some(self.academic_pdf_cache_max_entries.to_string()),
+            ),
+            diagnostic_pair(
+                ACADEMIC_PDF_CACHE_MAX_BYTES,
+                Some(self.academic_pdf_cache_max_bytes.to_string()),
             ),
             diagnostic_pair(
                 PROGRESSIVE_CACHE_ENABLED,

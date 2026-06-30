@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use grok_search_content::{
     ensure_output_dir, truncate_content, write_text_file_no_overwrite, ParsedContent,
@@ -114,15 +115,18 @@ impl<'a> PdfPipelineOptions<'a> {
 fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<ParsedPdfDetails> {
     let mut passes = Vec::new();
     let pdf_sha256 = sha256_hex(bytes);
+    let pass_started = Instant::now();
     validate_parse_artifact_options(options.parse_options)?;
     passes.push(pass_report(
         "validate_options",
         "ok",
         None,
         None,
+        Some(pass_started.elapsed().as_millis() as u64),
         Vec::new(),
     ));
 
+    let pass_started = Instant::now();
     let mut file = tempfile::NamedTempFile::new()
         .map_err(|err| GrokSearchError::Io(format!("create temp PDF: {err}")))?;
     file.write_all(bytes)
@@ -132,8 +136,16 @@ fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<Par
     let pages = doc
         .page_count()
         .map_err(|err| GrokSearchError::Parse(format!("pdf_oxide page_count: {err}")))?;
-    passes.push(pass_report("open_pdf", "ok", None, None, Vec::new()));
+    passes.push(pass_report(
+        "open_pdf",
+        "ok",
+        None,
+        None,
+        Some(pass_started.elapsed().as_millis() as u64),
+        Vec::new(),
+    ));
 
+    let pass_started = Instant::now();
     let raw_pages = extract_page_texts_with_pdf_oxide(&doc, pages, options.format)?;
     let progressive_source = if options.build_progressive_source {
         Some(build_progressive_source_bundle(&doc, pages, &raw_pages)?)
@@ -147,9 +159,11 @@ fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<Par
         "ok",
         None,
         Some(raw_original_length),
+        Some(pass_started.elapsed().as_millis() as u64),
         Vec::new(),
     ));
 
+    let pass_started = Instant::now();
     let signals = analyze_text_signals(&raw_content);
     let page_layout_signals = collect_page_layout_signals(&doc, pages);
     let mut signal_warnings = Vec::new();
@@ -171,9 +185,11 @@ fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<Par
         "ok",
         Some(raw_original_length),
         Some(raw_original_length),
+        Some(pass_started.elapsed().as_millis() as u64),
         signal_warnings,
     ));
 
+    let pass_started = Instant::now();
     let cleaned = clean_text(&raw_content, options.text_processing_mode);
     let processed_original_length = cleaned.content.chars().count();
     passes.push(pass_report(
@@ -181,12 +197,14 @@ fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<Par
         "ok",
         Some(raw_original_length),
         Some(processed_original_length),
+        Some(pass_started.elapsed().as_millis() as u64),
         cleaned.warnings.clone(),
     ));
 
     let mut artifacts = Vec::new();
     let capabilities = AcademicParseCapabilities::default();
     if let Some(parse_options) = options.parse_options {
+        let pass_started = Instant::now();
         let mut artifact_warnings = Vec::new();
         if parse_options.extract_images.unwrap_or(false) {
             artifacts.push(artifacts::extract_image_artifacts(
@@ -218,10 +236,19 @@ fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<Par
             "ok",
             None,
             None,
+            Some(pass_started.elapsed().as_millis() as u64),
             artifact_warnings,
         ));
-        passes.push(pass_report("artifact_refine", "ok", None, None, Vec::new()));
+        passes.push(pass_report(
+            "artifact_refine",
+            "ok",
+            None,
+            None,
+            Some(0),
+            Vec::new(),
+        ));
 
+        let pass_started = Instant::now();
         let parsed = truncate_content(cleaned.content, options.max_chars);
         if let Some(path) = parse_options.save_markdown_path.as_deref() {
             artifacts.push(write_markdown_artifact(path, &parsed.content)?);
@@ -249,7 +276,14 @@ fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<Par
             .or(raw_parsed_for_save.as_ref())
             .map(|parsed| parsed.truncated)
             .unwrap_or(false);
-        passes.push(pass_report("write_artifacts", "ok", None, None, Vec::new()));
+        passes.push(pass_report(
+            "write_artifacts",
+            "ok",
+            None,
+            None,
+            Some(pass_started.elapsed().as_millis() as u64),
+            Vec::new(),
+        ));
         return Ok(finalize_details(
             parsed,
             raw_parsed_for_output,
@@ -270,6 +304,7 @@ fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<Par
         "skipped",
         None,
         None,
+        Some(0),
         Vec::new(),
     ));
     passes.push(pass_report(
@@ -277,8 +312,10 @@ fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<Par
         "skipped",
         None,
         None,
+        Some(0),
         Vec::new(),
     ));
+    let pass_started = Instant::now();
     let parsed = truncate_content(cleaned.content, options.max_chars);
     let raw_parsed = options
         .include_raw_content
@@ -292,6 +329,7 @@ fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<Par
         "skipped",
         None,
         None,
+        Some(pass_started.elapsed().as_millis() as u64),
         Vec::new(),
     ));
     Ok(finalize_details(
@@ -340,11 +378,13 @@ fn finalize_details(
     progressive_source: Option<PdfProgressiveSourceBundle>,
     pdf_sha256: String,
 ) -> ParsedPdfDetails {
+    let pass_started = Instant::now();
     passes.push(pass_report(
         "finalize",
         "ok",
         Some(processed_original_length),
         Some(parsed.content.chars().count()),
+        Some(pass_started.elapsed().as_millis() as u64),
         Vec::new(),
     ));
     let raw_truncated = raw_parsed.as_ref().map(|parsed| parsed.truncated);
@@ -386,6 +426,7 @@ fn pass_report(
     status: &str,
     input_length: Option<usize>,
     output_length: Option<usize>,
+    elapsed_ms: Option<u64>,
     warnings: Vec<String>,
 ) -> AcademicPdfPassReport {
     AcademicPdfPassReport {
@@ -393,6 +434,7 @@ fn pass_report(
         status: status.to_string(),
         input_length,
         output_length,
+        elapsed_ms,
         warnings,
     }
 }

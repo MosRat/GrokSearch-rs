@@ -7,7 +7,7 @@ mod schema;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use grok_search_config::Config;
 use grok_search_llm::{
@@ -259,10 +259,13 @@ async fn run_inner(
     for handle in handles {
         match handle.await {
             Ok(Ok(result)) => chunk_results.push(result),
-            Ok(Err(err)) => chunk_results.push(fallback_chunk_result(None, format!("{err}"))),
-            Err(err) => {
-                chunk_results.push(fallback_chunk_result(None, format!("join error: {err}")))
-            }
+            Ok(Err(err)) => chunk_results.push(fallback_chunk_result(None, format!("{err}"), 0, 0)),
+            Err(err) => chunk_results.push(fallback_chunk_result(
+                None,
+                format!("join error: {err}"),
+                0,
+                0,
+            )),
         }
     }
     let mut paper = assemble_paper(
@@ -391,14 +394,22 @@ async fn process_chunk(
     );
     request.max_tokens = Some(config.max_output_tokens);
     request.temperature = Some(0.0);
-    let response = client.complete(request).await?;
+    let response = complete_with_backoff(client, request).await?;
     let output = response
+        .response
         .content
         .iter()
         .find_map(|block| block.as_text())
         .unwrap_or_default()
         .to_string();
-    match parse_chunk_output(&chunk, &output, started.elapsed().as_millis() as u64, false) {
+    match parse_chunk_output(
+        &chunk,
+        &output,
+        started.elapsed().as_millis() as u64,
+        false,
+        response.attempts,
+        response.backoff_ms,
+    ) {
         Ok(result) => Ok(result),
         Err(first_err) => {
             let mut repair_request = LlmRequest::new(
@@ -411,8 +422,9 @@ async fn process_chunk(
             repair_request.system = Some("Return repaired valid JSON only.".to_string());
             repair_request.max_tokens = Some(config.max_output_tokens.min(1_000));
             repair_request.temperature = Some(0.0);
-            let repaired = client.complete(repair_request).await?;
+            let repaired = complete_with_backoff(client, repair_request).await?;
             let repaired_output = repaired
+                .response
                 .content
                 .iter()
                 .find_map(|block| block.as_text())
@@ -423,14 +435,76 @@ async fn process_chunk(
                 &repaired_output,
                 started.elapsed().as_millis() as u64,
                 true,
+                response.attempts.saturating_add(repaired.attempts),
+                response.backoff_ms.saturating_add(repaired.backoff_ms),
             )
             .or_else(|err| {
                 Ok(fallback_chunk_result(
                     Some(&chunk),
                     format!("invalid_llm_json: {first_err}; repair_failed: {err}"),
+                    response.attempts.saturating_add(repaired.attempts),
+                    response.backoff_ms.saturating_add(repaired.backoff_ms),
                 ))
             })
         }
+    }
+}
+
+#[derive(Debug)]
+struct LlmAttemptOutcome {
+    response: grok_search_llm::LlmResponse,
+    attempts: u32,
+    backoff_ms: u64,
+}
+
+async fn complete_with_backoff(
+    client: &AnthropicMessagesClient,
+    request: LlmRequest,
+) -> Result<LlmAttemptOutcome> {
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut attempts = 0u32;
+    let mut backoff_ms = 0u64;
+    loop {
+        attempts += 1;
+        match client.complete(request.clone()).await {
+            Ok(response) => {
+                return Ok(LlmAttemptOutcome {
+                    response,
+                    attempts,
+                    backoff_ms,
+                });
+            }
+            Err(err) if attempts < MAX_ATTEMPTS && is_retryable_llm_error(&err) => {
+                let delay = retry_delay_ms(attempts);
+                backoff_ms = backoff_ms.saturating_add(delay);
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn retry_delay_ms(attempt: u32) -> u64 {
+    600u64.saturating_mul(1u64 << attempt.saturating_sub(1).min(4))
+}
+
+fn is_retryable_llm_error(err: &GrokSearchError) -> bool {
+    match err {
+        GrokSearchError::Timeout(_) | GrokSearchError::Upstream(_) => true,
+        GrokSearchError::Provider(message) => {
+            let lower = message.to_ascii_lowercase();
+            lower.contains("http 429")
+                || lower.contains("too many requests")
+                || lower.contains("rate limit")
+                || lower.contains("token plan")
+                || lower.contains("http 500")
+                || lower.contains("http 502")
+                || lower.contains("http 503")
+                || lower.contains("http 504")
+                || lower.contains("request failed")
+                || lower.contains("timeout")
+        }
+        _ => false,
     }
 }
 
@@ -607,6 +681,7 @@ fn pass_report(
         status: status.to_string(),
         input_length,
         output_length,
+        elapsed_ms: Some(elapsed_ms),
         warnings,
     }
 }
@@ -620,4 +695,42 @@ fn sha256_hex(bytes: &[u8]) -> String {
         out.push_str(&format!("{byte:02x}"));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_delay_uses_exponential_backoff() {
+        assert_eq!(retry_delay_ms(1), 600);
+        assert_eq!(retry_delay_ms(2), 1_200);
+        assert_eq!(retry_delay_ms(3), 2_400);
+    }
+
+    #[test]
+    fn retryable_llm_error_detects_rate_limits_and_transient_failures() {
+        assert!(is_retryable_llm_error(&GrokSearchError::Provider(
+            "Anthropic-compatible HTTP 429 Too Many Requests: token plan rate limit".to_string(),
+        )));
+        assert!(is_retryable_llm_error(&GrokSearchError::Provider(
+            "Anthropic-compatible HTTP 503: busy".to_string(),
+        )));
+        assert!(is_retryable_llm_error(&GrokSearchError::Timeout(
+            "request timed out".to_string(),
+        )));
+        assert!(!is_retryable_llm_error(&GrokSearchError::Parse(
+            "invalid json".to_string(),
+        )));
+        assert!(!is_retryable_llm_error(&GrokSearchError::InvalidParams(
+            "bad model".to_string(),
+        )));
+    }
+
+    #[test]
+    fn progressive_pass_report_exposes_structured_elapsed_time() {
+        let report = pass_report("ok", Some(10), Some(20), Vec::new(), 123);
+        assert_eq!(report.elapsed_ms, Some(123));
+        assert!(report.warnings.contains(&"elapsed_ms=123".to_string()));
+    }
 }

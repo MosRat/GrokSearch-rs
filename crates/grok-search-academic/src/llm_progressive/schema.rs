@@ -77,6 +77,8 @@ pub(crate) fn parse_chunk_output(
     output: &str,
     latency_ms: u64,
     repaired: bool,
+    attempts: u32,
+    backoff_ms: u64,
 ) -> Result<ChunkResult> {
     let json_text = extract_json_object(output);
     let value = serde_json::from_str::<Value>(&json_text)
@@ -90,6 +92,8 @@ pub(crate) fn parse_chunk_output(
             input_chars: chunk.text.chars().count(),
             output_chars: output.chars().count(),
             latency_ms,
+            attempts,
+            backoff_ms,
             json_valid: true,
             repaired,
             fallback: false,
@@ -106,7 +110,12 @@ pub(crate) fn parse_chunk_output(
     })
 }
 
-pub(crate) fn fallback_chunk_result(chunk: Option<&Chunk>, error: String) -> ChunkResult {
+pub(crate) fn fallback_chunk_result(
+    chunk: Option<&Chunk>,
+    error: String,
+    attempts: u32,
+    backoff_ms: u64,
+) -> ChunkResult {
     let (chunk_id, start_char, end_char, input_chars, warnings) = match chunk {
         Some(chunk) => (
             chunk.id.clone(),
@@ -136,6 +145,8 @@ pub(crate) fn fallback_chunk_result(chunk: Option<&Chunk>, error: String) -> Chu
             start_char,
             end_char,
             input_chars,
+            attempts,
+            backoff_ms,
             fallback: true,
             json_valid: false,
             warnings,
@@ -462,7 +473,8 @@ mod tests {
     fn parses_compact_short_key_chunk_output() {
         let raw = r#"{"s":[{"t":"Introduction","l":1,"a":"c0000_intro","c":0.9}],"d":"local digest","da":["c0000_intro"],"e":[{"k":"resource","x":"https://example.com","a":"c0000_intro","c":0.7}],"p":[{"k":"join_lines","a":"c0000_intro","o":"Intro- duction","r":"Introduction","c":0.8}],"w":["ok"]}"#;
 
-        let result = parse_chunk_output(&test_chunk(), raw, 12, false).expect("parse compact");
+        let result =
+            parse_chunk_output(&test_chunk(), raw, 12, false, 1, 0).expect("parse compact");
 
         assert!(result.report.json_valid);
         assert_eq!(result.output.section_candidates[0].title, "Introduction");
@@ -481,14 +493,16 @@ mod tests {
     fn parses_micro_tuple_chunk_output_and_preserves_fallback_span() {
         let raw = r#"{"s":[["Methods",2,"c0000_intro",0.8]],"d":["digest","c0000_intro"],"e":[["figure","Figure 1","c0000_intro",0.7]],"p":[],"w":[]}"#;
 
-        let result = parse_chunk_output(&test_chunk(), raw, 5, false).expect("parse micro");
+        let result = parse_chunk_output(&test_chunk(), raw, 5, false, 1, 0).expect("parse micro");
         assert_eq!(result.output.section_candidates[0].title, "Methods");
         assert_eq!(result.output.entities[0].label, "Figure 1");
 
-        let fallback = fallback_chunk_result(Some(&test_chunk()), "bad json".to_string());
+        let fallback = fallback_chunk_result(Some(&test_chunk()), "bad json".to_string(), 3, 900);
         assert_eq!(fallback.report.chunk_id, "paragraph_window_0000");
         assert_eq!(fallback.report.start_char, 10);
         assert_eq!(fallback.report.end_char, 49);
+        assert_eq!(fallback.report.attempts, 3);
+        assert_eq!(fallback.report.backoff_ms, 900);
         assert_eq!(
             fallback.report.input_chars,
             "Introduction\nThis paper studies attention."

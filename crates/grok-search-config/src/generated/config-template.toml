@@ -121,6 +121,16 @@
 # academic_max_pdf_bytes = 52428800 # default: 52428800
 # Character cap for parsed PDF output.
 # academic_pdf_max_chars = 200000
+# Enables persistent PDF bytes cache for academic PDF tools.
+# academic_pdf_cache_enabled = true # default: true
+# Persistent PDF bytes cache path for academic PDF tools.
+# academic_pdf_cache_path = "/path/to/academic-pdf-cache.redb" # default: default academic-pdf-cache.redb next to config.toml
+# Seconds before cached PDF bytes expire.
+# academic_pdf_cache_ttl_seconds = 604800 # default: 604800
+# Maximum cached PDF entries retained after writes.
+# academic_pdf_cache_max_entries = 128 # default: 128
+# Maximum total cached PDF bytes retained after writes.
+# academic_pdf_cache_max_bytes = 2147483648 # default: 2147483648
 # Enables persistent KV cache for LLM progressive PDF reading structures.
 # progressive_cache_enabled = true # default: true
 # Persistent KV cache path for LLM progressive PDF reading structures.

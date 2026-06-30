@@ -293,6 +293,11 @@ This section is generated from the Rust config schema in `grok-search-config`. U
 | `academic_institutional_probe` | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE` | true | Probes direct and discovered proxy routes for IEEE/ACM access. |
 | `academic_max_pdf_bytes` | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | 52428800 | Maximum PDF bytes downloaded for academic PDF read, parse, and download flows. |
 | `academic_pdf_max_chars` | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for parsed PDF output. |
+| `academic_pdf_cache_enabled` | `GROK_SEARCH_ACADEMIC_PDF_CACHE_ENABLED` | true | Enables persistent PDF bytes cache for academic PDF tools. |
+| `academic_pdf_cache_path` | `GROK_SEARCH_ACADEMIC_PDF_CACHE_PATH` | default academic-pdf-cache.redb next to config.toml | Persistent PDF bytes cache path for academic PDF tools. |
+| `academic_pdf_cache_ttl_seconds` | `GROK_SEARCH_ACADEMIC_PDF_CACHE_TTL_SECONDS` | 604800 | Seconds before cached PDF bytes expire. |
+| `academic_pdf_cache_max_entries` | `GROK_SEARCH_ACADEMIC_PDF_CACHE_MAX_ENTRIES` | 128 | Maximum cached PDF entries retained after writes. |
+| `academic_pdf_cache_max_bytes` | `GROK_SEARCH_ACADEMIC_PDF_CACHE_MAX_BYTES` | 2147483648 | Maximum total cached PDF bytes retained after writes. |
 | `progressive_cache_enabled` | `GROK_SEARCH_PROGRESSIVE_CACHE_ENABLED` | true | Enables persistent KV cache for LLM progressive PDF reading structures. |
 | `progressive_cache_path` | `GROK_SEARCH_PROGRESSIVE_CACHE_PATH` | default progressive-cache.redb next to config.toml | Persistent KV cache path for LLM progressive PDF reading structures. |
 | `progressive_cache_ttl_seconds` | `GROK_SEARCH_PROGRESSIVE_CACHE_TTL_SECONDS` | 2592000 | Seconds before progressive reading cache entries expire. |
@@ -343,6 +348,11 @@ This section is generated from the Rust config schema in `grok-search-config`. U
 | `academic_scihub_base_url` | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` |
 | `academic_max_pdf_bytes` | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` |
 | `academic_pdf_max_chars` | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` |
+| `academic_pdf_cache_enabled` | `GROK_SEARCH_ACADEMIC_PDF_CACHE_ENABLED` |
+| `academic_pdf_cache_path` | `GROK_SEARCH_ACADEMIC_PDF_CACHE_PATH` |
+| `academic_pdf_cache_ttl_seconds` | `GROK_SEARCH_ACADEMIC_PDF_CACHE_TTL_SECONDS` |
+| `academic_pdf_cache_max_entries` | `GROK_SEARCH_ACADEMIC_PDF_CACHE_MAX_ENTRIES` |
+| `academic_pdf_cache_max_bytes` | `GROK_SEARCH_ACADEMIC_PDF_CACHE_MAX_BYTES` |
 | `progressive_cache_enabled` | `GROK_SEARCH_PROGRESSIVE_CACHE_ENABLED` |
 | `progressive_cache_path` | `GROK_SEARCH_PROGRESSIVE_CACHE_PATH` |
 | `progressive_cache_ttl_seconds` | `GROK_SEARCH_PROGRESSIVE_CACHE_TTL_SECONDS` |

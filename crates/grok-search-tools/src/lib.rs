@@ -627,6 +627,7 @@ pub struct AcademicPdfReadParams {
     pub include_raw_content: Option<bool>,
     pub include_processing: Option<bool>,
     pub extract_material_links: Option<bool>,
+    pub cache_policy: Option<AcademicPdfCachePolicyParam>,
 }
 
 impl From<AcademicPdfReadParams> for AcademicPdfReadInput {
@@ -642,6 +643,7 @@ impl From<AcademicPdfReadParams> for AcademicPdfReadInput {
             include_raw_content: params.include_raw_content,
             include_processing: params.include_processing,
             extract_material_links: params.extract_material_links,
+            cache_policy: params.cache_policy.map(Into::into),
         }
     }
 }
@@ -728,6 +730,7 @@ pub struct AcademicPdfArtifactsParams {
     pub extract_tables: Option<bool>,
     pub text_mode: Option<String>,
     pub max_chars: Option<usize>,
+    pub cache_policy: Option<AcademicPdfCachePolicyParam>,
 }
 
 impl From<AcademicPdfArtifactsParams> for AcademicPdfArtifactsInput {
@@ -744,6 +747,7 @@ impl From<AcademicPdfArtifactsParams> for AcademicPdfArtifactsInput {
             extract_tables: params.extract_tables,
             text_mode: params.text_mode,
             max_chars: params.max_chars,
+            cache_policy: params.cache_policy.map(Into::into),
         }
     }
 }
@@ -755,6 +759,7 @@ pub struct AcademicPdfDownloadParams {
     pub pdf_url: Option<String>,
     pub output_path: String,
     pub overwrite: Option<bool>,
+    pub cache_policy: Option<AcademicPdfCachePolicyParam>,
 }
 
 impl From<AcademicPdfDownloadParams> for AcademicPdfDownloadInput {
@@ -767,6 +772,7 @@ impl From<AcademicPdfDownloadParams> for AcademicPdfDownloadInput {
             },
             output_path: params.output_path,
             overwrite: params.overwrite,
+            cache_policy: params.cache_policy.map(Into::into),
         }
     }
 }
@@ -1121,6 +1127,7 @@ mod tests {
             "include_raw_content",
             "include_processing",
             "extract_material_links",
+            "cache_policy",
         ] {
             assert!(properties.contains_key(key), "missing {key}");
         }
@@ -1179,6 +1186,7 @@ mod tests {
             "extract_images",
             "extract_tables",
             "text_mode",
+            "cache_policy",
         ] {
             assert!(properties.contains_key(key), "missing {key}");
         }
@@ -1199,6 +1207,7 @@ mod tests {
         assert!(properties.contains_key("url"));
         assert!(properties.contains_key("pdf_url"));
         assert!(properties.contains_key("overwrite"));
+        assert!(properties.contains_key("cache_policy"));
     }
 
     #[test]

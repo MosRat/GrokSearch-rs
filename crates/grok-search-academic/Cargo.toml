@@ -26,3 +26,6 @@ grok-search-parse = { path = "../grok-search-parse" }
 grok-search-pdf = { path = "../grok-search-pdf" }
 grok-search-provider-core = { path = "../grok-search-provider-core" }
 grok-search-types = { path = "../grok-search-types" }
+
+[dev-dependencies]
+tempfile.workspace = true

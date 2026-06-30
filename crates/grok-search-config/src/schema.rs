@@ -795,6 +795,66 @@ config_schema! {
             default: "unset",
             sample: "200000",
         }
+        /// Enables persistent PDF bytes cache for academic PDF tools.
+        ACADEMIC_PDF_CACHE_ENABLED {
+            field: academic_pdf_cache_enabled,
+            type: bool,
+            toml: "academic_pdf_cache_enabled",
+            env: "GROK_SEARCH_ACADEMIC_PDF_CACHE_ENABLED",
+            aliases: ["GROK_SEARCH_ACADEMIC_PDF_CACHE_ENABLED"],
+            kind: Bool,
+            redaction: None,
+            default: "true",
+            sample: "true",
+        }
+        /// Persistent PDF bytes cache path for academic PDF tools.
+        ACADEMIC_PDF_CACHE_PATH {
+            field: academic_pdf_cache_path,
+            type: String,
+            toml: "academic_pdf_cache_path",
+            env: "GROK_SEARCH_ACADEMIC_PDF_CACHE_PATH",
+            aliases: ["GROK_SEARCH_ACADEMIC_PDF_CACHE_PATH"],
+            kind: Path,
+            redaction: Path,
+            default: "default academic-pdf-cache.redb next to config.toml",
+            sample: "\"/path/to/academic-pdf-cache.redb\"",
+        }
+        /// Seconds before cached PDF bytes expire.
+        ACADEMIC_PDF_CACHE_TTL_SECONDS {
+            field: academic_pdf_cache_ttl_seconds,
+            type: u64,
+            toml: "academic_pdf_cache_ttl_seconds",
+            env: "GROK_SEARCH_ACADEMIC_PDF_CACHE_TTL_SECONDS",
+            aliases: ["GROK_SEARCH_ACADEMIC_PDF_CACHE_TTL_SECONDS"],
+            kind: DurationSeconds,
+            redaction: None,
+            default: "604800",
+            sample: "604800",
+        }
+        /// Maximum cached PDF entries retained after writes.
+        ACADEMIC_PDF_CACHE_MAX_ENTRIES {
+            field: academic_pdf_cache_max_entries,
+            type: usize,
+            toml: "academic_pdf_cache_max_entries",
+            env: "GROK_SEARCH_ACADEMIC_PDF_CACHE_MAX_ENTRIES",
+            aliases: ["GROK_SEARCH_ACADEMIC_PDF_CACHE_MAX_ENTRIES"],
+            kind: Usize,
+            redaction: None,
+            default: "128",
+            sample: "128",
+        }
+        /// Maximum total cached PDF bytes retained after writes.
+        ACADEMIC_PDF_CACHE_MAX_BYTES {
+            field: academic_pdf_cache_max_bytes,
+            type: usize,
+            toml: "academic_pdf_cache_max_bytes",
+            env: "GROK_SEARCH_ACADEMIC_PDF_CACHE_MAX_BYTES",
+            aliases: ["GROK_SEARCH_ACADEMIC_PDF_CACHE_MAX_BYTES"],
+            kind: Usize,
+            redaction: None,
+            default: "2147483648",
+            sample: "2147483648",
+        }
         /// Enables persistent KV cache for LLM progressive PDF reading structures.
         PROGRESSIVE_CACHE_ENABLED {
             field: progressive_cache_enabled,

@@ -1,12 +1,17 @@
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 use async_trait::async_trait;
+use grok_search_cache::{PdfCachePut, PdfCacheStore, RedbPdfCache};
 use grok_search_config::Config;
 use grok_search_parse::{
     normalize_title, parse_academic_identifier as parse_identifier, rrf_merge_papers as rrf_merge,
 };
-use grok_search_pdf::{download_pdf_bytes_limited, parse_pdf_bytes_detailed, ParsedPdfDetails};
+use grok_search_pdf::{
+    download_pdf_bytes_optimized, parse_pdf_bytes_detailed, OptimizedPdfDownloadOptions,
+    ParsedPdfDetails,
+};
 use grok_search_provider_core::{
     AcademicIdentifier as Identifier, AcademicProvider, AcademicServiceProvider, FullTextLocation,
 };
@@ -14,11 +19,11 @@ use grok_search_types::{
     AcademicCitationSummary, AcademicCitationsOutput, AcademicDownloadPdfOutput, AcademicGetOutput,
     AcademicLlmProgressiveOptions, AcademicMaterialLink, AcademicPaper, AcademicParseOptions,
     AcademicParsePdfOutput, AcademicPdfArtifactsInput, AcademicPdfArtifactsOutput,
-    AcademicPdfCachePolicy, AcademicPdfDownloadInput, AcademicPdfDownloadOutput,
-    AcademicPdfLocator, AcademicPdfReadInput, AcademicPdfReadOutput, AcademicPdfStructureInput,
-    AcademicPdfStructureOutput, AcademicPdfStructureProfile, AcademicProgressiveGetInput,
-    AcademicProgressiveGetOutput, AcademicProgressivePaper, AcademicReadOutput,
-    AcademicSearchInput, AcademicSearchOutput, GrokSearchError, Result, Source,
+    AcademicPdfCacheInfo, AcademicPdfCachePolicy, AcademicPdfDownloadInput,
+    AcademicPdfDownloadOutput, AcademicPdfLocator, AcademicPdfReadInput, AcademicPdfReadOutput,
+    AcademicPdfStructureInput, AcademicPdfStructureOutput, AcademicPdfStructureProfile,
+    AcademicProgressiveGetInput, AcademicProgressiveGetOutput, AcademicProgressivePaper,
+    AcademicReadOutput, AcademicSearchInput, AcademicSearchOutput, GrokSearchError, Result, Source,
 };
 use uuid::Uuid;
 
@@ -80,6 +85,7 @@ struct ReadDetails {
     resolver_chain: Vec<String>,
     metadata_materials: Vec<AcademicMaterialLink>,
     progressive_reading: Option<AcademicProgressivePaper>,
+    pdf_cache: AcademicPdfCacheInfo,
 }
 
 struct PdfDownloadDetails {
@@ -87,6 +93,32 @@ struct PdfDownloadDetails {
     url: Option<String>,
     location: FullTextLocation,
     resolver_chain: Vec<String>,
+}
+
+struct DownloadedPdf {
+    bytes: Vec<u8>,
+    cache: AcademicPdfCacheInfo,
+}
+
+struct RemotePdfDownload {
+    bytes: Vec<u8>,
+    attempts: u32,
+    backoff_ms: u64,
+    plan: Option<String>,
+    strategy: Option<String>,
+    strategy_attempts: Vec<String>,
+}
+
+struct RemotePdfDownloadOnce {
+    bytes: Vec<u8>,
+    plan: Option<String>,
+    strategy: Option<String>,
+    strategy_attempts: Vec<String>,
+}
+
+struct ParsedPdfDownload {
+    parsed: ParsedPdfDetails,
+    cache: AcademicPdfCacheInfo,
 }
 
 impl AcademicService {
@@ -310,7 +342,14 @@ impl AcademicService {
             .and_then(|options| options.extract_material_links)
             .unwrap_or(false);
         let details = self
-            .read_pdf_details(identifier, url, max_chars, output_format, parse_options)
+            .read_pdf_details(
+                identifier,
+                url,
+                max_chars,
+                output_format,
+                parse_options,
+                AcademicPdfCachePolicy::Auto,
+            )
             .await?;
         let materials = if include_materials {
             merge_materials(
@@ -338,6 +377,7 @@ impl AcademicService {
             processing: include_parse_details.then_some(details.parsed.processing),
             materials,
             progressive_reading: details.progressive_reading,
+            pdf_cache: Some(details.pdf_cache),
         })
     }
 
@@ -354,7 +394,14 @@ impl AcademicService {
             .and_then(|options| options.extract_material_links)
             .unwrap_or(true);
         let details = self
-            .read_pdf_details(identifier, url, max_chars, output_format, parse_options)
+            .read_pdf_details(
+                identifier,
+                url,
+                max_chars,
+                output_format,
+                parse_options,
+                AcademicPdfCachePolicy::Auto,
+            )
             .await?;
         let materials = if include_materials {
             merge_materials(
@@ -382,6 +429,7 @@ impl AcademicService {
             processing: details.parsed.processing,
             materials,
             progressive_reading: details.progressive_reading,
+            pdf_cache: Some(details.pdf_cache),
         })
     }
 
@@ -400,6 +448,7 @@ impl AcademicService {
             },
             output_path,
             overwrite: Some(overwrite),
+            cache_policy: None,
         })
         .await
     }
@@ -420,6 +469,7 @@ impl AcademicService {
                 input.max_chars,
                 Some("markdown".to_string()),
                 Some(parse_options),
+                input.cache_policy.unwrap_or_default(),
                 "academic_pdf_read",
             )
             .await?;
@@ -449,6 +499,7 @@ impl AcademicService {
             processing: include_processing.then_some(details.parsed.processing),
             materials,
             progressive_reading: None,
+            pdf_cache: Some(details.pdf_cache),
         })
     }
 
@@ -479,6 +530,7 @@ impl AcademicService {
                 input.max_chars,
                 Some("markdown".to_string()),
                 Some(parse_options),
+                input.cache_policy.unwrap_or_default(),
                 "academic_pdf_structure",
             )
             .await?;
@@ -521,6 +573,7 @@ impl AcademicService {
             section,
             processing: details.parsed.processing,
             artifacts: details.parsed.artifacts,
+            pdf_cache: Some(details.pdf_cache),
         })
     }
 
@@ -543,6 +596,7 @@ impl AcademicService {
                 input.max_chars,
                 Some("markdown".to_string()),
                 Some(parse_options),
+                input.cache_policy.unwrap_or_default(),
                 "academic_pdf_artifacts",
             )
             .await?;
@@ -556,6 +610,7 @@ impl AcademicService {
             artifacts: details.parsed.artifacts,
             parse_capabilities: details.parsed.capabilities,
             processing: details.parsed.processing,
+            pdf_cache: Some(details.pdf_cache),
         })
     }
 
@@ -588,9 +643,9 @@ impl AcademicService {
             })?;
         }
         let bytes = self
-            .download_pdf_bytes_for_location(&details.location)
+            .download_pdf_for_location(&details.location, input.cache_policy.unwrap_or_default())
             .await?;
-        std::fs::write(&path, &bytes).map_err(|err| {
+        std::fs::write(&path, &bytes.bytes).map_err(|err| {
             GrokSearchError::Io(format!("write PDF output {}: {err}", path.display()))
         })?;
         Ok(AcademicDownloadPdfOutput {
@@ -601,7 +656,8 @@ impl AcademicService {
             fulltext_status: details.location.status,
             resolver_chain: details.resolver_chain,
             path: path.display().to_string(),
-            bytes: bytes.len() as u64,
+            bytes: bytes.bytes.len() as u64,
+            pdf_cache: Some(bytes.cache),
         })
     }
 
@@ -745,28 +801,172 @@ impl AcademicService {
         format: String,
         limit: usize,
         options: Option<&AcademicParseOptions>,
-    ) -> Result<ParsedPdfDetails> {
-        let bytes = self.download_pdf_bytes_for_location(location).await?;
-        parse_pdf_bytes_with_timeout(
-            bytes,
+        cache_policy: AcademicPdfCachePolicy,
+    ) -> Result<ParsedPdfDownload> {
+        let download = self
+            .download_pdf_for_location(location, cache_policy)
+            .await?;
+        let parsed = parse_pdf_bytes_with_timeout(
+            download.bytes,
             format,
             limit,
             options,
             self.config.timeout,
             &location.url,
         )
-        .await
+        .await?;
+        Ok(ParsedPdfDownload {
+            parsed,
+            cache: download.cache,
+        })
     }
 
-    async fn download_pdf_bytes_for_location(
+    async fn download_pdf_for_location(
         &self,
         location: &FullTextLocation,
-    ) -> Result<Vec<u8>> {
+        cache_policy: AcademicPdfCachePolicy,
+    ) -> Result<DownloadedPdf> {
+        let cache_key = pdf_cache_key(location, self.config.academic_max_pdf_bytes);
+        let mut cache_info = AcademicPdfCacheInfo {
+            key: cache_key.clone(),
+            ..Default::default()
+        };
+        let cache_allowed = self.config.academic_pdf_cache_enabled
+            && !matches!(cache_policy, AcademicPdfCachePolicy::Bypass);
+        let refresh = matches!(cache_policy, AcademicPdfCachePolicy::Refresh);
+
+        if cache_allowed && !refresh {
+            match RedbPdfCache::open(&self.config.academic_pdf_cache_path) {
+                Ok(cache) => match cache.get(&cache_key) {
+                    Ok(Some(entry)) => {
+                        cache_info.hit = true;
+                        cache_info.bytes = entry.bytes.len() as u64;
+                        cache_info.attempts = 0;
+                        cache_info.download_elapsed_ms = 0;
+                        if grok_search_pdf::validate_pdf_bytes(
+                            &entry.bytes,
+                            self.config.academic_max_pdf_bytes,
+                        )
+                        .is_ok()
+                        {
+                            return Ok(DownloadedPdf {
+                                bytes: entry.bytes,
+                                cache: cache_info,
+                            });
+                        }
+                        cache_info.hit = false;
+                        cache_info
+                            .warnings
+                            .push("cached PDF bytes failed validation; refetching".to_string());
+                        if let Err(err) = cache.remove(&cache_key) {
+                            cache_info
+                                .warnings
+                                .push(format!("failed to remove invalid PDF cache entry: {err}"));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(err) => cache_info
+                        .warnings
+                        .push(format!("PDF cache read failed: {err}")),
+                },
+                Err(err) => cache_info
+                    .warnings
+                    .push(format!("PDF cache open failed: {err}")),
+            }
+        }
+
+        let started = Instant::now();
+        let remote = self.download_pdf_remote_with_backoff(location).await;
+        cache_info.download_elapsed_ms = started.elapsed().as_millis() as u64;
+        let remote = remote?;
+        cache_info.attempts = remote.attempts;
+        cache_info.backoff_ms = remote.backoff_ms;
+        cache_info.bytes = remote.bytes.len() as u64;
+        if let Some(plan) = remote.plan {
+            cache_info.warnings.push(format!("download_plan={plan}"));
+        }
+        if let Some(strategy) = remote.strategy {
+            cache_info
+                .warnings
+                .push(format!("download_strategy={strategy}"));
+        }
+        cache_info.warnings.extend(remote.strategy_attempts);
+
+        if cache_allowed {
+            match RedbPdfCache::open(&self.config.academic_pdf_cache_path) {
+                Ok(cache) => {
+                    let put = PdfCachePut {
+                        cache_key: cache_key.clone(),
+                        bytes: remote.bytes.clone(),
+                        ttl_seconds: Some(self.config.academic_pdf_cache_ttl_seconds),
+                        pdf_sha256: sha256_hex(&remote.bytes),
+                        source: location.source.clone(),
+                        host: pdf_url_host(&location.url),
+                    };
+                    match cache.put(
+                        put,
+                        self.config.academic_pdf_cache_max_entries,
+                        self.config.academic_pdf_cache_max_bytes as u64,
+                    ) {
+                        Ok(_) => cache_info.stored = true,
+                        Err(err) => cache_info
+                            .warnings
+                            .push(format!("PDF cache write failed: {err}")),
+                    }
+                }
+                Err(err) => cache_info
+                    .warnings
+                    .push(format!("PDF cache open failed: {err}")),
+            }
+        }
+
+        Ok(DownloadedPdf {
+            bytes: remote.bytes,
+            cache: cache_info,
+        })
+    }
+
+    async fn download_pdf_remote_with_backoff(
+        &self,
+        location: &FullTextLocation,
+    ) -> Result<RemotePdfDownload> {
+        let mut backoff_ms = 0;
+        let mut last_err = None;
+        for attempt in 1..=3 {
+            match self.download_pdf_remote_once(location).await {
+                Ok(once) => {
+                    return Ok(RemotePdfDownload {
+                        bytes: once.bytes,
+                        attempts: attempt,
+                        backoff_ms,
+                        plan: once.plan,
+                        strategy: once.strategy,
+                        strategy_attempts: once.strategy_attempts,
+                    })
+                }
+                Err(err) if attempt < 3 && is_retryable_pdf_download_error(&err) => {
+                    let delay = pdf_download_retry_delay_ms(attempt);
+                    backoff_ms += delay;
+                    last_err = Some(err);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            GrokSearchError::Upstream(format!("academic PDF download failed for {}", location.url))
+        }))
+    }
+
+    async fn download_pdf_remote_once(
+        &self,
+        location: &FullTextLocation,
+    ) -> Result<RemotePdfDownloadOnce> {
         if matches!(
             location.source.as_str(),
             "ieee_institutional" | "acm_institutional"
         ) {
-            tokio::time::timeout(
+            let bytes = tokio::time::timeout(
                 self.config.timeout,
                 self.institutional
                     .download_pdf(location, self.config.academic_max_pdf_bytes),
@@ -777,24 +977,46 @@ impl AcademicService {
                     "academic_read PDF download timed out for {}",
                     location.url
                 ))
-            })?
+            })??;
+            Ok(RemotePdfDownloadOnce {
+                bytes,
+                plan: None,
+                strategy: Some("institutional_full".to_string()),
+                strategy_attempts: Vec::new(),
+            })
         } else {
-            tokio::time::timeout(
+            let mut options = OptimizedPdfDownloadOptions::new(
                 self.config.timeout,
-                download_pdf_bytes_limited(
-                    &self.client,
-                    &location.url,
-                    self.config.academic_max_pdf_bytes,
-                    self.config.max_response_bytes,
-                ),
-            )
-            .await
-            .map_err(|_| {
-                GrokSearchError::Timeout(format!(
-                    "academic_read PDF download timed out for {}",
-                    location.url
-                ))
-            })?
+                self.config.academic_max_pdf_bytes,
+                self.config.max_response_bytes,
+            );
+            options.enable_direct_fallback = !self.config.proxy.trim().eq_ignore_ascii_case("off");
+            let outcome =
+                download_pdf_bytes_optimized(&self.client, &location.url, options).await?;
+            let strategy_attempts = outcome
+                .attempts
+                .iter()
+                .map(|attempt| {
+                    format!(
+                        "download_attempt strategy={} status={} elapsed_ms={} bytes={}{}",
+                        attempt.strategy,
+                        attempt.status,
+                        attempt.elapsed_ms,
+                        attempt.bytes,
+                        attempt
+                            .error
+                            .as_ref()
+                            .map(|err| format!(" error={err}"))
+                            .unwrap_or_default()
+                    )
+                })
+                .collect();
+            Ok(RemotePdfDownloadOnce {
+                bytes: outcome.bytes,
+                plan: Some(outcome.plan),
+                strategy: Some(outcome.strategy),
+                strategy_attempts,
+            })
         }
     }
 
@@ -850,6 +1072,7 @@ impl AcademicService {
         max_chars: Option<usize>,
         output_format: Option<String>,
         parse_options: Option<AcademicParseOptions>,
+        cache_policy: AcademicPdfCachePolicy,
         tool_name: &str,
     ) -> Result<ReadDetails> {
         ensure_valid_locator(&locator, tool_name)?;
@@ -864,6 +1087,7 @@ impl AcademicService {
             max_chars,
             output_format,
             parse_options,
+            cache_policy,
         )
         .await
     }
@@ -875,6 +1099,7 @@ impl AcademicService {
         max_chars: Option<usize>,
         output_format: Option<String>,
         parse_options: Option<AcademicParseOptions>,
+        cache_policy: AcademicPdfCachePolicy,
     ) -> Result<ReadDetails> {
         let format = output_format.unwrap_or_else(|| "markdown".to_string());
         if format != "markdown" && format != "text" {
@@ -918,24 +1143,34 @@ impl AcademicService {
         let mut failures = Vec::new();
         for location in locations {
             match self
-                .download_and_parse_pdf(&location, format.clone(), limit, parse_options.as_ref())
+                .download_and_parse_pdf(
+                    &location,
+                    format.clone(),
+                    limit,
+                    parse_options.as_ref(),
+                    cache_policy,
+                )
                 .await
             {
-                Ok(mut parsed) => {
+                Ok(mut parsed_download) => {
                     let progressive = self
-                        .maybe_run_llm_progressive(&mut parsed, parse_options.as_ref())
+                        .maybe_run_llm_progressive(
+                            &mut parsed_download.parsed,
+                            parse_options.as_ref(),
+                        )
                         .await;
                     chain.push(location.source.clone());
                     return Ok(ReadDetails {
                         identifier,
                         url,
                         pdf_url: location.url,
-                        parsed,
+                        parsed: parsed_download.parsed,
                         source: location.source,
                         fulltext_status: location.status,
                         resolver_chain: chain,
                         metadata_materials,
                         progressive_reading: progressive,
+                        pdf_cache: parsed_download.cache,
                     });
                 }
                 Err(err) => {
@@ -949,7 +1184,11 @@ impl AcademicService {
             .collect::<Vec<_>>()
             .join("; ");
         let err = format!("academic_read PDF fetch failed for all candidates: {message}");
-        if failures.iter().any(|(kind, _)| kind == "timeout") {
+        if failures.iter().any(|(kind, message)| {
+            kind == "timeout"
+                || message.to_ascii_lowercase().contains("timeout")
+                || message.to_ascii_lowercase().contains("timed out")
+        }) {
             return Err(GrokSearchError::Timeout(err));
         }
         if failures.iter().any(|(kind, _)| kind == "upstream") {
@@ -1174,6 +1413,59 @@ fn ensure_valid_locator(locator: &AcademicPdfLocator, tool_name: &str) -> Result
     Err(GrokSearchError::InvalidParams(format!(
         "{tool_name} requires exactly one of identifier, url, or pdf_url"
     )))
+}
+
+fn pdf_cache_key(location: &FullTextLocation, max_bytes: usize) -> String {
+    let payload = format!(
+        "academic_pdf:v1\nsource={}\nurl={}\nmax_bytes={max_bytes}",
+        location.source, location.url
+    );
+    format!("academic_pdf:v1:{}", sha256_hex(payload.as_bytes()))
+}
+
+fn pdf_url_host(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(ToString::to_string))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn pdf_download_retry_delay_ms(attempt: u32) -> u64 {
+    match attempt {
+        0 | 1 => 600,
+        2 => 1_200,
+        _ => 2_400,
+    }
+}
+
+fn is_retryable_pdf_download_error(err: &GrokSearchError) -> bool {
+    match err {
+        GrokSearchError::Timeout(_) => true,
+        GrokSearchError::Upstream(message) | GrokSearchError::Provider(message) => {
+            let lower = message.to_ascii_lowercase();
+            lower.contains("http 429")
+                || lower.contains("too many requests")
+                || lower.contains("rate limit")
+                || lower.contains("http 500")
+                || lower.contains("http 502")
+                || lower.contains("http 503")
+                || lower.contains("http 504")
+                || lower.contains("timed out")
+                || lower.contains("timeout")
+                || lower.contains("connect")
+                || lower.contains("connection")
+                || lower.contains("body read failed")
+                || lower.contains("request failed")
+        }
+        _ => false,
+    }
 }
 
 fn llm_options_for_structure(
@@ -2305,6 +2597,34 @@ mod tests {
     }
 
     #[test]
+    fn pdf_cache_key_uses_hash_without_raw_url() {
+        let location = FullTextLocation {
+            url: "https://example.com/paper.pdf?token=secret".to_string(),
+            source: "direct_url".to_string(),
+            status: "direct_url".to_string(),
+        };
+        let key = pdf_cache_key(&location, 1024);
+        assert!(key.starts_with("academic_pdf:v1:"));
+        assert!(!key.contains("token=secret"));
+        assert!(!key.contains("paper.pdf"));
+    }
+
+    #[test]
+    fn pdf_download_retry_policy_covers_timeout_and_5xx() {
+        assert_eq!(pdf_download_retry_delay_ms(1), 600);
+        assert_eq!(pdf_download_retry_delay_ms(2), 1_200);
+        assert!(is_retryable_pdf_download_error(&GrokSearchError::Timeout(
+            "slow".into()
+        )));
+        assert!(is_retryable_pdf_download_error(&GrokSearchError::Upstream(
+            "academic pdf returned HTTP 503".into()
+        )));
+        assert!(!is_retryable_pdf_download_error(
+            &GrokSearchError::InvalidParams("bad".into())
+        ));
+    }
+
+    #[test]
     fn canonical_merge_starts_from_best_candidate() {
         let weak = AcademicPaper {
             title: "Same Paper".into(),
@@ -2368,7 +2688,10 @@ mod tests {
             thread::sleep(StdDuration::from_millis(500));
         });
 
-        let mut config = Config::from_env_map([("GROK_SEARCH_TIMEOUT_SECONDS", "60")]);
+        let mut config = Config::from_env_map([
+            ("GROK_SEARCH_TIMEOUT_SECONDS", "60"),
+            ("GROK_SEARCH_ACADEMIC_PDF_CACHE_ENABLED", "false"),
+        ]);
         config.timeout = std::time::Duration::from_millis(50);
         let service = AcademicService::new(
             reqwest::Client::builder()
@@ -2385,6 +2708,146 @@ mod tests {
             matches!(err, GrokSearchError::Timeout(_)),
             "expected timeout, got {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn pdf_download_uses_cache_on_second_call() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let url = format!("http://{}/paper.pdf", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests_for_thread = Arc::clone(&requests);
+        let _handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            requests_for_thread.fetch_add(1, Ordering::SeqCst);
+            let mut buf = [0u8; 512];
+            let _ = stream.read(&mut buf);
+            let body = b"%PDF-cache-test";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body);
+        });
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = Config::from_env_map([
+            (
+                "GROK_SEARCH_ACADEMIC_PDF_CACHE_PATH",
+                dir.path()
+                    .join("pdf-cache.redb")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            ("GROK_SEARCH_TIMEOUT_SECONDS", "5".to_string()),
+        ]);
+        let service = AcademicService::new(
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("test client"),
+            config,
+        );
+        let location = FullTextLocation {
+            url,
+            source: "direct_url".to_string(),
+            status: "direct_url".to_string(),
+        };
+
+        let first = service
+            .download_pdf_for_location(&location, AcademicPdfCachePolicy::Auto)
+            .await
+            .expect("first download");
+        let second = service
+            .download_pdf_for_location(&location, AcademicPdfCachePolicy::Auto)
+            .await
+            .expect("second download");
+
+        assert!(!first.cache.hit);
+        assert!(first.cache.stored);
+        assert!(second.cache.hit);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn pdf_download_refresh_bypasses_existing_cache() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let url = format!("http://{}/paper.pdf", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests_for_thread = Arc::clone(&requests);
+        let _handle = thread::spawn(move || {
+            for idx in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                requests_for_thread.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf);
+                let body = if idx == 0 {
+                    b"%PDF-cache-first".as_slice()
+                } else {
+                    b"%PDF-cache-refresh".as_slice()
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = Config::from_env_map([
+            (
+                "GROK_SEARCH_ACADEMIC_PDF_CACHE_PATH",
+                dir.path()
+                    .join("pdf-cache.redb")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            ("GROK_SEARCH_TIMEOUT_SECONDS", "5".to_string()),
+        ]);
+        let service = AcademicService::new(
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("test client"),
+            config,
+        );
+        let location = FullTextLocation {
+            url,
+            source: "direct_url".to_string(),
+            status: "direct_url".to_string(),
+        };
+
+        let first = service
+            .download_pdf_for_location(&location, AcademicPdfCachePolicy::Auto)
+            .await
+            .expect("first download");
+        let refreshed = service
+            .download_pdf_for_location(&location, AcademicPdfCachePolicy::Refresh)
+            .await
+            .expect("refresh download");
+
+        assert_eq!(first.bytes, b"%PDF-cache-first");
+        assert_eq!(refreshed.bytes, b"%PDF-cache-refresh");
+        assert!(!refreshed.cache.hit);
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

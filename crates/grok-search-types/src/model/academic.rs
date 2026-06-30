@@ -124,6 +124,7 @@ pub struct AcademicPdfReadInput {
     pub include_raw_content: Option<bool>,
     pub include_processing: Option<bool>,
     pub extract_material_links: Option<bool>,
+    pub cache_policy: Option<AcademicPdfCachePolicy>,
 }
 
 pub type AcademicPdfReadOutput = AcademicReadOutput;
@@ -159,6 +160,8 @@ pub struct AcademicPdfStructureOutput {
     pub processing: AcademicPdfProcessingReport,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<AcademicParseArtifact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_cache: Option<AcademicPdfCacheInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -171,6 +174,7 @@ pub struct AcademicPdfArtifactsInput {
     pub extract_tables: Option<bool>,
     pub text_mode: Option<String>,
     pub max_chars: Option<usize>,
+    pub cache_policy: Option<AcademicPdfCachePolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +190,8 @@ pub struct AcademicPdfArtifactsOutput {
     pub artifacts: Vec<AcademicParseArtifact>,
     pub parse_capabilities: AcademicParseCapabilities,
     pub processing: AcademicPdfProcessingReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_cache: Option<AcademicPdfCacheInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -194,6 +200,7 @@ pub struct AcademicPdfDownloadInput {
     pub locator: AcademicPdfLocator,
     pub output_path: String,
     pub overwrite: Option<bool>,
+    pub cache_policy: Option<AcademicPdfCachePolicy>,
 }
 
 pub type AcademicPdfDownloadOutput = AcademicDownloadPdfOutput;
@@ -372,11 +379,23 @@ pub struct AcademicProgressiveChunkReport {
     pub input_chars: usize,
     pub output_chars: usize,
     pub latency_ms: u64,
+    #[serde(default, skip_serializing_if = "is_default_u32")]
+    pub attempts: u32,
+    #[serde(default, skip_serializing_if = "is_default_u64")]
+    pub backoff_ms: u64,
     pub json_valid: bool,
     pub repaired: bool,
     pub fallback: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+fn is_default_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+fn is_default_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -387,6 +406,19 @@ pub struct AcademicProgressiveCacheInfo {
     pub strategy_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AcademicPdfCacheInfo {
+    pub key: String,
+    pub hit: bool,
+    pub stored: bool,
+    pub bytes: u64,
+    pub attempts: u32,
+    pub backoff_ms: u64,
+    pub download_elapsed_ms: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
@@ -463,6 +495,8 @@ pub struct AcademicPdfPassReport {
     pub input_length: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_length: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
@@ -610,6 +644,8 @@ pub struct AcademicReadOutput {
     pub materials: Vec<AcademicMaterialLink>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progressive_reading: Option<AcademicProgressivePaper>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_cache: Option<AcademicPdfCacheInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -635,6 +671,8 @@ pub struct AcademicParsePdfOutput {
     pub materials: Vec<AcademicMaterialLink>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progressive_reading: Option<AcademicProgressivePaper>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_cache: Option<AcademicPdfCacheInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -647,6 +685,8 @@ pub struct AcademicDownloadPdfOutput {
     pub resolver_chain: Vec<String>,
     pub path: String,
     pub bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_cache: Option<AcademicPdfCacheInfo>,
 }
 
 #[cfg(test)]
@@ -674,6 +714,7 @@ mod tests {
             processing: None,
             materials: Vec::new(),
             progressive_reading: None,
+            pdf_cache: None,
         };
 
         let value = serde_json::to_value(output).expect("serialize read output");
@@ -734,6 +775,7 @@ mod tests {
             resolver_chain: vec!["arxiv".to_string()],
             path: "papers/attention.pdf".to_string(),
             bytes: 1234,
+            pdf_cache: None,
         };
 
         let value = serde_json::to_value(output).expect("serialize download output");
@@ -741,5 +783,6 @@ mod tests {
         assert_eq!(value["pdf_url"], json!("https://arxiv.org/pdf/1706.03762"));
         assert_eq!(value["path"], json!("papers/attention.pdf"));
         assert_eq!(value["bytes"], json!(1234));
+        assert!(value.get("pdf_cache").is_none());
     }
 }
