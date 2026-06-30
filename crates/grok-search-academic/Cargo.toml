@@ -14,10 +14,13 @@ quick-xml.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
+grok-search-cache = { path = "../grok-search-cache" }
 grok-search-config = { path = "../grok-search-config" }
+grok-search-llm = { path = "../grok-search-llm" }
 grok-search-net = { path = "../grok-search-net" }
 grok-search-parse = { path = "../grok-search-parse" }
 grok-search-pdf = { path = "../grok-search-pdf" }

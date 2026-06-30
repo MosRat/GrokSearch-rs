@@ -5,9 +5,12 @@ use grok_search_apps::{InitOptions, InitTarget};
 use grok_search_config::{self as config, AuthMode, Config};
 use grok_search_tools::{
     AcademicCitationsParams, AcademicDownloadPdfParams, AcademicGetParams,
-    AcademicParseOptionsParams, AcademicParsePdfParams, AcademicReadParams, AcademicSearchParams,
-    GetSourcesParams, RepoMetadataParams, RepoProviderParam, WebFetchParams, WebMapParams,
-    WebSearchParams, WechatSearchParams, ZhihuSearchParams,
+    AcademicLlmProgressiveOptionsParams, AcademicParseOptionsParams, AcademicParsePdfParams,
+    AcademicPdfArtifactsParams, AcademicPdfCachePolicyParam, AcademicPdfDownloadParams,
+    AcademicPdfReadParams, AcademicPdfStructureParams, AcademicPdfStructureProfileParam,
+    AcademicProgressiveGetParams, AcademicReadParams, AcademicSearchParams, GetSourcesParams,
+    RepoMetadataParams, RepoProviderParam, WebFetchParams, WebMapParams, WebSearchParams,
+    WechatSearchParams, ZhihuSearchParams,
 };
 use serde_json::Value;
 
@@ -231,14 +234,30 @@ enum AcademicSubcommand {
     Get(AcademicGetCommand),
     /// Return citation/reference summaries.
     Citations(AcademicCitationsCommand),
+    /// Read academic PDF text.
+    #[command(name = "pdf-read", alias = "pdf_read")]
+    PdfRead(AcademicPdfReadCommand),
+    /// Generate or read progressive PDF structure.
+    #[command(name = "pdf-structure", alias = "pdf_structure")]
+    PdfStructure(AcademicPdfStructureCommand),
+    /// Extract academic PDF images and tables.
+    #[command(name = "pdf-artifacts", alias = "pdf_artifacts")]
+    PdfArtifacts(AcademicPdfArtifactsCommand),
+    /// Download an academic PDF without parsing.
+    #[command(name = "pdf-download", alias = "pdf_download")]
+    PdfDownload(AcademicPdfDownloadCommand),
     /// Resolve and parse academic full text.
+    #[command(hide = true)]
     Read(AcademicReadCommand),
     /// Resolve academic full text and export parse artifacts.
-    #[command(name = "parse-pdf", alias = "parse_pdf")]
+    #[command(name = "parse-pdf", alias = "parse_pdf", hide = true)]
     ParsePdf(AcademicParsePdfCommand),
     /// Resolve and download an academic PDF without parsing.
-    #[command(name = "download-pdf", alias = "download_pdf")]
+    #[command(name = "download-pdf", alias = "download_pdf", hide = true)]
     DownloadPdf(AcademicDownloadPdfCommand),
+    /// Read a cached progressive PDF reading structure.
+    #[command(name = "progressive-get", alias = "progressive_get", hide = true)]
+    ProgressiveGet(AcademicProgressiveGetCommand),
 }
 
 #[derive(Debug, Args)]
@@ -284,6 +303,124 @@ struct AcademicCitationsCommand {
     identifier: String,
     #[arg(long)]
     limit: Option<usize>,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, Args, Default)]
+struct AcademicPdfLocatorArgs {
+    #[arg(long)]
+    identifier: Option<String>,
+    #[arg(long)]
+    url: Option<String>,
+    #[arg(long)]
+    pdf_url: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct AcademicPdfReadCommand {
+    #[command(flatten)]
+    locator: AcademicPdfLocatorArgs,
+    #[arg(long, value_parser = ["none", "light", "clean"])]
+    text_mode: Option<String>,
+    #[arg(long)]
+    max_chars: Option<usize>,
+    #[arg(long)]
+    include_raw_content: bool,
+    #[arg(long)]
+    include_processing: bool,
+    #[arg(long)]
+    extract_material_links: bool,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, Args)]
+struct AcademicPdfStructureCommand {
+    #[command(flatten)]
+    locator: AcademicPdfLocatorArgs,
+    #[arg(long, value_parser = ["summary", "full", "section"])]
+    view: Option<String>,
+    #[arg(long)]
+    section_id: Option<String>,
+    #[arg(long, value_enum)]
+    profile: Option<AcademicPdfStructureProfileArg>,
+    #[arg(long)]
+    model: Option<String>,
+    #[arg(long, value_enum)]
+    cache_policy: Option<AcademicPdfCachePolicyArg>,
+    #[arg(long)]
+    include_section_text: bool,
+    #[arg(long)]
+    save_json_path: Option<String>,
+    #[arg(long)]
+    max_chars: Option<usize>,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum AcademicPdfStructureProfileArg {
+    Fast,
+    Balanced,
+    Strict,
+}
+
+impl From<AcademicPdfStructureProfileArg> for AcademicPdfStructureProfileParam {
+    fn from(value: AcademicPdfStructureProfileArg) -> Self {
+        match value {
+            AcademicPdfStructureProfileArg::Fast => AcademicPdfStructureProfileParam::Fast,
+            AcademicPdfStructureProfileArg::Balanced => AcademicPdfStructureProfileParam::Balanced,
+            AcademicPdfStructureProfileArg::Strict => AcademicPdfStructureProfileParam::Strict,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum AcademicPdfCachePolicyArg {
+    Auto,
+    Refresh,
+    Bypass,
+}
+
+impl From<AcademicPdfCachePolicyArg> for AcademicPdfCachePolicyParam {
+    fn from(value: AcademicPdfCachePolicyArg) -> Self {
+        match value {
+            AcademicPdfCachePolicyArg::Auto => AcademicPdfCachePolicyParam::Auto,
+            AcademicPdfCachePolicyArg::Refresh => AcademicPdfCachePolicyParam::Refresh,
+            AcademicPdfCachePolicyArg::Bypass => AcademicPdfCachePolicyParam::Bypass,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct AcademicPdfArtifactsCommand {
+    #[command(flatten)]
+    locator: AcademicPdfLocatorArgs,
+    #[arg(long)]
+    images_dir: Option<String>,
+    #[arg(long)]
+    tables_dir: Option<String>,
+    #[arg(long)]
+    extract_images: bool,
+    #[arg(long)]
+    extract_tables: bool,
+    #[arg(long, value_parser = ["none", "light", "clean"])]
+    text_mode: Option<String>,
+    #[arg(long)]
+    max_chars: Option<usize>,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, Args)]
+struct AcademicPdfDownloadCommand {
+    #[command(flatten)]
+    locator: AcademicPdfLocatorArgs,
+    #[arg(long)]
+    output_path: String,
+    #[arg(long)]
+    overwrite: bool,
     #[command(flatten)]
     output: OutputArgs,
 }
@@ -334,10 +471,27 @@ struct AcademicDownloadPdfCommand {
     output: OutputArgs,
 }
 
+#[derive(Debug, Args)]
+struct AcademicProgressiveGetCommand {
+    cache_key: String,
+    #[arg(long, value_parser = ["summary", "full", "section"])]
+    view: Option<String>,
+    #[arg(long)]
+    section_id: Option<String>,
+    #[arg(long)]
+    include_section_text: bool,
+    #[arg(long)]
+    max_chars: Option<usize>,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
 #[derive(Debug, Args, Default)]
 struct AcademicParseOptionsCommand {
     #[arg(long)]
     save_markdown_path: Option<String>,
+    #[arg(long)]
+    save_raw_content_path: Option<String>,
     #[arg(long)]
     images_dir: Option<String>,
     #[arg(long)]
@@ -348,6 +502,34 @@ struct AcademicParseOptionsCommand {
     extract_tables: bool,
     #[arg(long)]
     extract_material_links: bool,
+    #[arg(long, value_parser = ["none", "light", "clean"])]
+    text_processing_mode: Option<String>,
+    #[arg(long)]
+    include_raw_content: bool,
+    #[arg(long)]
+    llm_progressive: bool,
+    #[arg(long)]
+    llm_progressive_model: Option<String>,
+    #[arg(long)]
+    llm_progressive_max_chunk_chars: Option<usize>,
+    #[arg(long)]
+    llm_progressive_overlap_chars: Option<usize>,
+    #[arg(long)]
+    llm_progressive_concurrency: Option<usize>,
+    #[arg(long)]
+    llm_progressive_max_output_tokens: Option<u32>,
+    #[arg(long, value_parser = ["md_light_plain_refs"])]
+    llm_progressive_input_profile: Option<String>,
+    #[arg(long, value_parser = ["compact_v2"])]
+    llm_progressive_prompt_profile: Option<String>,
+    #[arg(long)]
+    llm_progressive_cache_enabled: Option<bool>,
+    #[arg(long)]
+    llm_progressive_cache_refresh: bool,
+    #[arg(long)]
+    llm_progressive_save_json_path: Option<String>,
+    #[arg(long)]
+    llm_progressive_include_section_text: bool,
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -556,6 +738,75 @@ async fn run_academic(command: AcademicCommand) -> anyhow::Result<()> {
             )
             .await
         }
+        AcademicSubcommand::PdfRead(command) => {
+            invoke_and_print(
+                "academic_pdf_read",
+                AcademicPdfReadParams {
+                    identifier: command.locator.identifier,
+                    url: command.locator.url,
+                    pdf_url: command.locator.pdf_url,
+                    text_mode: command.text_mode,
+                    max_chars: command.max_chars,
+                    include_raw_content: command.include_raw_content.then_some(true),
+                    include_processing: command.include_processing.then_some(true),
+                    extract_material_links: command.extract_material_links.then_some(true),
+                },
+                command.output.compact,
+            )
+            .await
+        }
+        AcademicSubcommand::PdfStructure(command) => {
+            invoke_and_print(
+                "academic_pdf_structure",
+                AcademicPdfStructureParams {
+                    identifier: command.locator.identifier,
+                    url: command.locator.url,
+                    pdf_url: command.locator.pdf_url,
+                    view: command.view,
+                    section_id: command.section_id,
+                    profile: command.profile.map(Into::into),
+                    model: command.model,
+                    cache_policy: command.cache_policy.map(Into::into),
+                    include_section_text: command.include_section_text.then_some(true),
+                    save_json_path: command.save_json_path,
+                    max_chars: command.max_chars,
+                },
+                command.output.compact,
+            )
+            .await
+        }
+        AcademicSubcommand::PdfArtifacts(command) => {
+            invoke_and_print(
+                "academic_pdf_artifacts",
+                AcademicPdfArtifactsParams {
+                    identifier: command.locator.identifier,
+                    url: command.locator.url,
+                    pdf_url: command.locator.pdf_url,
+                    images_dir: command.images_dir,
+                    tables_dir: command.tables_dir,
+                    extract_images: command.extract_images.then_some(true),
+                    extract_tables: command.extract_tables.then_some(true),
+                    text_mode: command.text_mode,
+                    max_chars: command.max_chars,
+                },
+                command.output.compact,
+            )
+            .await
+        }
+        AcademicSubcommand::PdfDownload(command) => {
+            invoke_and_print(
+                "academic_pdf_download",
+                AcademicPdfDownloadParams {
+                    identifier: command.locator.identifier,
+                    url: command.locator.url,
+                    pdf_url: command.locator.pdf_url,
+                    output_path: command.output_path,
+                    overwrite: command.overwrite.then_some(true),
+                },
+                command.output.compact,
+            )
+            .await
+        }
         AcademicSubcommand::Read(command) => {
             invoke_and_print(
                 "academic_read",
@@ -597,27 +848,86 @@ async fn run_academic(command: AcademicCommand) -> anyhow::Result<()> {
             )
             .await
         }
+        AcademicSubcommand::ProgressiveGet(command) => {
+            invoke_and_print(
+                "academic_progressive_get",
+                AcademicProgressiveGetParams {
+                    cache_key: command.cache_key,
+                    view: command.view,
+                    section_id: command.section_id,
+                    include_section_text: command.include_section_text.then_some(true),
+                    max_chars: command.max_chars,
+                },
+                command.output.compact,
+            )
+            .await
+        }
     }
 }
 
 impl AcademicParseOptionsCommand {
     fn into_options(self) -> Option<AcademicParseOptionsParams> {
         if self.save_markdown_path.is_none()
+            && self.save_raw_content_path.is_none()
             && self.images_dir.is_none()
             && self.tables_dir.is_none()
             && !self.extract_images
             && !self.extract_tables
             && !self.extract_material_links
+            && self.text_processing_mode.is_none()
+            && !self.include_raw_content
+            && !self.llm_progressive
+            && self.llm_progressive_model.is_none()
+            && self.llm_progressive_max_chunk_chars.is_none()
+            && self.llm_progressive_overlap_chars.is_none()
+            && self.llm_progressive_concurrency.is_none()
+            && self.llm_progressive_max_output_tokens.is_none()
+            && self.llm_progressive_input_profile.is_none()
+            && self.llm_progressive_prompt_profile.is_none()
+            && self.llm_progressive_cache_enabled.is_none()
+            && !self.llm_progressive_cache_refresh
+            && self.llm_progressive_save_json_path.is_none()
+            && !self.llm_progressive_include_section_text
         {
             return None;
         }
+        let llm_progressive = (self.llm_progressive
+            || self.llm_progressive_model.is_some()
+            || self.llm_progressive_max_chunk_chars.is_some()
+            || self.llm_progressive_overlap_chars.is_some()
+            || self.llm_progressive_concurrency.is_some()
+            || self.llm_progressive_max_output_tokens.is_some()
+            || self.llm_progressive_input_profile.is_some()
+            || self.llm_progressive_prompt_profile.is_some()
+            || self.llm_progressive_cache_enabled.is_some()
+            || self.llm_progressive_cache_refresh
+            || self.llm_progressive_save_json_path.is_some()
+            || self.llm_progressive_include_section_text)
+            .then_some(AcademicLlmProgressiveOptionsParams {
+                enabled: self.llm_progressive.then_some(true),
+                model: self.llm_progressive_model,
+                max_chunk_chars: self.llm_progressive_max_chunk_chars,
+                overlap_chars: self.llm_progressive_overlap_chars,
+                concurrency: self.llm_progressive_concurrency,
+                max_output_tokens: self.llm_progressive_max_output_tokens,
+                input_profile: self.llm_progressive_input_profile,
+                prompt_profile: self.llm_progressive_prompt_profile,
+                cache_enabled: self.llm_progressive_cache_enabled,
+                cache_refresh: self.llm_progressive_cache_refresh.then_some(true),
+                save_json_path: self.llm_progressive_save_json_path,
+                include_section_text: self.llm_progressive_include_section_text.then_some(true),
+            });
         Some(AcademicParseOptionsParams {
             save_markdown_path: self.save_markdown_path,
+            save_raw_content_path: self.save_raw_content_path,
             images_dir: self.images_dir,
             tables_dir: self.tables_dir,
             extract_images: self.extract_images.then_some(true),
             extract_tables: self.extract_tables.then_some(true),
             extract_material_links: self.extract_material_links.then_some(true),
+            text_processing_mode: self.text_processing_mode,
+            include_raw_content: self.include_raw_content.then_some(true),
+            llm_progressive,
         })
     }
 }
@@ -929,6 +1239,82 @@ mod tests {
             Cli::try_parse_from([
                 "grok-search-rs",
                 "academic",
+                "pdf-read",
+                "--identifier",
+                "arXiv:1706.03762",
+                "--text-mode",
+                "clean",
+                "--include-raw-content",
+            ])
+            .unwrap()
+            .command,
+            Some(Command::Academic(AcademicCommand {
+                command: AcademicSubcommand::PdfRead(_)
+            }))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "grok-search-rs",
+                "academic",
+                "pdf-structure",
+                "--pdf-url",
+                "https://arxiv.org/pdf/1706.03762",
+                "--view",
+                "section",
+                "--section-id",
+                "sec_000_intro",
+                "--profile",
+                "balanced",
+                "--cache-policy",
+                "refresh",
+                "--include-section-text",
+            ])
+            .unwrap()
+            .command,
+            Some(Command::Academic(AcademicCommand {
+                command: AcademicSubcommand::PdfStructure(_)
+            }))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "grok-search-rs",
+                "academic",
+                "pdf-artifacts",
+                "--url",
+                "https://arxiv.org/pdf/1706.03762",
+                "--extract-images",
+                "--images-dir",
+                "images",
+                "--extract-tables",
+                "--tables-dir",
+                "tables",
+            ])
+            .unwrap()
+            .command,
+            Some(Command::Academic(AcademicCommand {
+                command: AcademicSubcommand::PdfArtifacts(_)
+            }))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "grok-search-rs",
+                "academic",
+                "pdf-download",
+                "--url",
+                "https://arxiv.org/pdf/1706.03762",
+                "--output-path",
+                "paper.pdf",
+            ])
+            .unwrap()
+            .command,
+            Some(Command::Academic(AcademicCommand {
+                command: AcademicSubcommand::PdfDownload(_)
+            }))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "grok-search-rs",
+                "academic",
                 "read",
                 "--url",
                 "https://arxiv.org/pdf/1706.03762",
@@ -951,5 +1337,91 @@ mod tests {
             .command,
             Some(Command::Academic(_))
         ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "grok-search-rs",
+                "academic",
+                "progressive-get",
+                "progressive:v1:abc",
+                "--view",
+                "section",
+                "--section-id",
+                "sec_000_intro",
+                "--include-section-text",
+            ])
+            .unwrap()
+            .command,
+            Some(Command::Academic(_))
+        ));
+        match Cli::try_parse_from([
+            "grok-search-rs",
+            "academic",
+            "parse-pdf",
+            "--url",
+            "https://arxiv.org/pdf/1706.03762",
+            "--text-processing-mode",
+            "clean",
+            "--include-raw-content",
+            "--save-raw-content-path",
+            "raw.md",
+            "--llm-progressive",
+            "--llm-progressive-model",
+            "MiniMax-M3",
+            "--llm-progressive-max-chunk-chars",
+            "5000",
+            "--llm-progressive-overlap-chars",
+            "400",
+            "--llm-progressive-concurrency",
+            "2",
+            "--llm-progressive-max-output-tokens",
+            "1200",
+            "--llm-progressive-input-profile",
+            "md_light_plain_refs",
+            "--llm-progressive-prompt-profile",
+            "compact_v2",
+            "--llm-progressive-cache-enabled",
+            "true",
+            "--llm-progressive-cache-refresh",
+            "--llm-progressive-save-json-path",
+            "progressive.json",
+        ])
+        .unwrap()
+        .command
+        {
+            Some(Command::Academic(AcademicCommand {
+                command: AcademicSubcommand::ParsePdf(command),
+            })) => {
+                assert_eq!(command.parse.text_processing_mode.as_deref(), Some("clean"));
+                assert!(command.parse.include_raw_content);
+                assert_eq!(
+                    command.parse.save_raw_content_path.as_deref(),
+                    Some("raw.md")
+                );
+                assert!(command.parse.llm_progressive);
+                assert_eq!(
+                    command.parse.llm_progressive_model.as_deref(),
+                    Some("MiniMax-M3")
+                );
+                assert_eq!(command.parse.llm_progressive_max_chunk_chars, Some(5000));
+                assert_eq!(command.parse.llm_progressive_overlap_chars, Some(400));
+                assert_eq!(command.parse.llm_progressive_concurrency, Some(2));
+                assert_eq!(command.parse.llm_progressive_max_output_tokens, Some(1200));
+                assert_eq!(
+                    command.parse.llm_progressive_input_profile.as_deref(),
+                    Some("md_light_plain_refs")
+                );
+                assert_eq!(
+                    command.parse.llm_progressive_prompt_profile.as_deref(),
+                    Some("compact_v2")
+                );
+                assert_eq!(command.parse.llm_progressive_cache_enabled, Some(true));
+                assert!(command.parse.llm_progressive_cache_refresh);
+                assert_eq!(
+                    command.parse.llm_progressive_save_json_path.as_deref(),
+                    Some("progressive.json")
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

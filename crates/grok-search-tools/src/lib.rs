@@ -1,6 +1,11 @@
 use grok_search_service::SearchService;
 use grok_search_types::model::tool::{WebSearchInput, WechatSearchInput, ZhihuSearchInput};
-use grok_search_types::{AcademicParseOptions, AcademicSearchInput};
+use grok_search_types::{
+    AcademicLlmProgressiveOptions, AcademicParseOptions, AcademicPdfArtifactsInput,
+    AcademicPdfCachePolicy, AcademicPdfDownloadInput, AcademicPdfLocator, AcademicPdfReadInput,
+    AcademicPdfStructureInput, AcademicPdfStructureProfile, AcademicProgressiveGetInput,
+    AcademicSearchInput,
+};
 use grok_search_types::{GrokSearchError, RepoMetadataInput, RepoProvider, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -153,6 +158,67 @@ pub async fn invoke_tool(service: &SearchService, name: &str, args: Value) -> Re
                 .await?;
             serialize_output(output, "serialize academic citations")
         }
+        "academic_pdf_read" => {
+            let params: AcademicPdfReadParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            let input: AcademicPdfReadInput = params.into();
+            validate_pdf_locator("academic_pdf_read", &input.locator)?;
+            validate_text_processing_mode("academic_pdf_read", input.text_mode.as_deref())?;
+            let output = service.academic_pdf_read(input).await?;
+            serialize_output(output, "serialize academic pdf read")
+        }
+        "academic_pdf_structure" => {
+            let params: AcademicPdfStructureParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            let input: AcademicPdfStructureInput = params.into();
+            validate_pdf_locator("academic_pdf_structure", &input.locator)?;
+            validate_structure_view("academic_pdf_structure", input.view.as_deref())?;
+            if input.view.as_deref() == Some("section")
+                && input.section_id.as_deref().unwrap_or("").trim().is_empty()
+            {
+                return Err(GrokSearchError::InvalidParams(
+                    "academic_pdf_structure.section_id is required when view=section".into(),
+                ));
+            }
+            let output = service.academic_pdf_structure(input).await?;
+            serialize_output(output, "serialize academic pdf structure")
+        }
+        "academic_pdf_artifacts" => {
+            let params: AcademicPdfArtifactsParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            let input: AcademicPdfArtifactsInput = params.into();
+            validate_pdf_locator("academic_pdf_artifacts", &input.locator)?;
+            validate_text_processing_mode("academic_pdf_artifacts", input.text_mode.as_deref())?;
+            if input.extract_images == Some(true)
+                && input.images_dir.as_deref().unwrap_or("").trim().is_empty()
+            {
+                return Err(GrokSearchError::InvalidParams(
+                    "academic_pdf_artifacts.images_dir is required when extract_images=true".into(),
+                ));
+            }
+            if input.extract_tables == Some(true)
+                && input.tables_dir.as_deref().unwrap_or("").trim().is_empty()
+            {
+                return Err(GrokSearchError::InvalidParams(
+                    "academic_pdf_artifacts.tables_dir is required when extract_tables=true".into(),
+                ));
+            }
+            let output = service.academic_pdf_artifacts(input).await?;
+            serialize_output(output, "serialize academic pdf artifacts")
+        }
+        "academic_pdf_download" => {
+            let params: AcademicPdfDownloadParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            let input: AcademicPdfDownloadInput = params.into();
+            validate_pdf_locator("academic_pdf_download", &input.locator)?;
+            if input.output_path.trim().is_empty() {
+                return Err(GrokSearchError::InvalidParams(
+                    "academic_pdf_download.output_path is required".into(),
+                ));
+            }
+            let output = service.academic_pdf_download(input).await?;
+            serialize_output(output, "serialize academic pdf download")
+        }
         "academic_read" => {
             let params: AcademicReadParams = serde_json::from_value(args)
                 .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
@@ -163,6 +229,7 @@ pub async fn invoke_tool(service: &SearchService, name: &str, args: Value) -> Re
                     "academic_read requires identifier or url".into(),
                 ));
             }
+            validate_academic_parse_options("academic_read", params.parse_options.as_ref())?;
             let output = service
                 .academic_read(
                     params.identifier,
@@ -184,6 +251,7 @@ pub async fn invoke_tool(service: &SearchService, name: &str, args: Value) -> Re
                     "academic_parse_pdf requires identifier or url".into(),
                 ));
             }
+            validate_academic_parse_options("academic_parse_pdf", params.parse_options.as_ref())?;
             let output = service
                 .academic_parse_pdf(
                     params.identifier,
@@ -220,6 +288,31 @@ pub async fn invoke_tool(service: &SearchService, name: &str, args: Value) -> Re
                 .await?;
             serialize_output(output, "serialize academic download pdf")
         }
+        "academic_progressive_get" => {
+            let params: AcademicProgressiveGetParams = serde_json::from_value(args)
+                .map_err(|err| GrokSearchError::InvalidParams(err.to_string()))?;
+            if params.cache_key.trim().is_empty() {
+                return Err(GrokSearchError::InvalidParams(
+                    "academic_progressive_get.cache_key is required".into(),
+                ));
+            }
+            if let Some(view) = params.view.as_deref() {
+                if !matches!(view, "summary" | "full" | "section") {
+                    return Err(GrokSearchError::InvalidParams(
+                        "academic_progressive_get.view must be one of summary, full, section"
+                            .into(),
+                    ));
+                }
+                if view == "section" && params.section_id.as_deref().unwrap_or("").trim().is_empty()
+                {
+                    return Err(GrokSearchError::InvalidParams(
+                        "academic_progressive_get.section_id is required when view=section".into(),
+                    ));
+                }
+            }
+            let output = service.academic_progressive_get(params.into()).await?;
+            serialize_output(output, "serialize academic progressive get")
+        }
         _ => Err(GrokSearchError::NotFound(format!("unknown tool: {name}"))),
     }
 }
@@ -243,6 +336,96 @@ fn validate_range(value: Option<usize>, min: usize, max: usize, name: &str) -> R
             return Err(GrokSearchError::InvalidParams(format!(
                 "{name} must be between {min} and {max}"
             )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_pdf_locator(tool: &str, locator: &AcademicPdfLocator) -> Result<()> {
+    if locator.is_valid_exactly_one() {
+        return Ok(());
+    }
+    Err(GrokSearchError::InvalidParams(format!(
+        "{tool} requires exactly one of identifier, url, or pdf_url"
+    )))
+}
+
+fn validate_text_processing_mode(tool: &str, mode: Option<&str>) -> Result<()> {
+    if let Some(mode) = mode {
+        match mode.trim().to_ascii_lowercase().as_str() {
+            "" | "none" | "light" | "clean" => {}
+            _ => {
+                return Err(GrokSearchError::InvalidParams(format!(
+                    "{tool}.text_mode must be one of none, light, clean"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_structure_view(tool: &str, view: Option<&str>) -> Result<()> {
+    if let Some(view) = view {
+        if !matches!(view, "summary" | "full" | "section") {
+            return Err(GrokSearchError::InvalidParams(format!(
+                "{tool}.view must be one of summary, full, section"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_academic_parse_options(
+    tool: &str,
+    options: Option<&AcademicParseOptionsParams>,
+) -> Result<()> {
+    let Some(options) = options else {
+        return Ok(());
+    };
+    if let Some(mode) = options.text_processing_mode.as_deref() {
+        match mode.trim().to_ascii_lowercase().as_str() {
+            "" | "none" | "light" | "clean" => {}
+            _ => {
+                return Err(GrokSearchError::InvalidParams(format!(
+                    "{tool}.parse_options.text_processing_mode must be one of none, light, clean"
+                )));
+            }
+        }
+    }
+    if let Some(llm) = options.llm_progressive.as_ref() {
+        if llm.max_chunk_chars == Some(0) {
+            return Err(GrokSearchError::InvalidParams(format!(
+                "{tool}.parse_options.llm_progressive.max_chunk_chars must be greater than 0"
+            )));
+        }
+        if llm.concurrency == Some(0) {
+            return Err(GrokSearchError::InvalidParams(format!(
+                "{tool}.parse_options.llm_progressive.concurrency must be greater than 0"
+            )));
+        }
+        if llm.overlap_chars == Some(0) {
+            return Err(GrokSearchError::InvalidParams(format!(
+                "{tool}.parse_options.llm_progressive.overlap_chars must be greater than 0"
+            )));
+        }
+        if llm.max_output_tokens == Some(0) {
+            return Err(GrokSearchError::InvalidParams(format!(
+                "{tool}.parse_options.llm_progressive.max_output_tokens must be greater than 0"
+            )));
+        }
+        if let Some(input_profile) = llm.input_profile.as_deref() {
+            if input_profile != "md_light_plain_refs" {
+                return Err(GrokSearchError::InvalidParams(format!(
+                    "{tool}.parse_options.llm_progressive.input_profile must be md_light_plain_refs"
+                )));
+            }
+        }
+        if let Some(prompt_profile) = llm.prompt_profile.as_deref() {
+            if prompt_profile != "compact_v2" {
+                return Err(GrokSearchError::InvalidParams(format!(
+                    "{tool}.parse_options.llm_progressive.prompt_profile must be compact_v2"
+                )));
+            }
         }
     }
     Ok(())
@@ -435,6 +618,160 @@ pub struct AcademicCitationsParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AcademicPdfReadParams {
+    pub identifier: Option<String>,
+    pub url: Option<String>,
+    pub pdf_url: Option<String>,
+    pub text_mode: Option<String>,
+    pub max_chars: Option<usize>,
+    pub include_raw_content: Option<bool>,
+    pub include_processing: Option<bool>,
+    pub extract_material_links: Option<bool>,
+}
+
+impl From<AcademicPdfReadParams> for AcademicPdfReadInput {
+    fn from(params: AcademicPdfReadParams) -> Self {
+        Self {
+            locator: AcademicPdfLocator {
+                identifier: params.identifier,
+                url: params.url,
+                pdf_url: params.pdf_url,
+            },
+            text_mode: params.text_mode,
+            max_chars: params.max_chars,
+            include_raw_content: params.include_raw_content,
+            include_processing: params.include_processing,
+            extract_material_links: params.extract_material_links,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AcademicPdfStructureParams {
+    pub identifier: Option<String>,
+    pub url: Option<String>,
+    pub pdf_url: Option<String>,
+    pub view: Option<String>,
+    pub section_id: Option<String>,
+    pub profile: Option<AcademicPdfStructureProfileParam>,
+    pub model: Option<String>,
+    pub cache_policy: Option<AcademicPdfCachePolicyParam>,
+    pub include_section_text: Option<bool>,
+    pub save_json_path: Option<String>,
+    pub max_chars: Option<usize>,
+}
+
+impl From<AcademicPdfStructureParams> for AcademicPdfStructureInput {
+    fn from(params: AcademicPdfStructureParams) -> Self {
+        Self {
+            locator: AcademicPdfLocator {
+                identifier: params.identifier,
+                url: params.url,
+                pdf_url: params.pdf_url,
+            },
+            view: params.view,
+            section_id: params.section_id,
+            profile: params.profile.map(Into::into),
+            model: params.model,
+            cache_policy: params.cache_policy.map(Into::into),
+            include_section_text: params.include_section_text,
+            save_json_path: params.save_json_path,
+            max_chars: params.max_chars,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AcademicPdfStructureProfileParam {
+    Fast,
+    Balanced,
+    Strict,
+}
+
+impl From<AcademicPdfStructureProfileParam> for AcademicPdfStructureProfile {
+    fn from(value: AcademicPdfStructureProfileParam) -> Self {
+        match value {
+            AcademicPdfStructureProfileParam::Fast => AcademicPdfStructureProfile::Fast,
+            AcademicPdfStructureProfileParam::Balanced => AcademicPdfStructureProfile::Balanced,
+            AcademicPdfStructureProfileParam::Strict => AcademicPdfStructureProfile::Strict,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AcademicPdfCachePolicyParam {
+    Auto,
+    Refresh,
+    Bypass,
+}
+
+impl From<AcademicPdfCachePolicyParam> for AcademicPdfCachePolicy {
+    fn from(value: AcademicPdfCachePolicyParam) -> Self {
+        match value {
+            AcademicPdfCachePolicyParam::Auto => AcademicPdfCachePolicy::Auto,
+            AcademicPdfCachePolicyParam::Refresh => AcademicPdfCachePolicy::Refresh,
+            AcademicPdfCachePolicyParam::Bypass => AcademicPdfCachePolicy::Bypass,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AcademicPdfArtifactsParams {
+    pub identifier: Option<String>,
+    pub url: Option<String>,
+    pub pdf_url: Option<String>,
+    pub images_dir: Option<String>,
+    pub tables_dir: Option<String>,
+    pub extract_images: Option<bool>,
+    pub extract_tables: Option<bool>,
+    pub text_mode: Option<String>,
+    pub max_chars: Option<usize>,
+}
+
+impl From<AcademicPdfArtifactsParams> for AcademicPdfArtifactsInput {
+    fn from(params: AcademicPdfArtifactsParams) -> Self {
+        Self {
+            locator: AcademicPdfLocator {
+                identifier: params.identifier,
+                url: params.url,
+                pdf_url: params.pdf_url,
+            },
+            images_dir: params.images_dir,
+            tables_dir: params.tables_dir,
+            extract_images: params.extract_images,
+            extract_tables: params.extract_tables,
+            text_mode: params.text_mode,
+            max_chars: params.max_chars,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AcademicPdfDownloadParams {
+    pub identifier: Option<String>,
+    pub url: Option<String>,
+    pub pdf_url: Option<String>,
+    pub output_path: String,
+    pub overwrite: Option<bool>,
+}
+
+impl From<AcademicPdfDownloadParams> for AcademicPdfDownloadInput {
+    fn from(params: AcademicPdfDownloadParams) -> Self {
+        Self {
+            locator: AcademicPdfLocator {
+                identifier: params.identifier,
+                url: params.url,
+                pdf_url: params.pdf_url,
+            },
+            output_path: params.output_path,
+            overwrite: params.overwrite,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AcademicReadParams {
     pub identifier: Option<String>,
     pub url: Option<String>,
@@ -446,22 +783,86 @@ pub struct AcademicReadParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AcademicParseOptionsParams {
     pub save_markdown_path: Option<String>,
+    pub save_raw_content_path: Option<String>,
     pub images_dir: Option<String>,
     pub tables_dir: Option<String>,
     pub extract_images: Option<bool>,
     pub extract_tables: Option<bool>,
     pub extract_material_links: Option<bool>,
+    pub text_processing_mode: Option<String>,
+    pub include_raw_content: Option<bool>,
+    pub llm_progressive: Option<AcademicLlmProgressiveOptionsParams>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AcademicLlmProgressiveOptionsParams {
+    pub enabled: Option<bool>,
+    pub model: Option<String>,
+    pub max_chunk_chars: Option<usize>,
+    pub overlap_chars: Option<usize>,
+    pub concurrency: Option<usize>,
+    pub max_output_tokens: Option<u32>,
+    pub input_profile: Option<String>,
+    pub prompt_profile: Option<String>,
+    pub cache_enabled: Option<bool>,
+    pub cache_refresh: Option<bool>,
+    pub save_json_path: Option<String>,
+    pub include_section_text: Option<bool>,
 }
 
 impl From<AcademicParseOptionsParams> for AcademicParseOptions {
     fn from(params: AcademicParseOptionsParams) -> Self {
         Self {
             save_markdown_path: params.save_markdown_path,
+            save_raw_content_path: params.save_raw_content_path,
             images_dir: params.images_dir,
             tables_dir: params.tables_dir,
             extract_images: params.extract_images,
             extract_tables: params.extract_tables,
             extract_material_links: params.extract_material_links,
+            text_processing_mode: params.text_processing_mode,
+            include_raw_content: params.include_raw_content,
+            llm_progressive: params.llm_progressive.map(Into::into),
+        }
+    }
+}
+
+impl From<AcademicLlmProgressiveOptionsParams> for AcademicLlmProgressiveOptions {
+    fn from(params: AcademicLlmProgressiveOptionsParams) -> Self {
+        Self {
+            enabled: params.enabled,
+            model: params.model,
+            max_chunk_chars: params.max_chunk_chars,
+            overlap_chars: params.overlap_chars,
+            concurrency: params.concurrency,
+            max_output_tokens: params.max_output_tokens,
+            input_profile: params.input_profile,
+            prompt_profile: params.prompt_profile,
+            cache_enabled: params.cache_enabled,
+            cache_refresh: params.cache_refresh,
+            save_json_path: params.save_json_path,
+            include_section_text: params.include_section_text,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AcademicProgressiveGetParams {
+    pub cache_key: String,
+    pub view: Option<String>,
+    pub section_id: Option<String>,
+    pub include_section_text: Option<bool>,
+    pub max_chars: Option<usize>,
+}
+
+impl From<AcademicProgressiveGetParams> for AcademicProgressiveGetInput {
+    fn from(params: AcademicProgressiveGetParams) -> Self {
+        Self {
+            cache_key: params.cache_key,
+            view: params.view,
+            section_id: params.section_id,
+            include_section_text: params.include_section_text,
+            max_chars: params.max_chars,
         }
     }
 }
@@ -508,9 +909,10 @@ mod tests {
         "academic_search",
         "academic_get",
         "academic_citations",
-        "academic_read",
-        "academic_parse_pdf",
-        "academic_download_pdf",
+        "academic_pdf_read",
+        "academic_pdf_structure",
+        "academic_pdf_artifacts",
+        "academic_pdf_download",
     ];
 
     #[test]
@@ -668,35 +1070,148 @@ mod tests {
     }
 
     #[test]
-    fn academic_parse_schemas_expose_parse_options() {
-        for name in ["academic_read", "academic_parse_pdf"] {
-            let tool = tools()
-                .into_iter()
-                .find(|tool| tool.name == name)
-                .unwrap_or_else(|| panic!("{name} tool"));
-            assert!(tool.input_schema.contains_key("$defs"));
-            let properties = tool.input_schema["properties"].as_object().unwrap();
-            assert!(properties.contains_key("parse_options"));
-            let defs = tool.input_schema["$defs"].as_object().unwrap();
-            assert!(defs["AcademicParseOptions"]["properties"]
-                .as_object()
-                .unwrap()
-                .contains_key("save_markdown_path"));
+    fn typed_academic_parse_options_accept_llm_progressive_shape() {
+        let params: AcademicParseOptionsParams = serde_json::from_value(json!({
+            "text_processing_mode": "clean",
+            "llm_progressive": {
+                "enabled": true,
+                "model": "MiniMax-M3",
+                "max_chunk_chars": 5000,
+                "overlap_chars": 400,
+                "concurrency": 2,
+                "max_output_tokens": 1200,
+                "input_profile": "md_light_plain_refs",
+                "prompt_profile": "compact_v2",
+                "cache_enabled": true,
+                "cache_refresh": true,
+                "save_json_path": "progressive.json",
+                "include_section_text": false
+            }
+        }))
+        .expect("valid parse options");
+
+        let input: AcademicParseOptions = params.into();
+        let llm = input.llm_progressive.expect("llm progressive options");
+        assert_eq!(llm.enabled, Some(true));
+        assert_eq!(llm.model.as_deref(), Some("MiniMax-M3"));
+        assert_eq!(llm.max_chunk_chars, Some(5000));
+        assert_eq!(llm.overlap_chars, Some(400));
+        assert_eq!(llm.concurrency, Some(2));
+        assert_eq!(llm.max_output_tokens, Some(1200));
+        assert_eq!(llm.input_profile.as_deref(), Some("md_light_plain_refs"));
+        assert_eq!(llm.prompt_profile.as_deref(), Some("compact_v2"));
+        assert_eq!(llm.cache_enabled, Some(true));
+        assert_eq!(llm.cache_refresh, Some(true));
+        assert_eq!(llm.save_json_path.as_deref(), Some("progressive.json"));
+    }
+
+    #[test]
+    fn academic_pdf_read_schema_is_text_only() {
+        let tool = tools()
+            .into_iter()
+            .find(|tool| tool.name == "academic_pdf_read")
+            .expect("academic_pdf_read tool");
+        let properties = tool.input_schema["properties"].as_object().unwrap();
+        for key in [
+            "identifier",
+            "url",
+            "pdf_url",
+            "text_mode",
+            "max_chars",
+            "include_raw_content",
+            "include_processing",
+            "extract_material_links",
+        ] {
+            assert!(properties.contains_key(key), "missing {key}");
+        }
+        assert!(!properties.contains_key("parse_options"));
+        assert!(!properties.contains_key("llm_progressive"));
+    }
+
+    #[test]
+    fn academic_pdf_structure_schema_hides_low_level_llm_knobs() {
+        let tool = tools()
+            .into_iter()
+            .find(|tool| tool.name == "academic_pdf_structure")
+            .expect("academic_pdf_structure tool");
+        let properties = tool.input_schema["properties"].as_object().unwrap();
+        for key in [
+            "identifier",
+            "url",
+            "pdf_url",
+            "view",
+            "section_id",
+            "profile",
+            "model",
+            "cache_policy",
+            "include_section_text",
+            "save_json_path",
+            "max_chars",
+        ] {
+            assert!(properties.contains_key(key), "missing {key}");
+        }
+        for hidden in [
+            "max_chunk_chars",
+            "overlap_chars",
+            "max_output_tokens",
+            "input_profile",
+            "prompt_profile",
+            "concurrency",
+            "cache_enabled",
+        ] {
+            assert!(!properties.contains_key(hidden), "leaked {hidden}");
         }
     }
 
     #[test]
-    fn academic_download_pdf_schema_requires_output_path() {
+    fn academic_pdf_artifacts_schema_is_artifact_only() {
         let tool = tools()
             .into_iter()
-            .find(|tool| tool.name == "academic_download_pdf")
-            .expect("academic_download_pdf tool");
+            .find(|tool| tool.name == "academic_pdf_artifacts")
+            .expect("academic_pdf_artifacts tool");
+        let properties = tool.input_schema["properties"].as_object().unwrap();
+        for key in [
+            "identifier",
+            "url",
+            "pdf_url",
+            "images_dir",
+            "tables_dir",
+            "extract_images",
+            "extract_tables",
+            "text_mode",
+        ] {
+            assert!(properties.contains_key(key), "missing {key}");
+        }
+        assert!(!properties.contains_key("content"));
+        assert!(!properties.contains_key("llm_progressive"));
+    }
+
+    #[test]
+    fn academic_pdf_download_schema_requires_output_path() {
+        let tool = tools()
+            .into_iter()
+            .find(|tool| tool.name == "academic_pdf_download")
+            .expect("academic_pdf_download tool");
         let required = tool.input_schema["required"].as_array().unwrap();
         assert_eq!(required, &vec![json!("output_path")]);
         let properties = tool.input_schema["properties"].as_object().unwrap();
         assert!(properties.contains_key("identifier"));
         assert!(properties.contains_key("url"));
+        assert!(properties.contains_key("pdf_url"));
         assert!(properties.contains_key("overwrite"));
+    }
+
+    #[test]
+    fn legacy_pdf_stage_tools_are_not_agent_facing() {
+        let names: BTreeSet<_> = tools().into_iter().map(|tool| tool.name).collect();
+        for hidden in [
+            "academic_read",
+            "academic_parse_pdf",
+            "academic_download_pdf",
+            "academic_progressive_get",
+        ] {
+            assert!(!names.contains(hidden), "{hidden} should be hidden");
+        }
     }
 
     #[test]
@@ -841,7 +1356,7 @@ mod tests {
         let service = SearchService::fake_with_sources();
         let err = invoke_tool(
             &service,
-            "academic_download_pdf",
+            "academic_pdf_download",
             json!({
                 "output_path": "paper.pdf"
             }),
@@ -852,7 +1367,7 @@ mod tests {
         assert!(matches!(err, GrokSearchError::InvalidParams(_)));
         assert!(err
             .to_string()
-            .contains("academic_download_pdf requires identifier or url"));
+            .contains("academic_pdf_download requires exactly one"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -860,7 +1375,7 @@ mod tests {
         let service = SearchService::fake_with_sources();
         let err = invoke_tool(
             &service,
-            "academic_download_pdf",
+            "academic_pdf_download",
             json!({
                 "url": "https://arxiv.org/pdf/1706.03762",
                 "output_path": ""
@@ -872,7 +1387,66 @@ mod tests {
         assert!(matches!(err, GrokSearchError::InvalidParams(_)));
         assert!(err
             .to_string()
-            .contains("academic_download_pdf.output_path is required"));
+            .contains("academic_pdf_download.output_path is required"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn invoke_tool_rejects_academic_pdf_structure_section_without_id() {
+        let service = SearchService::fake_with_sources();
+        let err = invoke_tool(
+            &service,
+            "academic_pdf_structure",
+            json!({
+                "pdf_url": "https://arxiv.org/pdf/1706.03762",
+                "view": "section"
+            }),
+        )
+        .await
+        .expect_err("section view without section_id should fail before service call");
+
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+        assert!(err
+            .to_string()
+            .contains("academic_pdf_structure.section_id is required"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn invoke_tool_rejects_academic_pdf_artifacts_missing_dirs() {
+        let service = SearchService::fake_with_sources();
+        let err = invoke_tool(
+            &service,
+            "academic_pdf_artifacts",
+            json!({
+                "pdf_url": "https://arxiv.org/pdf/1706.03762",
+                "extract_images": true
+            }),
+        )
+        .await
+        .expect_err("extract_images without images_dir should fail before service call");
+
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+        assert!(err
+            .to_string()
+            .contains("academic_pdf_artifacts.images_dir is required"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn legacy_academic_progressive_get_dispatch_remains_available() {
+        let service = SearchService::fake_with_sources();
+        let err = invoke_tool(
+            &service,
+            "academic_progressive_get",
+            json!({
+                "cache_key": "",
+            }),
+        )
+        .await
+        .expect_err("empty cache key should still be validated");
+
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+        assert!(err
+            .to_string()
+            .contains("academic_progressive_get.cache_key is required"));
     }
 
     #[tokio::test(flavor = "current_thread")]

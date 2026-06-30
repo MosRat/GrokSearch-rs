@@ -289,89 +289,77 @@
       }
     },
     {
-      "name": "academic_read",
-      "description": "Resolve and read an academic PDF as Markdown or text. Open-access sources are tried first: arXiv, Semantic Scholar, OpenAlex, Unpaywall. Sci-Hub is only considered when explicitly enabled in configuration and remains the last fallback.",
+      "name": "academic_pdf_read",
+      "description": "Read one academic paper PDF as processed text. Provide exactly one locator: identifier, url, or pdf_url. This tool is for text reading only; use academic_pdf_structure for LLM progressive structure and academic_pdf_artifacts for images or tables.",
       "inputSchema": {
         "type": "object",
-        "$defs": {
-          "AcademicParseOptions": {
-            "type": "object",
-            "properties": {
-              "save_markdown_path": {
-                "type": "string",
-                "description": "Write parsed Markdown/text to this file. Parent directories are created; existing files are rejected."
-              },
-              "images_dir": { "type": "string" },
-              "tables_dir": { "type": "string" },
-              "extract_images": { "type": "boolean", "default": false },
-              "extract_tables": { "type": "boolean", "default": false },
-              "extract_material_links": { "type": "boolean", "default": false }
-            }
-          }
-        },
         "properties": {
-          "identifier": { "type": "string" },
-          "url": { "type": "string" },
+          "identifier": { "type": "string", "description": "DOI, arXiv ID/URL, Semantic Scholar ID, OpenAlex ID/URL, dblp key/URL, or title-like query." },
+          "url": { "type": "string", "description": "Landing page URL or resolvable paper URL." },
+          "pdf_url": { "type": "string", "description": "Direct PDF URL." },
+          "text_mode": {
+            "type": "string",
+            "enum": ["none", "light", "clean"],
+            "default": "clean",
+            "description": "PDF text pipeline mode. none returns raw extraction; light applies conservative cleanup; clean also performs paragraph cleanup."
+          },
           "max_chars": { "type": "integer", "minimum": 1 },
-          "output_format": { "type": "string", "enum": ["markdown", "text"], "default": "markdown" },
-          "parse_options": { "$ref": "#/$defs/AcademicParseOptions" }
+          "include_raw_content": { "type": "boolean", "default": false },
+          "include_processing": { "type": "boolean", "default": false },
+          "extract_material_links": { "type": "boolean", "default": false }
         }
       }
     },
     {
-      "name": "academic_parse_pdf",
-      "description": "Resolve an academic PDF and return detailed parse metadata. Can save parsed Markdown to a requested path, prepare requested image/table output directories, report unsupported image/table extraction capabilities, and extract code/dataset/model/project links from metadata and parsed Markdown.",
+      "name": "academic_pdf_structure",
+      "description": "Generate or read a cached progressive reading structure for one academic paper PDF. Provide exactly one locator: identifier, url, or pdf_url. The tool internally resolves, downloads, parses, checks cache, runs the LLM pass when needed, and returns the requested view.",
       "inputSchema": {
         "type": "object",
-        "$defs": {
-          "AcademicParseOptions": {
-            "type": "object",
-            "properties": {
-              "save_markdown_path": {
-                "type": "string",
-                "description": "Write parsed Markdown/text to this file. Parent directories are created; existing files are rejected."
-              },
-              "images_dir": {
-                "type": "string",
-                "description": "Directory for future extracted images. Created when supplied; current engine reports unsupported for extraction."
-              },
-              "tables_dir": {
-                "type": "string",
-                "description": "Directory for future extracted tables. Created when supplied; current engine reports unsupported for extraction."
-              },
-              "extract_images": { "type": "boolean", "default": false },
-              "extract_tables": { "type": "boolean", "default": false },
-              "extract_material_links": { "type": "boolean", "default": true }
-            }
-          }
-        },
         "properties": {
           "identifier": { "type": "string" },
           "url": { "type": "string" },
-          "max_chars": { "type": "integer", "minimum": 1 },
-          "output_format": { "type": "string", "enum": ["markdown", "text"], "default": "markdown" },
-          "parse_options": { "$ref": "#/$defs/AcademicParseOptions" }
+          "pdf_url": { "type": "string" },
+          "view": { "type": "string", "enum": ["summary", "full", "section"], "default": "summary" },
+          "section_id": { "type": "string", "description": "Required when view=section." },
+          "profile": { "type": "string", "enum": ["fast", "balanced", "strict"], "default": "balanced" },
+          "model": { "type": "string" },
+          "cache_policy": { "type": "string", "enum": ["auto", "refresh", "bypass"], "default": "auto" },
+          "include_section_text": { "type": "boolean", "default": false },
+          "save_json_path": { "type": "string", "description": "Optional path for full canonical progressive JSON." },
+          "max_chars": { "type": "integer", "minimum": 1 }
         }
       }
     },
     {
-      "name": "academic_download_pdf",
-      "description": "Resolve and download an academic PDF to a local path without parsing it. Reuses the same full-text resolver, institutional access handling, proxy configuration, and PDF byte validation as academic_read/academic_parse_pdf. Existing files are rejected unless overwrite=true.",
+      "name": "academic_pdf_artifacts",
+      "description": "Extract PDF artifacts for one academic paper: filtered bitmap images, detected table Markdown files, and manifests. Provide exactly one locator: identifier, url, or pdf_url. This tool does not return the main body text or LLM progressive structure.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "identifier": { "type": "string" },
+          "url": { "type": "string" },
+          "pdf_url": { "type": "string" },
+          "images_dir": { "type": "string", "description": "Directory for extracted PNG files and images.json. Required when extract_images=true." },
+          "tables_dir": { "type": "string", "description": "Directory for extracted table Markdown files and tables.json. Required when extract_tables=true." },
+          "extract_images": { "type": "boolean", "default": false },
+          "extract_tables": { "type": "boolean", "default": false },
+          "text_mode": { "type": "string", "enum": ["none", "light", "clean"], "default": "clean" },
+          "max_chars": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    {
+      "name": "academic_pdf_download",
+      "description": "Resolve and download one academic PDF to a local path without parsing it. Provide exactly one locator: identifier, url, or pdf_url.",
       "inputSchema": {
         "type": "object",
         "required": ["output_path"],
         "properties": {
           "identifier": { "type": "string" },
           "url": { "type": "string" },
-          "output_path": {
-            "type": "string",
-            "description": "Target PDF file path. Parent directories are created."
-          },
-          "overwrite": {
-            "type": "boolean",
-            "default": false,
-            "description": "Allow replacing an existing output_path."
-          }
+          "pdf_url": { "type": "string" },
+          "output_path": { "type": "string", "description": "Target PDF file path. Parent directories are created." },
+          "overwrite": { "type": "boolean", "default": false, "description": "Allow replacing an existing output_path." }
         }
       }
     }

@@ -2,12 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use grok_search_config::Config;
-use grok_search_pdf::{download_pdf_bytes_with_options_limited, PdfDownloadOptions};
 use grok_search_net::http::{
     build_client_direct_with_options, build_client_with_proxy_options, ClientOptions,
 };
 use grok_search_net::proxy::{discover_all_candidates, ProxyCandidate};
 use grok_search_net::url_policy::{url_is_private_or_local, validate_http_url};
+use grok_search_pdf::{download_pdf_bytes_with_options_limited, PdfDownloadOptions};
 use grok_search_provider_core::FullTextLocation;
 use grok_search_types::{AcademicPaper, GrokSearchError, Result};
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, USER_AGENT};

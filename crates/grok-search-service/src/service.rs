@@ -23,8 +23,12 @@ use grok_search_types::model::source::{merge_sources, Source};
 use grok_search_types::model::tool::{GetSourcesOutput, WebSearchInput, WebSearchOutput};
 use grok_search_types::{
     AcademicCitationsOutput, AcademicDownloadPdfOutput, AcademicGetOutput, AcademicParseOptions,
-    AcademicParsePdfOutput, AcademicReadOutput, AcademicSearchInput, AcademicSearchOutput,
-    WechatSearchInput, WechatSearchOutput, ZhihuSearchInput, ZhihuSearchOutput,
+    AcademicParsePdfOutput, AcademicPdfArtifactsInput, AcademicPdfArtifactsOutput,
+    AcademicPdfDownloadInput, AcademicPdfDownloadOutput, AcademicPdfReadInput,
+    AcademicPdfReadOutput, AcademicPdfStructureInput, AcademicPdfStructureOutput,
+    AcademicProgressiveGetInput, AcademicProgressiveGetOutput, AcademicReadOutput,
+    AcademicSearchInput, AcademicSearchOutput, WechatSearchInput, WechatSearchOutput,
+    ZhihuSearchInput, ZhihuSearchOutput,
 };
 use grok_search_types::{GrokSearchError, Result};
 
@@ -720,6 +724,86 @@ impl SearchService {
             start,
             &result,
             json!({}),
+        );
+        result
+    }
+
+    pub async fn academic_pdf_read(
+        &self,
+        input: AcademicPdfReadInput,
+    ) -> Result<AcademicPdfReadOutput> {
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let result = self.academic_service()?.pdf_read(input).await;
+        self.log_result(&request_id, "academic_pdf_read", start, &result, json!({}));
+        result
+    }
+
+    pub async fn academic_pdf_structure(
+        &self,
+        input: AcademicPdfStructureInput,
+    ) -> Result<AcademicPdfStructureOutput> {
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let result = self.academic_service()?.pdf_structure(input).await;
+        self.log_result(
+            &request_id,
+            "academic_pdf_structure",
+            start,
+            &result,
+            json!({}),
+        );
+        result
+    }
+
+    pub async fn academic_pdf_artifacts(
+        &self,
+        input: AcademicPdfArtifactsInput,
+    ) -> Result<AcademicPdfArtifactsOutput> {
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let result = self.academic_service()?.pdf_artifacts(input).await;
+        self.log_result(
+            &request_id,
+            "academic_pdf_artifacts",
+            start,
+            &result,
+            json!({}),
+        );
+        result
+    }
+
+    pub async fn academic_pdf_download(
+        &self,
+        input: AcademicPdfDownloadInput,
+    ) -> Result<AcademicPdfDownloadOutput> {
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let result = self.academic_service()?.pdf_download(input).await;
+        self.log_result(
+            &request_id,
+            "academic_pdf_download",
+            start,
+            &result,
+            json!({}),
+        );
+        result
+    }
+
+    pub async fn academic_progressive_get(
+        &self,
+        input: AcademicProgressiveGetInput,
+    ) -> Result<AcademicProgressiveGetOutput> {
+        let request_id = self.logger.request_id();
+        let start = Instant::now();
+        let cache_key = input.cache_key.clone();
+        let result = self.academic_service()?.progressive_get(input).await;
+        self.log_result(
+            &request_id,
+            "academic_progressive_get",
+            start,
+            &result,
+            json!({ "cache_key": cache_key }),
         );
         result
     }

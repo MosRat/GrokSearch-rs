@@ -2,9 +2,12 @@ use async_trait::async_trait;
 use grok_search_types::model::search::{SearchFilters, SearchRequest, SearchResponse};
 use grok_search_types::{
     AcademicCitationSummary, AcademicCitationsOutput, AcademicDownloadPdfOutput, AcademicGetOutput,
-    AcademicPaper, AcademicParseOptions, AcademicParsePdfOutput, AcademicReadOutput,
-    AcademicSearchInput, AcademicSearchOutput, GrokSearchError, Result, Source, WechatSearchInput,
-    WechatSearchOutput, ZhihuSearchInput, ZhihuSearchOutput,
+    AcademicPaper, AcademicParseOptions, AcademicParsePdfOutput, AcademicPdfArtifactsInput,
+    AcademicPdfArtifactsOutput, AcademicPdfDownloadInput, AcademicPdfDownloadOutput,
+    AcademicPdfReadInput, AcademicPdfReadOutput, AcademicPdfStructureInput,
+    AcademicPdfStructureOutput, AcademicProgressiveGetInput, AcademicProgressiveGetOutput,
+    AcademicReadOutput, AcademicSearchInput, AcademicSearchOutput, GrokSearchError, Result, Source,
+    WechatSearchInput, WechatSearchOutput, ZhihuSearchInput, ZhihuSearchOutput,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +126,28 @@ pub trait AcademicServiceProvider: Send + Sync {
         output_path: String,
         overwrite: bool,
     ) -> Result<AcademicDownloadPdfOutput>;
+
+    async fn pdf_read(&self, input: AcademicPdfReadInput) -> Result<AcademicPdfReadOutput>;
+
+    async fn pdf_structure(
+        &self,
+        input: AcademicPdfStructureInput,
+    ) -> Result<AcademicPdfStructureOutput>;
+
+    async fn pdf_artifacts(
+        &self,
+        input: AcademicPdfArtifactsInput,
+    ) -> Result<AcademicPdfArtifactsOutput>;
+
+    async fn pdf_download(
+        &self,
+        input: AcademicPdfDownloadInput,
+    ) -> Result<AcademicPdfDownloadOutput>;
+
+    async fn progressive_get(
+        &self,
+        input: AcademicProgressiveGetInput,
+    ) -> Result<AcademicProgressiveGetOutput>;
 
     fn diagnostics(&self) -> serde_json::Value;
 

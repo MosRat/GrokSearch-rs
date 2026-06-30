@@ -119,9 +119,10 @@ mod tests {
                 "academic_search",
                 "academic_get",
                 "academic_citations",
-                "academic_read",
-                "academic_parse_pdf",
-                "academic_download_pdf"
+                "academic_pdf_read",
+                "academic_pdf_structure",
+                "academic_pdf_artifacts",
+                "academic_pdf_download"
             ]
         );
     }

@@ -3,21 +3,27 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use grok_search_config::Config;
-use grok_search_pdf::{download_pdf_bytes_limited, parse_pdf_bytes_detailed, ParsedPdfDetails};
 use grok_search_parse::{
     normalize_title, parse_academic_identifier as parse_identifier, rrf_merge_papers as rrf_merge,
 };
+use grok_search_pdf::{download_pdf_bytes_limited, parse_pdf_bytes_detailed, ParsedPdfDetails};
 use grok_search_provider_core::{
     AcademicIdentifier as Identifier, AcademicProvider, AcademicServiceProvider, FullTextLocation,
 };
 use grok_search_types::{
     AcademicCitationSummary, AcademicCitationsOutput, AcademicDownloadPdfOutput, AcademicGetOutput,
-    AcademicMaterialLink, AcademicPaper, AcademicParseOptions, AcademicParsePdfOutput,
-    AcademicReadOutput, AcademicSearchInput, AcademicSearchOutput, GrokSearchError, Result, Source,
+    AcademicLlmProgressiveOptions, AcademicMaterialLink, AcademicPaper, AcademicParseOptions,
+    AcademicParsePdfOutput, AcademicPdfArtifactsInput, AcademicPdfArtifactsOutput,
+    AcademicPdfCachePolicy, AcademicPdfDownloadInput, AcademicPdfDownloadOutput,
+    AcademicPdfLocator, AcademicPdfReadInput, AcademicPdfReadOutput, AcademicPdfStructureInput,
+    AcademicPdfStructureOutput, AcademicPdfStructureProfile, AcademicProgressiveGetInput,
+    AcademicProgressiveGetOutput, AcademicProgressivePaper, AcademicReadOutput,
+    AcademicSearchInput, AcademicSearchOutput, GrokSearchError, Result, Source,
 };
 use uuid::Uuid;
 
 use crate::institutional::InstitutionalAccessManager;
+use crate::llm_progressive;
 use crate::providers::{
     without_openalex_reference_sources, ArxivProvider, CrossrefProvider, DblpProvider,
     OpenAlexProvider, SciHubProvider, SemanticProvider, UnpaywallProvider,
@@ -73,6 +79,7 @@ struct ReadDetails {
     fulltext_status: String,
     resolver_chain: Vec<String>,
     metadata_materials: Vec<AcademicMaterialLink>,
+    progressive_reading: Option<AcademicProgressivePaper>,
 }
 
 struct PdfDownloadDetails {
@@ -303,13 +310,7 @@ impl AcademicService {
             .and_then(|options| options.extract_material_links)
             .unwrap_or(false);
         let details = self
-            .read_pdf_details(
-                identifier,
-                url,
-                max_chars,
-                output_format,
-                parse_options.clone(),
-            )
+            .read_pdf_details(identifier, url, max_chars, output_format, parse_options)
             .await?;
         let materials = if include_materials {
             merge_materials(
@@ -326,12 +327,17 @@ impl AcademicService {
             content: details.parsed.content,
             original_length: details.parsed.original_length,
             truncated: details.parsed.truncated,
+            raw_content: details.parsed.raw_content,
+            raw_original_length: details.parsed.raw_original_length,
+            raw_truncated: details.parsed.raw_truncated,
             source: details.source,
             fulltext_status: details.fulltext_status,
             resolver_chain: details.resolver_chain,
             artifacts: details.parsed.artifacts,
             parse_capabilities: include_parse_details.then_some(details.parsed.capabilities),
+            processing: include_parse_details.then_some(details.parsed.processing),
             materials,
+            progressive_reading: details.progressive_reading,
         })
     }
 
@@ -365,12 +371,17 @@ impl AcademicService {
             content: details.parsed.content,
             original_length: details.parsed.original_length,
             truncated: details.parsed.truncated,
+            raw_content: details.parsed.raw_content,
+            raw_original_length: details.parsed.raw_original_length,
+            raw_truncated: details.parsed.raw_truncated,
             source: details.source,
             fulltext_status: details.fulltext_status,
             resolver_chain: details.resolver_chain,
             artifacts: details.parsed.artifacts,
             parse_capabilities: details.parsed.capabilities,
+            processing: details.parsed.processing,
             materials,
+            progressive_reading: details.progressive_reading,
         })
     }
 
@@ -381,6 +392,182 @@ impl AcademicService {
         output_path: String,
         overwrite: bool,
     ) -> Result<AcademicDownloadPdfOutput> {
+        self.pdf_download(AcademicPdfDownloadInput {
+            locator: AcademicPdfLocator {
+                identifier,
+                url,
+                pdf_url: None,
+            },
+            output_path,
+            overwrite: Some(overwrite),
+        })
+        .await
+    }
+
+    pub async fn pdf_read(&self, input: AcademicPdfReadInput) -> Result<AcademicPdfReadOutput> {
+        ensure_valid_locator(&input.locator, "academic_pdf_read")?;
+        let parse_options = AcademicParseOptions {
+            text_processing_mode: input.text_mode,
+            include_raw_content: input.include_raw_content,
+            extract_material_links: input.extract_material_links,
+            ..Default::default()
+        };
+        let include_processing = input.include_processing.unwrap_or(false);
+        let include_materials = input.extract_material_links.unwrap_or(false);
+        let details = self
+            .read_pdf_details_from_locator(
+                input.locator,
+                input.max_chars,
+                Some("markdown".to_string()),
+                Some(parse_options),
+                "academic_pdf_read",
+            )
+            .await?;
+        let materials = if include_materials {
+            merge_materials(
+                details.metadata_materials,
+                material_links_from_text(&details.parsed.content, "pdf_content"),
+            )
+        } else {
+            Vec::new()
+        };
+        Ok(AcademicReadOutput {
+            identifier: details.identifier,
+            url: details.url,
+            pdf_url: details.pdf_url,
+            content: details.parsed.content,
+            original_length: details.parsed.original_length,
+            truncated: details.parsed.truncated,
+            raw_content: details.parsed.raw_content,
+            raw_original_length: details.parsed.raw_original_length,
+            raw_truncated: details.parsed.raw_truncated,
+            source: details.source,
+            fulltext_status: details.fulltext_status,
+            resolver_chain: details.resolver_chain,
+            artifacts: details.parsed.artifacts,
+            parse_capabilities: include_processing.then_some(details.parsed.capabilities),
+            processing: include_processing.then_some(details.parsed.processing),
+            materials,
+            progressive_reading: None,
+        })
+    }
+
+    pub async fn pdf_structure(
+        &self,
+        input: AcademicPdfStructureInput,
+    ) -> Result<AcademicPdfStructureOutput> {
+        ensure_valid_locator(&input.locator, "academic_pdf_structure")?;
+        let view = input.view.clone().unwrap_or_else(|| "summary".to_string());
+        if !matches!(view.as_str(), "summary" | "full" | "section") {
+            return Err(GrokSearchError::InvalidParams(
+                "academic_pdf_structure.view must be one of summary, full, section".to_string(),
+            ));
+        }
+        if view == "section" && input.section_id.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(GrokSearchError::InvalidParams(
+                "academic_pdf_structure.section_id is required when view=section".to_string(),
+            ));
+        }
+        let llm = llm_options_for_structure(&input, &self.config);
+        let parse_options = AcademicParseOptions {
+            llm_progressive: Some(llm),
+            ..Default::default()
+        };
+        let details = self
+            .read_pdf_details_from_locator(
+                input.locator,
+                input.max_chars,
+                Some("markdown".to_string()),
+                Some(parse_options),
+                "academic_pdf_structure",
+            )
+            .await?;
+        let mut paper = details.progressive_reading.ok_or_else(|| {
+            GrokSearchError::Provider(
+                "academic_pdf_structure did not produce progressive_reading".to_string(),
+            )
+        })?;
+        if input.include_section_text != Some(true) {
+            for section in &mut paper.sections {
+                section.clean_text = None;
+            }
+        }
+        let section = if view == "section" {
+            let section_id = input.section_id.as_deref().unwrap_or_default();
+            Some(
+                paper
+                    .sections
+                    .iter()
+                    .find(|section| section.section_id == section_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        GrokSearchError::NotFound(format!(
+                            "progressive section {section_id} not found"
+                        ))
+                    })?,
+            )
+        } else {
+            None
+        };
+        Ok(AcademicPdfStructureOutput {
+            identifier: details.identifier,
+            url: details.url,
+            pdf_url: details.pdf_url,
+            source: details.source,
+            fulltext_status: details.fulltext_status,
+            resolver_chain: details.resolver_chain,
+            view,
+            progressive_reading: paper,
+            section,
+            processing: details.parsed.processing,
+            artifacts: details.parsed.artifacts,
+        })
+    }
+
+    pub async fn pdf_artifacts(
+        &self,
+        input: AcademicPdfArtifactsInput,
+    ) -> Result<AcademicPdfArtifactsOutput> {
+        ensure_valid_locator(&input.locator, "academic_pdf_artifacts")?;
+        let parse_options = AcademicParseOptions {
+            images_dir: input.images_dir,
+            tables_dir: input.tables_dir,
+            extract_images: input.extract_images,
+            extract_tables: input.extract_tables,
+            text_processing_mode: input.text_mode,
+            ..Default::default()
+        };
+        let details = self
+            .read_pdf_details_from_locator(
+                input.locator,
+                input.max_chars,
+                Some("markdown".to_string()),
+                Some(parse_options),
+                "academic_pdf_artifacts",
+            )
+            .await?;
+        Ok(AcademicPdfArtifactsOutput {
+            identifier: details.identifier,
+            url: details.url,
+            pdf_url: details.pdf_url,
+            source: details.source,
+            fulltext_status: details.fulltext_status,
+            resolver_chain: details.resolver_chain,
+            artifacts: details.parsed.artifacts,
+            parse_capabilities: details.parsed.capabilities,
+            processing: details.parsed.processing,
+        })
+    }
+
+    pub async fn pdf_download(
+        &self,
+        input: AcademicPdfDownloadInput,
+    ) -> Result<AcademicPdfDownloadOutput> {
+        ensure_valid_locator(&input.locator, "academic_pdf_download")?;
+        let identifier = input.locator.identifier;
+        let url = input.locator.url.or(input.locator.pdf_url);
+        let output_path = input.output_path;
+        let overwrite = input.overwrite.unwrap_or(false);
         let details = self.resolve_pdf_download_details(identifier, url).await?;
         let path = std::path::PathBuf::from(output_path);
         if path.exists() && !overwrite {
@@ -416,6 +603,13 @@ impl AcademicService {
             path: path.display().to_string(),
             bytes: bytes.len() as u64,
         })
+    }
+
+    pub async fn progressive_get(
+        &self,
+        input: AcademicProgressiveGetInput,
+    ) -> Result<AcademicProgressiveGetOutput> {
+        llm_progressive::get_cached(input, &self.config).await
     }
 
     pub fn diagnostics(&self) -> serde_json::Value {
@@ -650,6 +844,30 @@ impl AcademicService {
         })
     }
 
+    async fn read_pdf_details_from_locator(
+        &self,
+        locator: AcademicPdfLocator,
+        max_chars: Option<usize>,
+        output_format: Option<String>,
+        parse_options: Option<AcademicParseOptions>,
+        tool_name: &str,
+    ) -> Result<ReadDetails> {
+        ensure_valid_locator(&locator, tool_name)?;
+        let AcademicPdfLocator {
+            identifier,
+            url,
+            pdf_url,
+        } = locator;
+        self.read_pdf_details(
+            identifier,
+            url.or(pdf_url),
+            max_chars,
+            output_format,
+            parse_options,
+        )
+        .await
+    }
+
     async fn read_pdf_details(
         &self,
         identifier: Option<String>,
@@ -703,7 +921,10 @@ impl AcademicService {
                 .download_and_parse_pdf(&location, format.clone(), limit, parse_options.as_ref())
                 .await
             {
-                Ok(parsed) => {
+                Ok(mut parsed) => {
+                    let progressive = self
+                        .maybe_run_llm_progressive(&mut parsed, parse_options.as_ref())
+                        .await;
                     chain.push(location.source.clone());
                     return Ok(ReadDetails {
                         identifier,
@@ -714,6 +935,7 @@ impl AcademicService {
                         fulltext_status: location.status,
                         resolver_chain: chain,
                         metadata_materials,
+                        progressive_reading: progressive,
                     });
                 }
                 Err(err) => {
@@ -734,6 +956,27 @@ impl AcademicService {
             return Err(GrokSearchError::Upstream(err));
         }
         Err(GrokSearchError::Provider(err))
+    }
+
+    async fn maybe_run_llm_progressive(
+        &self,
+        parsed: &mut ParsedPdfDetails,
+        parse_options: Option<&AcademicParseOptions>,
+    ) -> Option<AcademicProgressivePaper> {
+        let Some(options) = parse_options.and_then(|options| options.llm_progressive.as_ref())
+        else {
+            return None;
+        };
+        if !llm_progressive::enabled(Some(options)) {
+            return None;
+        }
+        let outcome = llm_progressive::run(parsed, options, &self.config, &self.client).await;
+        if let Some(artifact) = outcome.artifact {
+            parsed.artifacts.push(artifact);
+        }
+        parsed.processing.passes.push(outcome.pass.clone());
+        parsed.processing.warnings.extend(outcome.pass.warnings);
+        outcome.value
     }
 
     fn get_providers(&self) -> Vec<&dyn AcademicProvider> {
@@ -879,6 +1122,38 @@ impl AcademicServiceProvider for AcademicService {
         AcademicService::download_pdf(self, identifier, url, output_path, overwrite).await
     }
 
+    async fn pdf_read(&self, input: AcademicPdfReadInput) -> Result<AcademicPdfReadOutput> {
+        AcademicService::pdf_read(self, input).await
+    }
+
+    async fn pdf_structure(
+        &self,
+        input: AcademicPdfStructureInput,
+    ) -> Result<AcademicPdfStructureOutput> {
+        AcademicService::pdf_structure(self, input).await
+    }
+
+    async fn pdf_artifacts(
+        &self,
+        input: AcademicPdfArtifactsInput,
+    ) -> Result<AcademicPdfArtifactsOutput> {
+        AcademicService::pdf_artifacts(self, input).await
+    }
+
+    async fn pdf_download(
+        &self,
+        input: AcademicPdfDownloadInput,
+    ) -> Result<AcademicPdfDownloadOutput> {
+        AcademicService::pdf_download(self, input).await
+    }
+
+    async fn progressive_get(
+        &self,
+        input: AcademicProgressiveGetInput,
+    ) -> Result<AcademicProgressiveGetOutput> {
+        AcademicService::progressive_get(self, input).await
+    }
+
     fn diagnostics(&self) -> serde_json::Value {
         AcademicService::diagnostics(self)
     }
@@ -889,6 +1164,86 @@ impl AcademicServiceProvider for AcademicService {
 
     fn warm_institutional_access(&self) {
         AcademicService::warm_institutional_access(self)
+    }
+}
+
+fn ensure_valid_locator(locator: &AcademicPdfLocator, tool_name: &str) -> Result<()> {
+    if locator.is_valid_exactly_one() {
+        return Ok(());
+    }
+    Err(GrokSearchError::InvalidParams(format!(
+        "{tool_name} requires exactly one of identifier, url, or pdf_url"
+    )))
+}
+
+fn llm_options_for_structure(
+    input: &AcademicPdfStructureInput,
+    config: &Config,
+) -> AcademicLlmProgressiveOptions {
+    let profile = input.profile.unwrap_or_else(|| {
+        profile_from_config(&config.progressive_default_profile)
+            .unwrap_or(AcademicPdfStructureProfile::Balanced)
+    });
+    let mut options = match profile {
+        AcademicPdfStructureProfile::Fast => AcademicLlmProgressiveOptions {
+            max_chunk_chars: Some(4_500),
+            overlap_chars: Some(300),
+            concurrency: Some(3),
+            max_output_tokens: Some(1_000),
+            input_profile: Some("md_light_plain_refs".to_string()),
+            prompt_profile: Some("compact_v2".to_string()),
+            ..Default::default()
+        },
+        AcademicPdfStructureProfile::Balanced => AcademicLlmProgressiveOptions {
+            max_chunk_chars: Some(6_500),
+            overlap_chars: Some(500),
+            concurrency: Some(2),
+            max_output_tokens: Some(1_600),
+            input_profile: Some("md_light_plain_refs".to_string()),
+            prompt_profile: Some("compact_v2".to_string()),
+            ..Default::default()
+        },
+        AcademicPdfStructureProfile::Strict => AcademicLlmProgressiveOptions {
+            max_chunk_chars: Some(5_500),
+            overlap_chars: Some(700),
+            concurrency: Some(1),
+            max_output_tokens: Some(1_800),
+            input_profile: Some("md_light_plain_refs".to_string()),
+            prompt_profile: Some("compact_v2".to_string()),
+            ..Default::default()
+        },
+    };
+    options.enabled = Some(true);
+    options.model = input
+        .model
+        .clone()
+        .filter(|model| !model.trim().is_empty())
+        .or_else(|| Some(config.progressive_default_model.clone()));
+    options.save_json_path = input.save_json_path.clone();
+    options.include_section_text = input.include_section_text;
+    match input.cache_policy.unwrap_or_default() {
+        AcademicPdfCachePolicy::Auto => {
+            options.cache_enabled = Some(true);
+            options.cache_refresh = Some(false);
+        }
+        AcademicPdfCachePolicy::Refresh => {
+            options.cache_enabled = Some(true);
+            options.cache_refresh = Some(true);
+        }
+        AcademicPdfCachePolicy::Bypass => {
+            options.cache_enabled = Some(false);
+            options.cache_refresh = Some(false);
+        }
+    }
+    options
+}
+
+fn profile_from_config(raw: &str) -> Option<AcademicPdfStructureProfile> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "fast" => Some(AcademicPdfStructureProfile::Fast),
+        "" | "balanced" => Some(AcademicPdfStructureProfile::Balanced),
+        "strict" => Some(AcademicPdfStructureProfile::Strict),
+        _ => None,
     }
 }
 
@@ -1874,6 +2229,79 @@ mod tests {
         let found = select_best_title_match(query, vec![crossref_only.clone()])
             .expect("single exact candidate should still be usable");
         assert_eq!(found.doi, crossref_only.doi);
+    }
+
+    #[test]
+    fn pdf_locator_validation_requires_one_location() {
+        assert!(ensure_valid_locator(
+            &AcademicPdfLocator {
+                pdf_url: Some("https://example.com/paper.pdf".to_string()),
+                ..Default::default()
+            },
+            "academic_pdf_read"
+        )
+        .is_ok());
+
+        let err = ensure_valid_locator(&AcademicPdfLocator::default(), "academic_pdf_read")
+            .expect_err("missing locator should fail");
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+
+        let err = ensure_valid_locator(
+            &AcademicPdfLocator {
+                identifier: Some("arXiv:1706.03762".to_string()),
+                pdf_url: Some("https://example.com/paper.pdf".to_string()),
+                ..Default::default()
+            },
+            "academic_pdf_read",
+        )
+        .expect_err("multiple locators should fail");
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+    }
+
+    #[test]
+    fn pdf_structure_profiles_map_to_llm_options() {
+        let config = Config::from_env_map([
+            ("GROK_SEARCH_PROGRESSIVE_DEFAULT_MODEL", "MiniMax-M3"),
+            ("GROK_SEARCH_PROGRESSIVE_DEFAULT_PROFILE", "strict"),
+        ]);
+
+        let strict = llm_options_for_structure(
+            &AcademicPdfStructureInput {
+                locator: AcademicPdfLocator {
+                    pdf_url: Some("https://example.com/paper.pdf".to_string()),
+                    ..Default::default()
+                },
+                cache_policy: Some(AcademicPdfCachePolicy::Refresh),
+                ..Default::default()
+            },
+            &config,
+        );
+        assert_eq!(strict.enabled, Some(true));
+        assert_eq!(strict.model.as_deref(), Some("MiniMax-M3"));
+        assert_eq!(strict.max_chunk_chars, Some(5_500));
+        assert_eq!(strict.overlap_chars, Some(700));
+        assert_eq!(strict.concurrency, Some(1));
+        assert_eq!(strict.max_output_tokens, Some(1_800));
+        assert_eq!(strict.cache_enabled, Some(true));
+        assert_eq!(strict.cache_refresh, Some(true));
+
+        let fast_bypass = llm_options_for_structure(
+            &AcademicPdfStructureInput {
+                locator: AcademicPdfLocator {
+                    pdf_url: Some("https://example.com/paper.pdf".to_string()),
+                    ..Default::default()
+                },
+                profile: Some(AcademicPdfStructureProfile::Fast),
+                cache_policy: Some(AcademicPdfCachePolicy::Bypass),
+                model: Some("custom-model".to_string()),
+                ..Default::default()
+            },
+            &config,
+        );
+        assert_eq!(fast_bypass.model.as_deref(), Some("custom-model"));
+        assert_eq!(fast_bypass.max_chunk_chars, Some(4_500));
+        assert_eq!(fast_bypass.cache_enabled, Some(false));
+        assert_eq!(fast_bypass.cache_refresh, Some(false));
     }
 
     #[test]

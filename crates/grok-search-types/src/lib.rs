@@ -5,9 +5,18 @@ pub use error::{GrokSearchError, Result};
 pub use model::academic::{
     AcademicCitationSummary, AcademicCitationsInput, AcademicCitationsOutput,
     AcademicDownloadPdfInput, AcademicDownloadPdfOutput, AcademicGetInput, AcademicGetOutput,
-    AcademicMaterialLink, AcademicPaper, AcademicParseArtifact, AcademicParseCapabilities,
-    AcademicParseOptions, AcademicParsePdfInput, AcademicParsePdfOutput, AcademicReadInput,
-    AcademicReadOutput, AcademicSearchInput, AcademicSearchOutput,
+    AcademicLlmProgressiveOptions, AcademicMaterialLink, AcademicPaper, AcademicParseArtifact,
+    AcademicParseCapabilities, AcademicParseOptions, AcademicParsePdfInput, AcademicParsePdfOutput,
+    AcademicPdfArtifactsInput, AcademicPdfArtifactsOutput, AcademicPdfCachePolicy,
+    AcademicPdfDownloadInput, AcademicPdfDownloadOutput, AcademicPdfLocator, AcademicPdfPassReport,
+    AcademicPdfProcessingReport, AcademicPdfReadInput, AcademicPdfReadOutput,
+    AcademicPdfStructureInput, AcademicPdfStructureOutput, AcademicPdfStructureProfile,
+    AcademicProgressiveBudget, AcademicProgressiveCacheInfo, AcademicProgressiveChunkReport,
+    AcademicProgressiveEvidenceSpan, AcademicProgressiveFigure, AcademicProgressiveGetInput,
+    AcademicProgressiveGetOutput, AcademicProgressiveLlmReport, AcademicProgressiveMetadata,
+    AcademicProgressiveOutlineNode, AcademicProgressivePaper, AcademicProgressiveReference,
+    AcademicProgressiveSection, AcademicProgressiveTable, AcademicReadInput, AcademicReadOutput,
+    AcademicSearchInput, AcademicSearchOutput,
 };
 pub use model::search::{
     ContentBlock, SearchFilters, SearchMessage, SearchRequest, SearchResponse, SearchTool,
