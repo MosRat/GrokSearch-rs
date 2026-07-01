@@ -130,20 +130,29 @@ jobs:
       - name: Package Unix
         if: matrix.os != 'windows-latest'
         run: |
+          rm -rf release-package
+          mkdir -p release-package/scripts
           if [ "${{ matrix.universal }}" = "true" ]; then
-            cd target/release
-            tar czf ../../${{ matrix.asset_name }} ${{ matrix.artifact_name }}
+            cp target/release/${{ matrix.artifact_name }} release-package/
           else
-            cd target/${{ matrix.target }}/release
-            tar czf ../../../${{ matrix.asset_name }} ${{ matrix.artifact_name }}
+            cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} release-package/
           fi
+          cp -R skills release-package/skills
+          cp scripts/install-skills.sh release-package/scripts/install-skills.sh
+          chmod +x release-package/${{ matrix.artifact_name }} release-package/scripts/install-skills.sh
+          tar czf ${{ matrix.asset_name }} -C release-package .
 
       - name: Package Windows
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          cd target/${{ matrix.target }}/release
-          Compress-Archive -Path ${{ matrix.artifact_name }} -DestinationPath ../../../${{ matrix.asset_name }}
+          $package = Join-Path $PWD "release-package"
+          if (Test-Path $package) { Remove-Item -Recurse -Force $package }
+          New-Item -ItemType Directory -Path (Join-Path $package "scripts") | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" -Destination $package
+          Copy-Item "skills" -Destination (Join-Path $package "skills") -Recurse
+          Copy-Item "scripts/install-skills.sh" -Destination (Join-Path $package "scripts/install-skills.sh")
+          Compress-Archive -Path "$package/*" -DestinationPath "${{ matrix.asset_name }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
@@ -193,6 +202,9 @@ jobs:
           rm -rf python/dist python/build python/*.egg-info
           mkdir -p python/grok_search_rs/bin
           find python/grok_search_rs/bin -type f ! -name '__init__.py' -delete
+          rm -rf python/grok_search_rs/skills
+          mkdir -p python/grok_search_rs/skills
+          cp -R skills/. python/grok_search_rs/skills/
           if [[ "${{ matrix.universal }}" == "true" ]]; then
             SRC="target/release/${{ matrix.artifact_name }}"
           else
@@ -236,12 +248,18 @@ jobs:
         with:
           path: artifacts
 
-      - name: Flatten artifacts and checksums
+      - name: Flatten artifacts
         run: |
           cd artifacts
           mkdir -p ../flat
           find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} ../flat/ \;
-          cd ../flat
+
+      - name: Package skills asset
+        run: scripts/package-skills.sh flat/grok-search-rs-skills.tar.gz
+
+      - name: Generate checksums
+        run: |
+          cd flat
           sha256sum *.tar.gz *.zip > SHA256SUMS
 
       - name: Generate changelog
@@ -367,6 +385,8 @@ jobs:
           }
           fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           NODE
+          rm -rf skills
+          cp -R ../../skills skills
         env:
           VERSION: ${{ github.ref_name }}
 

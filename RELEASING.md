@@ -23,7 +23,8 @@ The release workflow then:
 
 1. Injects `0.1.5` into `Cargo.toml` in the CI working tree and builds cross-platform binaries.
    Linux assets are static musl binaries built with Zig and `cargo zigbuild`.
-2. Creates the GitHub Release with archives and `SHA256SUMS`.
+2. Creates the GitHub Release with platform archives, the skills archive, and
+   `SHA256SUMS`.
 3. Publishes the 6 npm packages: main package plus 5 platform packages.
 4. Publishes platform wheels to PyPI so `uv tool install grok-search-rs` and `uvx grok-search-rs` work.
 5. Commits the version bump back to `main` so Cargo, npm, and Python package metadata stay in sync.
@@ -62,7 +63,8 @@ for offline use only.
 
 ## Verify after release
 
-- GitHub release page lists 5 archives plus `SHA256SUMS`
+- GitHub release page lists 5 platform archives, `grok-search-rs-skills.tar.gz`,
+  and `SHA256SUMS`
 - Linux archives contain musl binaries from `x86_64-unknown-linux-musl` and
   `aarch64-unknown-linux-musl`
 - `npx grok-search-rs@X.Y.Z --help` works

@@ -30,6 +30,9 @@ PypiSerects
 # Local release/npm scratch artifacts
 /dist/
 /package.json
+/grok-search-rs-skills.tar.gz
+/npm/grok-search-rs/skills/
+/python/grok_search_rs/skills/
 
 # Agent planning scratch files
 /docs/superpowers/

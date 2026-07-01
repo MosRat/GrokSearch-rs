@@ -139,5 +139,15 @@ graceful shutdown. It binds to `127.0.0.1:8787` by default. Non-loopback binds
 are rejected unless `mcp_http_auth_token` / `GROK_SEARCH_MCP_HTTP_AUTH_TOKEN`
 is set, and Bearer tokens are never logged.
 
+`grok-search-rs mcp-service` is an installer/controller around the same
+`mcp-http` entrypoint. It registers the current binary as a current-user
+background service through platform-native user facilities: Windows Scheduled
+Tasks, Linux `systemd --user`, or macOS LaunchAgent. Install copies the current
+binary into a managed user bin directory and updates that copy only when the
+running binary has a higher version. Linux install also attempts
+`loginctl enable-linger` so the user service can survive logout. The service
+installer lives with other agent application helpers and does not change MCP
+handler semantics.
+
 Tool responses are returned as structured MCP content and also serialized JSON
 inside text content for broad client compatibility.

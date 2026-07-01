@@ -30,7 +30,8 @@
   },
   "files": [
     "run.js",
-    "README.md"
+    "README.md",
+    "skills"
   ],
   "engines": {
     "node": ">=14.14.0"

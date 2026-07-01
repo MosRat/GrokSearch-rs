@@ -4,6 +4,30 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.3.3 - 2026-07-02
+
+### Added
+
+- Added `mcp-service` user-service management for the HTTP MCP server,
+  including current-binary installation, service start/stop/status/uninstall,
+  managed binary updates when the running version is newer, and Linux
+  systemd-linger support for running after logout.
+- Added `scripts/install-skills.sh` for one-command GrokSearch skill
+  installation into the current directory, Codex, Claude Code / `cc`, or a
+  custom skill directory.
+- Added `scripts/package-skills.sh` and a `grok-search-rs-skills.tar.gz`
+  GitHub Release asset containing all repo-local `grok-search-*` skills and the
+  installer.
+
+### Changed
+
+- Release archives now include `skills/` and `scripts/install-skills.sh`; PyPI
+  wheels and the npm main package also carry the repo-local skills as package
+  data.
+- Strengthened agent-facing tool descriptions and repo-local skills so they
+  align with intent-oriented PDF tools, automatic vision artifact completion,
+  cache policy, diagnostics, and domain-specific tool boundaries.
+
 ## 0.3.2 - 2026-07-01
 
 ### Added

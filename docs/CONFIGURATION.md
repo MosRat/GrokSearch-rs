@@ -18,6 +18,14 @@ run `grok-search-rs mcp-http`; it listens on `127.0.0.1:8787/mcp` by default.
 Set `mcp_http_auth_token` / `GROK_SEARCH_MCP_HTTP_AUTH_TOKEN` before binding to
 anything other than loopback. Browser clients can set one explicit
 `mcp_http_allow_origin`; CORS is disabled by default.
+For a persistent local HTTP endpoint, run `grok-search-rs mcp-service install`.
+That registers the current binary as a current-user service using Windows
+Scheduled Tasks, Linux `systemd --user`, or macOS LaunchAgent. The installer
+copies the current binary to a stable user bin directory and updates that copy
+when the current version is newer. On Linux it also tries
+`loginctl enable-linger <user>` so the user service can keep running after
+logout. It reuses the same HTTP config and leaves stdio agent snippets
+unchanged.
 
 The same global config is used by both MCP mode and direct CLI tool calls such
 as `grok-search-rs doctor`, `grok-search-rs web-search "query"`,
@@ -235,6 +243,33 @@ Use `--target codex`, `--target claude-code`, or `--target snippets` to refresh
 only one integration. Use `--dry-run` to preview paths and commands without
 writing files or invoking the Claude Code CLI.
 
+### Installing GrokSearch skills
+
+Release packages include the repo-local GrokSearch skills. These skills teach
+agents when to call `web_search`, academic PDF tools, social search, repo
+metadata, and diagnostics. They are separate from MCP server registration:
+`init` wires the server, while `scripts/install-skills.sh` installs the skill
+folders.
+
+Install into the current directory's `./skills`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MosRat/GrokSearch-rs/main/scripts/install-skills.sh | bash
+```
+
+Install into an agent skill home:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MosRat/GrokSearch-rs/main/scripts/install-skills.sh | bash -s -- --target codex
+curl -fsSL https://raw.githubusercontent.com/MosRat/GrokSearch-rs/main/scripts/install-skills.sh | bash -s -- --target cc
+```
+
+Targets resolve to `${CODEX_HOME:-$HOME/.codex}/skills` for Codex and
+`${CLAUDE_HOME:-$HOME/.claude}/skills` for Claude Code / `cc`. Use
+`--dest <dir>` for any other agent or workspace. Use `--version X.Y.Z` to pin
+to a release asset, `--version main` to install from the branch archive, and
+`--no-overwrite` to skip existing same-named skill directories.
+
 Minimal generated Codex entry:
 
 ```toml
@@ -249,6 +284,30 @@ If you launch `init` with `GROK_SEARCH_CONFIG` pointing at a custom path, the ge
 [mcp_servers.grok-search-rs.env]
 GROK_SEARCH_CONFIG = "/absolute/path/to/config.toml"
 ```
+
+### Background HTTP MCP user service - `mcp-service`
+
+Use `mcp-http` for foreground debugging and `mcp-service` when an HTTP MCP
+endpoint should stay running after the shell exits:
+
+```bash
+grok-search-rs mcp-service install --bind 127.0.0.1:8787 --path /mcp
+grok-search-rs mcp-service status
+grok-search-rs mcp-service stop
+grok-search-rs mcp-service uninstall
+```
+
+`install` starts the service by default and checks `GET /healthz`. Add
+`--no-start` to only register it. The current binary is copied to a managed
+user bin directory (`%LOCALAPPDATA%\GrokSearch-rs\bin` on Windows, `~/.local/bin`
+on Linux/macOS) so the background service does not depend on the shell's
+temporary install path; override with `--install-dir <DIR>` when needed. If
+that managed binary already exists, reinstalling compares versions and updates
+the copy only when the running binary is newer. When `GROK_SEARCH_CONFIG` is
+set during installation, that explicit config path is forwarded into the
+service environment; otherwise the service resolves the default global config
+at runtime. Non-loopback binds still require `mcp_http_auth_token` or
+`GROK_SEARCH_MCP_HTTP_AUTH_TOKEN`.
 
 ### Why two casings?
 
