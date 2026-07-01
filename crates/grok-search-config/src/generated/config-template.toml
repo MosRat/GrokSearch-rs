@@ -143,3 +143,13 @@
 # progressive_default_model = "MiniMax-M3" # default: MiniMax-M3
 # Default profile for LLM progressive PDF reading.
 # progressive_default_profile = "balanced" # default: balanced
+
+# -- MCP HTTP Server --
+# Address for the optional Streamable HTTP MCP server.
+# mcp_http_bind = "127.0.0.1:8787" # default: 127.0.0.1:8787
+# Request path for the optional Streamable HTTP MCP endpoint.
+# mcp_http_path = "/mcp" # default: /mcp
+# Bearer token required by HTTP MCP when set. Required for non-loopback binds.
+# mcp_http_auth_token = "change-me"
+# Optional CORS allow-origin for browser-based HTTP MCP clients.
+# mcp_http_allow_origin = "http://127.0.0.1:3000"

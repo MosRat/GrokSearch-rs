@@ -1,4 +1,5 @@
 use std::io::{IsTerminal, Write};
+use std::net::SocketAddr;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use grok_search_apps::{InitOptions, InitTarget};
@@ -33,6 +34,9 @@ struct Cli {
 enum Command {
     /// Start the MCP stdio server.
     Mcp,
+    /// Start the MCP Streamable HTTP server.
+    #[command(name = "mcp-http", alias = "mcp_http")]
+    McpHttp(McpHttpCommand),
     /// Initialize shared config and thin agent MCP entries.
     Init(InitCommand),
     /// Run xAI OAuth login.
@@ -101,6 +105,16 @@ struct OutputArgs {
     compact: bool,
     #[arg(long)]
     verbose: bool,
+}
+
+#[derive(Debug, Args)]
+struct McpHttpCommand {
+    #[arg(long)]
+    bind: Option<SocketAddr>,
+    #[arg(long)]
+    path: Option<String>,
+    #[arg(long = "allow-origin")]
+    allow_origin: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -553,6 +567,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     match command {
         None | Some(Command::Mcp) => run_mcp().await,
+        Some(Command::McpHttp(command)) => run_mcp_http(command).await,
         Some(Command::Init(command)) => run_init(command),
         Some(Command::Login) => {
             let cfg = Config::try_load()?;
@@ -682,11 +697,31 @@ async fn run_mcp() -> anyhow::Result<()> {
         print_setup_guide();
         return Ok(());
     }
-    let (http, proxy_diagnostics) = grok_search_net::proxy::bootstrap(&cfg).await?;
-    let service = grok_search_runtime::new_with_http(cfg, http, proxy_diagnostics)?;
+    let service = build_service_from_config(cfg).await?;
     service.warm_academic_institutional_access();
     grok_search_mcp::run_stdio(service).await?;
     Ok(())
+}
+
+async fn run_mcp_http(command: McpHttpCommand) -> anyhow::Result<()> {
+    let cfg = Config::try_load()?;
+    let bind = match command.bind {
+        Some(bind) => bind,
+        None => cfg.mcp_http_bind.parse()?,
+    };
+    let path = command.path.unwrap_or_else(|| cfg.mcp_http_path.clone());
+    let allow_origin = command
+        .allow_origin
+        .or_else(|| cfg.mcp_http_allow_origin.clone());
+    let options = grok_search_mcp::McpHttpOptions::new(
+        bind,
+        path,
+        cfg.mcp_http_auth_token.clone(),
+        allow_origin,
+    )?;
+    let service = build_service_from_config(cfg).await?;
+    service.warm_academic_institutional_access();
+    grok_search_mcp::run_http(service, options).await
 }
 
 fn run_init(command: InitCommand) -> anyhow::Result<()> {
@@ -956,6 +991,12 @@ async fn invoke_and_print<T: serde::Serialize>(
 
 async fn build_service() -> anyhow::Result<grok_search_service::SearchService> {
     let cfg = Config::try_load()?;
+    build_service_from_config(cfg).await
+}
+
+async fn build_service_from_config(
+    cfg: Config,
+) -> anyhow::Result<grok_search_service::SearchService> {
     let (http, proxy_diagnostics) = grok_search_net::proxy::bootstrap(&cfg).await?;
     Ok(grok_search_runtime::new_with_http(
         cfg,
@@ -1099,6 +1140,38 @@ mod tests {
                 .unwrap()
                 .command,
             Some(Command::Mcp)
+        ));
+        match Cli::try_parse_from([
+            "grok-search-rs",
+            "mcp-http",
+            "--bind",
+            "127.0.0.1:0",
+            "--path",
+            "/mcp",
+            "--allow-origin",
+            "http://127.0.0.1:3000",
+        ])
+        .unwrap()
+        .command
+        {
+            Some(Command::McpHttp(command)) => {
+                assert_eq!(
+                    command.bind,
+                    Some("127.0.0.1:0".parse::<SocketAddr>().unwrap())
+                );
+                assert_eq!(command.path.as_deref(), Some("/mcp"));
+                assert_eq!(
+                    command.allow_origin.as_deref(),
+                    Some("http://127.0.0.1:3000")
+                );
+            }
+            other => panic!("expected mcp-http command, got {other:?}"),
+        }
+        assert!(matches!(
+            Cli::try_parse_from(["grok-search-rs", "mcp_http"])
+                .unwrap()
+                .command,
+            Some(Command::McpHttp(_))
         ));
         assert!(matches!(
             Cli::try_parse_from(["grok-search-rs", "login"])

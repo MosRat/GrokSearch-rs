@@ -89,6 +89,10 @@ pub struct Config {
     pub progressive_cache_max_entries: usize,
     pub progressive_default_model: String,
     pub progressive_default_profile: String,
+    pub mcp_http_bind: String,
+    pub mcp_http_path: String,
+    pub mcp_http_auth_token: Option<String>,
+    pub mcp_http_allow_origin: Option<String>,
 }
 
 /// Hand-written `Debug` that masks secret-bearing fields so a stray
@@ -240,6 +244,15 @@ impl std::fmt::Debug for Config {
                 "progressive_default_profile",
                 &self.progressive_default_profile,
             )
+            .field("mcp_http_bind", &self.mcp_http_bind)
+            .field("mcp_http_path", &self.mcp_http_path)
+            .field(
+                "mcp_http_auth_token",
+                &self
+                    .mcp_http_auth_token
+                    .fmt_debug_redacted(MCP_HTTP_AUTH_TOKEN),
+            )
+            .field("mcp_http_allow_origin", &self.mcp_http_allow_origin)
             .finish()
     }
 }
@@ -431,6 +444,10 @@ impl Config {
                 PROGRESSIVE_DEFAULT_PROFILE,
                 default_str(PROGRESSIVE_DEFAULT_PROFILE),
             ),
+            mcp_http_bind: reader.string(MCP_HTTP_BIND, default_str(MCP_HTTP_BIND)),
+            mcp_http_path: reader.string(MCP_HTTP_PATH, default_str(MCP_HTTP_PATH)),
+            mcp_http_auth_token: reader.secret(MCP_HTTP_AUTH_TOKEN),
+            mcp_http_allow_origin: reader.optional(MCP_HTTP_ALLOW_ORIGIN),
         }
     }
 
@@ -592,6 +609,10 @@ impl Config {
                 PROGRESSIVE_DEFAULT_PROFILE,
                 Some(self.progressive_default_profile.clone()),
             ),
+            diagnostic_pair(MCP_HTTP_BIND, Some(self.mcp_http_bind.clone())),
+            diagnostic_pair(MCP_HTTP_PATH, Some(self.mcp_http_path.clone())),
+            diagnostic_pair(MCP_HTTP_AUTH_TOKEN, self.mcp_http_auth_token.clone()),
+            diagnostic_pair(MCP_HTTP_ALLOW_ORIGIN, self.mcp_http_allow_origin.clone()),
         ];
         fields
             .into_iter()

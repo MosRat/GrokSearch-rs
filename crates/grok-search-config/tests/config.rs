@@ -126,6 +126,7 @@ fn config_redacts_grok_tavily_and_firecrawl_keys() {
         ("TAVILY_API_KEY", "tvly-abcdefghi"),
         ("FIRECRAWL_API_KEY", "fc-abcdefghi"),
         ("GROK_SEARCH_LLM_API_KEY", "llm-secret-token"),
+        ("GROK_SEARCH_MCP_HTTP_AUTH_TOKEN", "mcp-secret-token"),
         (
             "GROK_SEARCH_LLM_BASE_URL",
             "https://user:pass@example.com/anthropic?token=secret",
@@ -137,14 +138,39 @@ fn config_redacts_grok_tavily_and_firecrawl_keys() {
     assert!(info.contains("tavily_api_key=set"));
     assert!(info.contains("firecrawl_api_key=set"));
     assert!(info.contains("llm_api_key=set"));
+    assert!(info.contains("mcp_http_auth_token=set"));
     assert!(!info.contains("tvly"));
     assert!(!info.contains("fc-"));
     assert!(!info.contains("grok-1234567890"));
     assert!(!info.contains("llm-secret-token"));
+    assert!(!info.contains("mcp-secret-token"));
     assert!(!info.contains("user:pass"));
     assert!(!info.contains("token=secret"));
     assert!(!info.contains("1234567890"));
     assert!(!info.contains("abcdefghi"));
+}
+
+#[test]
+fn config_reads_mcp_http_defaults_and_env_overrides() {
+    let defaults = Config::from_env_map([] as [(&str, &str); 0]);
+    assert_eq!(defaults.mcp_http_bind, "127.0.0.1:8787");
+    assert_eq!(defaults.mcp_http_path, "/mcp");
+    assert_eq!(defaults.mcp_http_auth_token, None);
+    assert_eq!(defaults.mcp_http_allow_origin, None);
+
+    let cfg = Config::from_env_map([
+        ("GROK_SEARCH_MCP_HTTP_BIND", "127.0.0.1:9999"),
+        ("GROK_SEARCH_MCP_HTTP_PATH", "/custom-mcp"),
+        ("GROK_SEARCH_MCP_HTTP_AUTH_TOKEN", "secret"),
+        ("GROK_SEARCH_MCP_HTTP_ALLOW_ORIGIN", "http://127.0.0.1:3000"),
+    ]);
+    assert_eq!(cfg.mcp_http_bind, "127.0.0.1:9999");
+    assert_eq!(cfg.mcp_http_path, "/custom-mcp");
+    assert_eq!(cfg.mcp_http_auth_token.as_deref(), Some("secret"));
+    assert_eq!(
+        cfg.mcp_http_allow_origin.as_deref(),
+        Some("http://127.0.0.1:3000")
+    );
 }
 
 #[test]
@@ -456,6 +482,10 @@ academic_pdf_cache_path = "custom-pdf-cache.redb"
 academic_pdf_cache_ttl_seconds = 120
 academic_pdf_cache_max_entries = 11
 academic_pdf_cache_max_bytes = 123456
+mcp_http_bind = "127.0.0.1:9999"
+mcp_http_path = "/custom-mcp"
+mcp_http_auth_token = "mcp-secret"
+mcp_http_allow_origin = "http://127.0.0.1:3000"
 default_extra_sources = 4
 fallback_sources      = 9
 fetch_max_chars       = 12345
@@ -524,6 +554,13 @@ max_response_bytes    = 2097152
     assert_eq!(cfg.academic_pdf_cache_ttl_seconds, 120);
     assert_eq!(cfg.academic_pdf_cache_max_entries, 11);
     assert_eq!(cfg.academic_pdf_cache_max_bytes, 123456);
+    assert_eq!(cfg.mcp_http_bind, "127.0.0.1:9999");
+    assert_eq!(cfg.mcp_http_path, "/custom-mcp");
+    assert_eq!(cfg.mcp_http_auth_token.as_deref(), Some("mcp-secret"));
+    assert_eq!(
+        cfg.mcp_http_allow_origin.as_deref(),
+        Some("http://127.0.0.1:3000")
+    );
 }
 
 #[test]

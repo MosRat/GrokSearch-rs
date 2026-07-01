@@ -36,6 +36,7 @@ homepage = "https://github.com/MosRat/GrokSearch-rs"
 [workspace.dependencies]
 anyhow = "1"
 async-trait = "0.1"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 getrandom = "0.3"
@@ -45,7 +46,7 @@ percent-encoding = "2"
 quick-xml = { version = "0.37", default-features = false, features = ["encoding"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "gzip", "socks", "cookies"], default-features = false }
 redb = "2"
-rmcp = { version = "0.8", features = ["server", "transport-io"] }
+rmcp = { version = "2", features = ["server", "transport-io", "transport-streamable-http-server"] }
 ring = "0.17"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
@@ -54,8 +55,10 @@ sha2 = "0.10"
 scraper = "0.23"
 tempfile = "3"
 thiserror = "2"
-tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "rt", "sync", "time"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "rt", "signal", "sync", "time"] }
+tokio-util = "0.7"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
+tower-http = { version = "0.6", default-features = false, features = ["cors", "limit", "timeout"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 pdf_oxide = "0.3"

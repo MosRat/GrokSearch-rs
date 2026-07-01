@@ -928,6 +928,57 @@ config_schema! {
             sample: "\"balanced\"",
         }
     }
+
+    group "MCP HTTP Server" {
+        /// Address for the optional Streamable HTTP MCP server.
+        MCP_HTTP_BIND {
+            field: mcp_http_bind,
+            type: String,
+            toml: "mcp_http_bind",
+            env: "GROK_SEARCH_MCP_HTTP_BIND",
+            aliases: ["GROK_SEARCH_MCP_HTTP_BIND"],
+            kind: String,
+            redaction: None,
+            default: "127.0.0.1:8787",
+            sample: "\"127.0.0.1:8787\"",
+        }
+        /// Request path for the optional Streamable HTTP MCP endpoint.
+        MCP_HTTP_PATH {
+            field: mcp_http_path,
+            type: String,
+            toml: "mcp_http_path",
+            env: "GROK_SEARCH_MCP_HTTP_PATH",
+            aliases: ["GROK_SEARCH_MCP_HTTP_PATH"],
+            kind: String,
+            redaction: None,
+            default: "/mcp",
+            sample: "\"/mcp\"",
+        }
+        /// Bearer token required by HTTP MCP when set. Required for non-loopback binds.
+        MCP_HTTP_AUTH_TOKEN {
+            field: mcp_http_auth_token,
+            type: String,
+            toml: "mcp_http_auth_token",
+            env: "GROK_SEARCH_MCP_HTTP_AUTH_TOKEN",
+            aliases: ["GROK_SEARCH_MCP_HTTP_AUTH_TOKEN"],
+            kind: Secret,
+            redaction: SecretStatus,
+            default: "unset",
+            sample: "\"change-me\"",
+        }
+        /// Optional CORS allow-origin for browser-based HTTP MCP clients.
+        MCP_HTTP_ALLOW_ORIGIN {
+            field: mcp_http_allow_origin,
+            type: String,
+            toml: "mcp_http_allow_origin",
+            env: "GROK_SEARCH_MCP_HTTP_ALLOW_ORIGIN",
+            aliases: ["GROK_SEARCH_MCP_HTTP_ALLOW_ORIGIN"],
+            kind: String,
+            redaction: None,
+            default: "unset",
+            sample: "\"http://127.0.0.1:3000\"",
+        }
+    }
 }
 
 #[cfg(test)]
