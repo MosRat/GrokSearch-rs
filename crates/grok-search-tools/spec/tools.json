@@ -343,10 +343,16 @@
           "images_dir": { "type": "string", "description": "Directory for extracted PNG files and images.json. Required when extract_images=true." },
           "tables_dir": { "type": "string", "description": "Directory for extracted table Markdown files and tables.json. Required when extract_tables=true." },
           "extract_images": { "type": "boolean", "default": false },
-            "extract_tables": { "type": "boolean", "default": false },
-            "text_mode": { "type": "string", "enum": ["none", "light", "clean"], "default": "clean" },
-            "max_chars": { "type": "integer", "minimum": 1 },
-            "cache_policy": { "type": "string", "enum": ["auto", "refresh", "bypass"], "default": "auto", "description": "PDF bytes cache policy. auto reads and writes the local PDF cache; refresh downloads again and overwrites; bypass skips the PDF cache." }
+          "extract_tables": { "type": "boolean", "default": false },
+          "text_mode": { "type": "string", "enum": ["none", "light", "clean"], "default": "clean" },
+          "max_chars": { "type": "integer", "minimum": 1 },
+          "cache_policy": { "type": "string", "enum": ["auto", "refresh", "bypass"], "default": "auto", "description": "PDF bytes cache policy. auto reads and writes the local PDF cache; refresh downloads again and overwrites; bypass skips the PDF cache." },
+          "vision_profile": { "type": "string", "enum": ["auto", "off", "artifact_micro"], "default": "auto", "description": "Optional multimodal artifact pass. auto enables artifact_micro when an LLM API key is configured and otherwise stays off. artifact_micro renders selected high-risk pages and asks a vision-capable MiniMax/Anthropic-compatible model for figure/table completion candidates, refined bounding boxes, table markdown, and layout warnings. It never edits body text; refined LLM artifacts are marked with validation warnings." },
+          "vision_max_pages": { "type": "integer", "minimum": 1, "maximum": 20, "default": 8 },
+          "vision_render_dpi": { "type": "integer", "minimum": 50, "maximum": 100, "default": 65 },
+          "vision_concurrency": { "type": "integer", "minimum": 1, "maximum": 4, "default": 4 },
+          "vision_cache_policy": { "type": "string", "enum": ["auto", "refresh", "bypass"], "default": "auto", "description": "Vision artifact cache policy. Uses the progressive cache path with a separate vision table/key prefix." },
+          "vision_dir": { "type": "string", "description": "Optional directory for vision.json diagnostics. Existing vision.json is not overwritten." }
           }
         }
       },

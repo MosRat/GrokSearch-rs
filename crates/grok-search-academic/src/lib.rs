@@ -1,4 +1,5 @@
 mod institutional;
+mod llm_artifacts;
 mod llm_progressive;
 mod providers;
 mod service;

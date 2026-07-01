@@ -12,6 +12,10 @@ use grok_search_types::{
 
 use crate::artifacts;
 use crate::text::{analyze_text_signals, clean_text, TextProcessingMode};
+use crate::vision::{
+    build_vision_source_bundle, select_vision_pages, PdfOxidePageRenderer, PdfVisionRenderOutcome,
+    PdfVisionSourceBundle,
+};
 
 #[derive(Debug)]
 pub struct ParsedPdfDetails {
@@ -26,6 +30,8 @@ pub struct ParsedPdfDetails {
     pub capabilities: AcademicParseCapabilities,
     pub processing: AcademicPdfProcessingReport,
     pub progressive_source: Option<PdfProgressiveSourceBundle>,
+    pub vision_source: Option<PdfVisionSourceBundle>,
+    pub vision_render: Option<PdfVisionRenderOutcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +89,9 @@ struct PdfPipelineOptions<'a> {
     text_processing_mode: TextProcessingMode,
     include_raw_content: bool,
     build_progressive_source: bool,
+    build_vision_source: bool,
+    vision_max_pages: usize,
+    vision_render_dpi: u16,
 }
 
 impl<'a> PdfPipelineOptions<'a> {
@@ -101,6 +110,17 @@ impl<'a> PdfPipelineOptions<'a> {
             .and_then(|options| options.llm_progressive.as_ref())
             .and_then(|options| options.enabled)
             .unwrap_or(false);
+        let build_vision_source = parse_options
+            .and_then(|options| options.vision_profile.as_deref())
+            .is_some_and(|profile| profile == "artifact_micro");
+        let vision_max_pages = parse_options
+            .and_then(|options| options.vision_max_pages)
+            .unwrap_or(8)
+            .clamp(1, 20);
+        let vision_render_dpi = parse_options
+            .and_then(|options| options.vision_render_dpi)
+            .unwrap_or(65)
+            .clamp(50, 100);
         Ok(Self {
             format,
             max_chars,
@@ -108,6 +128,9 @@ impl<'a> PdfPipelineOptions<'a> {
             text_processing_mode,
             include_raw_content,
             build_progressive_source,
+            build_vision_source,
+            vision_max_pages,
+            vision_render_dpi,
         })
     }
 }
@@ -149,6 +172,30 @@ fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<Par
     let raw_pages = extract_page_texts_with_pdf_oxide(&doc, pages, options.format)?;
     let progressive_source = if options.build_progressive_source {
         Some(build_progressive_source_bundle(&doc, pages, &raw_pages)?)
+    } else {
+        None
+    };
+    let vision_source = if options.build_vision_source {
+        Some(build_vision_source_bundle_for_pipeline(
+            &doc,
+            pages,
+            &raw_pages,
+            pdf_sha256.clone(),
+        )?)
+    } else {
+        None
+    };
+    let vision_render = if let Some(source) = vision_source.as_ref() {
+        let selected = select_vision_pages(source, options.vision_max_pages);
+        if selected.is_empty() {
+            Some(PdfVisionRenderOutcome {
+                pages: Vec::new(),
+                failures: Vec::new(),
+            })
+        } else {
+            let renderer = PdfOxidePageRenderer::new()?;
+            Some(renderer.render_pages(&doc, &selected, options.vision_render_dpi)?)
+        }
     } else {
         None
     };
@@ -295,6 +342,8 @@ fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<Par
             options.text_processing_mode,
             passes,
             progressive_source,
+            vision_source,
+            vision_render,
             pdf_sha256,
         ));
     }
@@ -343,6 +392,8 @@ fn run_pdf_pipeline(bytes: &[u8], options: PdfPipelineOptions<'_>) -> Result<Par
         options.text_processing_mode,
         passes,
         progressive_source,
+        vision_source,
+        vision_render,
         pdf_sha256,
     ))
 }
@@ -376,6 +427,8 @@ fn finalize_details(
     mode: TextProcessingMode,
     mut passes: Vec<AcademicPdfPassReport>,
     progressive_source: Option<PdfProgressiveSourceBundle>,
+    vision_source: Option<PdfVisionSourceBundle>,
+    vision_render: Option<PdfVisionRenderOutcome>,
     pdf_sha256: String,
 ) -> ParsedPdfDetails {
     let pass_started = Instant::now();
@@ -414,6 +467,8 @@ fn finalize_details(
         capabilities,
         processing,
         progressive_source,
+        vision_source,
+        vision_render,
     }
 }
 
@@ -527,6 +582,34 @@ fn build_progressive_source_bundle(
         pages: page_records,
         warnings: Vec::new(),
     })
+}
+
+fn build_vision_source_bundle_for_pipeline(
+    doc: &pdf_oxide::PdfDocument,
+    pages: usize,
+    fallback_markdown_pages: &[String],
+    pdf_sha256: String,
+) -> Result<PdfVisionSourceBundle> {
+    let markdown_pages =
+        extract_page_texts_with_pdf_oxide(doc, pages, "markdown").unwrap_or_else(|_| {
+            fallback_markdown_pages
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        });
+    let plain_pages = extract_page_texts_with_pdf_oxide(doc, pages, "text").unwrap_or_else(|_| {
+        fallback_markdown_pages
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    });
+    Ok(build_vision_source_bundle(
+        doc,
+        pages,
+        &markdown_pages,
+        &plain_pages,
+        pdf_sha256,
+    ))
 }
 
 fn reference_tail_from_plain_text(content: &str) -> String {

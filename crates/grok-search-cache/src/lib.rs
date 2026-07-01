@@ -11,6 +11,8 @@ const PROGRESSIVE_ITEMS: TableDefinition<&str, &[u8]> =
 const PROGRESSIVE_META: TableDefinition<&str, &[u8]> = TableDefinition::new("progressive_meta_v1");
 const PDF_ITEMS: TableDefinition<&str, &[u8]> = TableDefinition::new("academic_pdf_items_v1");
 const PDF_META: TableDefinition<&str, &[u8]> = TableDefinition::new("academic_pdf_meta_v1");
+const VISION_ITEMS: TableDefinition<&str, &[u8]> = TableDefinition::new("vision_artifact_items_v1");
+const VISION_META: TableDefinition<&str, &[u8]> = TableDefinition::new("vision_artifact_meta_v1");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProgressiveCacheMetadata {
@@ -94,6 +96,47 @@ pub trait PdfCacheStore: Send + Sync {
     fn list_metadata(&self) -> Result<Vec<PdfCacheMetadata>>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VisionCacheMetadata {
+    pub cache_key: String,
+    pub created_at_unix: u64,
+    pub updated_at_unix: u64,
+    pub expires_at_unix: Option<u64>,
+    pub size_bytes: u64,
+    pub pdf_sha256: String,
+    pub page_text_sha256: String,
+    pub strategy_hash: String,
+    pub model: String,
+    pub profile: String,
+    pub render_dpi: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisionCacheEntry {
+    pub bytes: Vec<u8>,
+    pub metadata: VisionCacheMetadata,
+}
+
+#[derive(Debug, Clone)]
+pub struct VisionCachePut {
+    pub cache_key: String,
+    pub bytes: Vec<u8>,
+    pub ttl_seconds: Option<u64>,
+    pub pdf_sha256: String,
+    pub page_text_sha256: String,
+    pub strategy_hash: String,
+    pub model: String,
+    pub profile: String,
+    pub render_dpi: u16,
+}
+
+pub trait VisionCacheStore: Send + Sync {
+    fn get(&self, key: &str) -> Result<Option<VisionCacheEntry>>;
+    fn put(&self, put: VisionCachePut, max_entries: usize) -> Result<VisionCacheMetadata>;
+    fn remove(&self, key: &str) -> Result<bool>;
+    fn list_metadata(&self) -> Result<Vec<VisionCacheMetadata>>;
+}
+
 #[derive(Clone)]
 pub struct RedbProgressiveCache {
     path: PathBuf,
@@ -137,6 +180,12 @@ pub struct RedbPdfCache {
     database: Arc<Database>,
 }
 
+#[derive(Clone)]
+pub struct RedbVisionCache {
+    path: PathBuf,
+    database: Arc<Database>,
+}
+
 impl RedbPdfCache {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
@@ -158,6 +207,39 @@ impl RedbPdfCache {
         }
         .map_err(|err| {
             GrokSearchError::Io(format!("open redb PDF cache {}: {err}", path.display()))
+        })?;
+        Ok(Self {
+            path,
+            database: Arc::new(database),
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl RedbVisionCache {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                GrokSearchError::Io(format!(
+                    "create vision cache directory {}: {err}",
+                    parent.display()
+                ))
+            })?;
+        }
+        let database = if path.exists() {
+            Database::open(&path)
+        } else {
+            Database::create(&path)
+        }
+        .map_err(|err| {
+            GrokSearchError::Io(format!("open redb vision cache {}: {err}", path.display()))
         })?;
         Ok(Self {
             path,
@@ -449,7 +531,173 @@ impl PdfCacheStore for RedbPdfCache {
     }
 }
 
+impl VisionCacheStore for RedbVisionCache {
+    fn get(&self, key: &str) -> Result<Option<VisionCacheEntry>> {
+        let txn = self
+            .database
+            .begin_read()
+            .map_err(vision_cache_err("begin read"))?;
+        let items = match txn.open_table(VISION_ITEMS) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(err) => return Err(vision_cache_err("open items")(err)),
+        };
+        let Some(bytes) = items.get(key).map_err(vision_cache_err("read item"))? else {
+            return Ok(None);
+        };
+        let bytes = bytes.value().to_vec();
+        drop(items);
+
+        let meta = match txn.open_table(VISION_META) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(err) => return Err(vision_cache_err("open metadata")(err)),
+        };
+        let Some(meta_bytes) = meta.get(key).map_err(vision_cache_err("read metadata"))? else {
+            return Ok(None);
+        };
+        let metadata = serde_json::from_slice::<VisionCacheMetadata>(meta_bytes.value())
+            .map_err(|err| GrokSearchError::Parse(format!("parse vision cache metadata: {err}")))?;
+        if metadata
+            .expires_at_unix
+            .is_some_and(|expires_at| expires_at <= unix_now())
+        {
+            return Ok(None);
+        }
+        Ok(Some(VisionCacheEntry { bytes, metadata }))
+    }
+
+    fn put(&self, put: VisionCachePut, max_entries: usize) -> Result<VisionCacheMetadata> {
+        let now = unix_now();
+        let existing_created_at = self
+            .get(&put.cache_key)
+            .ok()
+            .flatten()
+            .map(|entry| entry.metadata.created_at_unix)
+            .unwrap_or(now);
+        let metadata = VisionCacheMetadata {
+            cache_key: put.cache_key.clone(),
+            created_at_unix: existing_created_at,
+            updated_at_unix: now,
+            expires_at_unix: put.ttl_seconds.map(|ttl| now.saturating_add(ttl)),
+            size_bytes: put.bytes.len() as u64,
+            pdf_sha256: put.pdf_sha256,
+            page_text_sha256: put.page_text_sha256,
+            strategy_hash: put.strategy_hash,
+            model: put.model,
+            profile: put.profile,
+            render_dpi: put.render_dpi,
+        };
+        let meta_bytes = serde_json::to_vec(&metadata).map_err(|err| {
+            GrokSearchError::Parse(format!("serialize vision cache metadata: {err}"))
+        })?;
+
+        let txn = self
+            .database
+            .begin_write()
+            .map_err(vision_cache_err("begin write"))?;
+        {
+            let mut items = txn
+                .open_table(VISION_ITEMS)
+                .map_err(vision_cache_err("open items"))?;
+            items
+                .insert(put.cache_key.as_str(), put.bytes.as_slice())
+                .map_err(vision_cache_err("write item"))?;
+        }
+        {
+            let mut meta = txn
+                .open_table(VISION_META)
+                .map_err(vision_cache_err("open metadata"))?;
+            meta.insert(put.cache_key.as_str(), meta_bytes.as_slice())
+                .map_err(vision_cache_err("write metadata"))?;
+        }
+        txn.commit().map_err(vision_cache_err("commit write"))?;
+        self.prune(max_entries)?;
+        Ok(metadata)
+    }
+
+    fn remove(&self, key: &str) -> Result<bool> {
+        let txn = self
+            .database
+            .begin_write()
+            .map_err(vision_cache_err("begin write"))?;
+        let removed = {
+            let mut removed = false;
+            if let Ok(mut items) = txn.open_table(VISION_ITEMS) {
+                removed |= items
+                    .remove(key)
+                    .map_err(vision_cache_err("remove item"))?
+                    .is_some();
+            }
+            if let Ok(mut meta) = txn.open_table(VISION_META) {
+                removed |= meta
+                    .remove(key)
+                    .map_err(vision_cache_err("remove metadata"))?
+                    .is_some();
+            }
+            removed
+        };
+        txn.commit().map_err(vision_cache_err("commit remove"))?;
+        Ok(removed)
+    }
+
+    fn list_metadata(&self) -> Result<Vec<VisionCacheMetadata>> {
+        let txn = self
+            .database
+            .begin_read()
+            .map_err(vision_cache_err("begin read"))?;
+        let meta = match txn.open_table(VISION_META) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(err) => return Err(vision_cache_err("open metadata")(err)),
+        };
+        let mut out = Vec::new();
+        for row in meta.iter().map_err(vision_cache_err("scan metadata"))? {
+            let (_, value) = row.map_err(vision_cache_err("read metadata row"))?;
+            match serde_json::from_slice::<VisionCacheMetadata>(value.value()) {
+                Ok(metadata) => out.push(metadata),
+                Err(err) => {
+                    return Err(GrokSearchError::Parse(format!(
+                        "parse vision cache metadata row: {err}"
+                    )))
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
 impl RedbProgressiveCache {
+    fn prune(&self, max_entries: usize) -> Result<()> {
+        let now = unix_now();
+        let mut metadata = self.list_metadata()?;
+        let mut remove_keys = metadata
+            .iter()
+            .filter(|item| {
+                item.expires_at_unix
+                    .is_some_and(|expires_at| expires_at <= now)
+            })
+            .map(|item| item.cache_key.clone())
+            .collect::<Vec<_>>();
+        if max_entries > 0 {
+            metadata.retain(|item| !remove_keys.iter().any(|key| key == &item.cache_key));
+            metadata.sort_by_key(|item| item.updated_at_unix);
+            let overflow = metadata.len().saturating_sub(max_entries);
+            remove_keys.extend(
+                metadata
+                    .into_iter()
+                    .take(overflow)
+                    .map(|item| item.cache_key),
+            );
+        }
+        for key in remove_keys {
+            let _ = self.remove(&key)?;
+        }
+        Ok(())
+    }
+}
+
+impl RedbVisionCache {
     fn prune(&self, max_entries: usize) -> Result<()> {
         let now = unix_now();
         let mut metadata = self.list_metadata()?;
@@ -536,6 +784,12 @@ fn pdf_cache_err<E: std::fmt::Display>(context: &'static str) -> impl FnOnce(E) 
     move |err| GrokSearchError::Io(format!("PDF cache {context}: {err}"))
 }
 
+fn vision_cache_err<E: std::fmt::Display>(
+    context: &'static str,
+) -> impl FnOnce(E) -> GrokSearchError {
+    move |err| GrokSearchError::Io(format!("vision cache {context}: {err}"))
+}
+
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -569,6 +823,20 @@ mod tests {
             pdf_sha256: format!("sha-{key}"),
             source: "direct_url".to_string(),
             host: "example.com".to_string(),
+        }
+    }
+
+    fn vision_put(key: &str) -> VisionCachePut {
+        VisionCachePut {
+            cache_key: key.to_string(),
+            bytes: br#"{"profile":"artifact_micro"}"#.to_vec(),
+            ttl_seconds: Some(60),
+            pdf_sha256: "pdf".to_string(),
+            page_text_sha256: "page-text".to_string(),
+            strategy_hash: format!("strategy-{key}"),
+            model: "MiniMax-M3".to_string(),
+            profile: "artifact_micro".to_string(),
+            render_dpi: 65,
         }
     }
 
@@ -642,5 +910,21 @@ mod tests {
         assert!(!json.contains("token=secret"), "{json}");
         assert!(!json.contains("paper.pdf"), "{json}");
         assert_eq!(metadata.host, "example.com");
+    }
+
+    #[test]
+    fn redb_vision_cache_round_trips_and_prunes() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cache =
+            RedbVisionCache::open(dir.path().join("vision-cache.redb")).expect("open cache");
+        cache.put(vision_put("a"), 2).expect("put a");
+        cache.put(vision_put("b"), 2).expect("put b");
+        cache.put(vision_put("c"), 2).expect("put c");
+
+        assert!(cache.get("a").expect("get a").is_none());
+        let entry = cache.get("c").expect("get c").expect("entry");
+        assert_eq!(entry.metadata.profile, "artifact_micro");
+        assert_eq!(entry.metadata.render_dpi, 65);
+        assert_eq!(cache.list_metadata().expect("metadata").len(), 2);
     }
 }

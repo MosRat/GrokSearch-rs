@@ -253,6 +253,18 @@ fn parses_academic_tool_commands() {
             "tables",
             "--cache-policy",
             "refresh",
+            "--vision-profile",
+            "artifact-micro",
+            "--vision-max-pages",
+            "8",
+            "--vision-render-dpi",
+            "65",
+            "--vision-concurrency",
+            "2",
+            "--vision-cache-policy",
+            "bypass",
+            "--vision-dir",
+            "vision",
         ])
         .unwrap()
         .command,

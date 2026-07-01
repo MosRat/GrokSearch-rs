@@ -3,6 +3,7 @@ mod download;
 mod parse;
 mod text;
 mod validation;
+mod vision;
 
 pub use download::{
     download_pdf_bytes, download_pdf_bytes_limited, download_pdf_bytes_optimized,
@@ -15,3 +16,7 @@ pub use parse::{
     PdfProgressiveSourceBundle,
 };
 pub use validation::validate_pdf_bytes;
+pub use vision::{
+    select_vision_pages, PdfOxidePageRenderer, PdfRenderedPage, PdfVisionAnchor, PdfVisionPage,
+    PdfVisionRenderFailure, PdfVisionRenderOutcome, PdfVisionSourceBundle,
+};

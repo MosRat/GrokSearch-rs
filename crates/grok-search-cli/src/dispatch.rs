@@ -258,6 +258,14 @@ async fn run_academic(command: AcademicCommand) -> anyhow::Result<()> {
                     text_mode: command.text_mode,
                     max_chars: command.max_chars,
                     cache_policy: command.cache_policy.map(Into::into),
+                    vision_profile: command
+                        .vision_profile
+                        .map(|value| value.as_str().to_string()),
+                    vision_max_pages: command.vision_max_pages,
+                    vision_render_dpi: command.vision_render_dpi,
+                    vision_concurrency: command.vision_concurrency,
+                    vision_cache_policy: command.vision_cache_policy.map(Into::into),
+                    vision_dir: command.vision_dir,
                 },
                 command.output.compact,
             )

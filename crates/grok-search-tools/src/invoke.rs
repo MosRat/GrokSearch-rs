@@ -7,7 +7,7 @@ use crate::params::{
 };
 use crate::validation::{
     validate_academic_parse_options, validate_pdf_locator, validate_range, validate_required_query,
-    validate_structure_view, validate_text_processing_mode,
+    validate_structure_view, validate_text_processing_mode, validate_vision_artifact_options,
 };
 use grok_search_service::SearchService;
 use grok_search_types::{
@@ -164,6 +164,13 @@ pub async fn invoke_tool(service: &SearchService, name: &str, args: Value) -> Re
             let input: AcademicPdfArtifactsInput = params.into();
             validate_pdf_locator("academic_pdf_artifacts", &input.locator)?;
             validate_text_processing_mode("academic_pdf_artifacts", input.text_mode.as_deref())?;
+            validate_vision_artifact_options(
+                "academic_pdf_artifacts",
+                input.vision_profile.as_deref(),
+                input.vision_max_pages,
+                input.vision_render_dpi,
+                input.vision_concurrency,
+            )?;
             if input.extract_images == Some(true)
                 && input.images_dir.as_deref().unwrap_or("").trim().is_empty()
             {

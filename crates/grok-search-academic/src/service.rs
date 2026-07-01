@@ -25,6 +25,7 @@ use grok_search_types::{
 };
 
 use crate::institutional::InstitutionalAccessManager;
+use crate::llm_artifacts;
 use crate::llm_progressive;
 use crate::providers::{
     without_openalex_reference_sources, ArxivProvider, CrossrefProvider, DblpProvider,
@@ -586,17 +587,24 @@ impl AcademicService {
         input: AcademicPdfArtifactsInput,
     ) -> Result<AcademicPdfArtifactsOutput> {
         ensure_valid_locator(&input.locator, "academic_pdf_artifacts")?;
+        let vision_config =
+            llm_artifacts::ArtifactVisionRunConfig::from_input(&input, &self.config)?;
         let parse_options = AcademicParseOptions {
-            images_dir: input.images_dir,
-            tables_dir: input.tables_dir,
+            images_dir: input.images_dir.clone(),
+            tables_dir: input.tables_dir.clone(),
             extract_images: input.extract_images,
             extract_tables: input.extract_tables,
-            text_processing_mode: input.text_mode,
+            text_processing_mode: input.text_mode.clone(),
+            vision_profile: vision_config
+                .enabled()
+                .then_some(vision_config.profile.clone()),
+            vision_max_pages: Some(vision_config.max_pages),
+            vision_render_dpi: Some(vision_config.render_dpi),
             ..Default::default()
         };
         let details = self
             .read_pdf_details_from_locator(
-                input.locator,
+                input.locator.clone(),
                 input.max_chars,
                 Some("markdown".to_string()),
                 Some(parse_options),
@@ -604,6 +612,22 @@ impl AcademicService {
                 "academic_pdf_artifacts",
             )
             .await?;
+        let mut vision = if vision_config.enabled() {
+            llm_artifacts::run_artifact_micro(&details.parsed, &input, &self.config, &self.client)
+                .await?
+        } else {
+            None
+        };
+        let mut refined_artifacts = Vec::new();
+        if let Some(vision) = vision.as_mut() {
+            refined_artifacts.extend(llm_artifacts::write_refined_completion_artifacts(
+                &details.parsed,
+                &input,
+                vision,
+            )?);
+        }
+        let mut artifacts = details.parsed.artifacts;
+        artifacts.extend(refined_artifacts);
         Ok(AcademicPdfArtifactsOutput {
             identifier: details.identifier,
             url: details.url,
@@ -611,10 +635,11 @@ impl AcademicService {
             source: details.source,
             fulltext_status: details.fulltext_status,
             resolver_chain: details.resolver_chain,
-            artifacts: details.parsed.artifacts,
+            artifacts,
             parse_capabilities: details.parsed.capabilities,
             processing: details.parsed.processing,
             pdf_cache: Some(details.pdf_cache),
+            vision,
         })
     }
 
@@ -811,7 +836,7 @@ impl AcademicService {
             .download_pdf_for_location(location, cache_policy)
             .await?;
         let parsed = parse_pdf_bytes_with_timeout(
-            download.bytes,
+            download.bytes.clone(),
             format,
             limit,
             options,

@@ -55,6 +55,9 @@ pub struct AcademicParseOptions {
     pub text_processing_mode: Option<String>,
     pub include_raw_content: Option<bool>,
     pub llm_progressive: Option<AcademicLlmProgressiveOptions>,
+    pub vision_profile: Option<String>,
+    pub vision_max_pages: Option<usize>,
+    pub vision_render_dpi: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -175,9 +178,15 @@ pub struct AcademicPdfArtifactsInput {
     pub text_mode: Option<String>,
     pub max_chars: Option<usize>,
     pub cache_policy: Option<AcademicPdfCachePolicy>,
+    pub vision_profile: Option<String>,
+    pub vision_max_pages: Option<usize>,
+    pub vision_render_dpi: Option<u16>,
+    pub vision_concurrency: Option<usize>,
+    pub vision_cache_policy: Option<AcademicPdfCachePolicy>,
+    pub vision_dir: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AcademicPdfArtifactsOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,
@@ -192,6 +201,183 @@ pub struct AcademicPdfArtifactsOutput {
     pub processing: AcademicPdfProcessingReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf_cache: Option<AcademicPdfCacheInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision: Option<AcademicPdfVisionArtifacts>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AcademicPdfVisionArtifacts {
+    pub profile: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub pages_analyzed: usize,
+    pub pages_considered: usize,
+    pub render_dpi: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache: Option<AcademicPdfVisionCacheInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_objects: Vec<AcademicPdfVisualObject>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub table_repairs: Vec<AcademicPdfTableRepair>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub figure_repairs: Vec<AcademicPdfFigureRepair>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub figure_completions: Vec<AcademicPdfFigureCompletion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub table_completions: Vec<AcademicPdfTableCompletion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_completions: Vec<AcademicPdfVisionRawCompletion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layout_warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calls: Vec<AcademicPdfVisionCallReport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AcademicPdfVisionCacheInfo {
+    pub key: String,
+    pub hit: bool,
+    pub stored: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AcademicPdfVisualObject {
+    pub page: usize,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AcademicPdfTableRepair {
+    pub page: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sample_rows: Vec<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AcademicPdfFigureRepair {
+    pub page: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AcademicPdfVisionRawCompletion {
+    pub page: usize,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+    pub json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AcademicPdfVisionValidation {
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AcademicPdfFigureCompletion {
+    pub page: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bbox_norm: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caption_bbox_norm: Vec<f32>,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refined_bbox_norm: Vec<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crop_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validation: Option<AcademicPdfVisionValidation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AcademicPdfTableCompletion {
+    pub page: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bbox_norm: Vec<f32>,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refined_bbox_norm: Vec<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crop_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validation: Option<AcademicPdfVisionValidation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AcademicPdfVisionCallReport {
+    pub page: usize,
+    pub status: String,
+    pub priority: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
+    pub attempts: u32,
+    pub backoff_ms: u64,
+    pub json_valid: bool,
+    pub repaired: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

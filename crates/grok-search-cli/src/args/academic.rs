@@ -183,6 +183,23 @@ impl From<AcademicPdfCachePolicyArg> for AcademicPdfCachePolicyParam {
     }
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum AcademicPdfVisionProfileArg {
+    Auto,
+    Off,
+    ArtifactMicro,
+}
+
+impl AcademicPdfVisionProfileArg {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            AcademicPdfVisionProfileArg::Auto => "auto",
+            AcademicPdfVisionProfileArg::Off => "off",
+            AcademicPdfVisionProfileArg::ArtifactMicro => "artifact_micro",
+        }
+    }
+}
+
 #[derive(Debug, Args)]
 pub(crate) struct AcademicPdfArtifactsCommand {
     #[command(flatten)]
@@ -201,6 +218,18 @@ pub(crate) struct AcademicPdfArtifactsCommand {
     pub(crate) max_chars: Option<usize>,
     #[arg(long, value_enum)]
     pub(crate) cache_policy: Option<AcademicPdfCachePolicyArg>,
+    #[arg(long, value_enum)]
+    pub(crate) vision_profile: Option<AcademicPdfVisionProfileArg>,
+    #[arg(long)]
+    pub(crate) vision_max_pages: Option<usize>,
+    #[arg(long)]
+    pub(crate) vision_render_dpi: Option<u16>,
+    #[arg(long)]
+    pub(crate) vision_concurrency: Option<usize>,
+    #[arg(long, value_enum)]
+    pub(crate) vision_cache_policy: Option<AcademicPdfCachePolicyArg>,
+    #[arg(long)]
+    pub(crate) vision_dir: Option<String>,
     #[command(flatten)]
     pub(crate) output: OutputArgs,
 }

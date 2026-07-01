@@ -169,6 +169,12 @@ pub struct AcademicPdfArtifactsParams {
     pub text_mode: Option<String>,
     pub max_chars: Option<usize>,
     pub cache_policy: Option<AcademicPdfCachePolicyParam>,
+    pub vision_profile: Option<String>,
+    pub vision_max_pages: Option<usize>,
+    pub vision_render_dpi: Option<u16>,
+    pub vision_concurrency: Option<usize>,
+    pub vision_cache_policy: Option<AcademicPdfCachePolicyParam>,
+    pub vision_dir: Option<String>,
 }
 
 impl From<AcademicPdfArtifactsParams> for AcademicPdfArtifactsInput {
@@ -186,6 +192,12 @@ impl From<AcademicPdfArtifactsParams> for AcademicPdfArtifactsInput {
             text_mode: params.text_mode,
             max_chars: params.max_chars,
             cache_policy: params.cache_policy.map(Into::into),
+            vision_profile: params.vision_profile,
+            vision_max_pages: params.vision_max_pages,
+            vision_render_dpi: params.vision_render_dpi,
+            vision_concurrency: params.vision_concurrency,
+            vision_cache_policy: params.vision_cache_policy.map(Into::into),
+            vision_dir: params.vision_dir,
         }
     }
 }
@@ -267,6 +279,9 @@ impl From<AcademicParseOptionsParams> for AcademicParseOptions {
             text_processing_mode: params.text_processing_mode,
             include_raw_content: params.include_raw_content,
             llm_progressive: params.llm_progressive.map(Into::into),
+            vision_profile: None,
+            vision_max_pages: None,
+            vision_render_dpi: None,
         }
     }
 }

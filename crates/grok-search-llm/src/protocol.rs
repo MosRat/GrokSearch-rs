@@ -21,6 +21,12 @@ pub enum LlmContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    ImageBase64 {
+        media_type: String,
+        data: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
     ToolResult {
         #[serde(skip_serializing_if = "Option::is_none")]
         tool_call_id: Option<String>,
@@ -33,6 +39,18 @@ pub enum LlmContentBlock {
 impl LlmContentBlock {
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text { text: text.into() }
+    }
+
+    pub fn image_base64(
+        media_type: impl Into<String>,
+        data: impl Into<String>,
+        detail: Option<String>,
+    ) -> Self {
+        Self::ImageBase64 {
+            media_type: media_type.into(),
+            data: data.into(),
+            detail,
+        }
     }
 
     pub fn as_text(&self) -> Option<&str> {

@@ -508,7 +508,10 @@ fn is_retryable_llm_error(err: &GrokSearchError) -> bool {
     }
 }
 
-fn build_client(config: &Config, http: &reqwest::Client) -> Result<AnthropicMessagesClient> {
+pub(crate) fn build_client(
+    config: &Config,
+    http: &reqwest::Client,
+) -> Result<AnthropicMessagesClient> {
     let env_file = read_env_llm();
     let provider = config.llm_provider.trim().to_ascii_lowercase();
     if !matches!(provider.as_str(), "" | "anthropic" | "minimax") {

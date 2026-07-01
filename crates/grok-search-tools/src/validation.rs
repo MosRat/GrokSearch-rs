@@ -60,6 +60,40 @@ pub(crate) fn validate_structure_view(tool: &str, view: Option<&str>) -> Result<
     Ok(())
 }
 
+pub(crate) fn validate_vision_artifact_options(
+    tool: &str,
+    profile: Option<&str>,
+    max_pages: Option<usize>,
+    render_dpi: Option<u16>,
+    concurrency: Option<usize>,
+) -> Result<()> {
+    if let Some(profile) = profile {
+        match profile
+            .trim()
+            .to_ascii_lowercase()
+            .replace('-', "_")
+            .as_str()
+        {
+            "" | "auto" | "off" | "artifact_micro" => {}
+            _ => {
+                return Err(GrokSearchError::InvalidParams(format!(
+                    "{tool}.vision_profile must be auto, off, or artifact_micro"
+                )));
+            }
+        }
+    }
+    validate_range(max_pages, 1, 20, &format!("{tool}.vision_max_pages"))?;
+    if let Some(render_dpi) = render_dpi {
+        if !(50..=100).contains(&render_dpi) {
+            return Err(GrokSearchError::InvalidParams(format!(
+                "{tool}.vision_render_dpi must be between 50 and 100"
+            )));
+        }
+    }
+    validate_range(concurrency, 1, 4, &format!("{tool}.vision_concurrency"))?;
+    Ok(())
+}
+
 pub(crate) fn validate_academic_parse_options(
     tool: &str,
     options: Option<&AcademicParseOptionsParams>,

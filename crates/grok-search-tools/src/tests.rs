@@ -308,6 +308,12 @@ fn academic_pdf_artifacts_schema_is_artifact_only() {
         "extract_tables",
         "text_mode",
         "cache_policy",
+        "vision_profile",
+        "vision_max_pages",
+        "vision_render_dpi",
+        "vision_concurrency",
+        "vision_cache_policy",
+        "vision_dir",
     ] {
         assert!(properties.contains_key(key), "missing {key}");
     }

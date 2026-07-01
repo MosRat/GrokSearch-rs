@@ -162,6 +162,9 @@ pub enum AnthropicContentBlock {
     Text {
         text: String,
     },
+    Image {
+        source: AnthropicImageSource,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -185,6 +188,14 @@ pub enum AnthropicContentBlock {
     },
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnthropicImageSource {
+    #[serde(rename = "type")]
+    pub source_type: String,
+    pub media_type: String,
+    pub data: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -274,6 +285,15 @@ fn anthropic_message_from_llm(message: &LlmMessage) -> AnthropicMessage {
                     Some(AnthropicContentBlock::Text { text: text.clone() })
                 }
                 LlmContentBlock::ImageUrl { .. } => None,
+                LlmContentBlock::ImageBase64 {
+                    media_type, data, ..
+                } => Some(AnthropicContentBlock::Image {
+                    source: AnthropicImageSource {
+                        source_type: "base64".to_string(),
+                        media_type: media_type.clone(),
+                        data: data.clone(),
+                    },
+                }),
                 LlmContentBlock::ToolResult {
                     tool_call_id,
                     content,
@@ -336,6 +356,7 @@ impl AnthropicMessagesResponse {
                     });
                 }
                 AnthropicContentBlock::ToolResult { .. } => {}
+                AnthropicContentBlock::Image { .. } => {}
                 AnthropicContentBlock::Thinking { .. }
                 | AnthropicContentBlock::RedactedThinking { .. }
                 | AnthropicContentBlock::Unknown => {}
@@ -402,6 +423,27 @@ mod tests {
         let value = serde_json::to_value(anthropic_messages_request_from_llm(&request)).unwrap();
         assert_eq!(value["tools"][0]["name"], "search");
         assert_eq!(value["tool_choice"]["type"], "any");
+    }
+
+    #[test]
+    fn messages_request_maps_base64_image_blocks() {
+        let request = LlmRequest::new(
+            "MiniMax-M3",
+            vec![LlmMessage::new(
+                LlmRole::User,
+                vec![
+                    LlmContentBlock::text("inspect"),
+                    LlmContentBlock::image_base64("image/png", "aGVsbG8=", Some("low".to_string())),
+                ],
+            )],
+        );
+
+        let value = serde_json::to_value(anthropic_messages_request_from_llm(&request)).unwrap();
+        let image = &value["messages"][0]["content"][1];
+        assert_eq!(image["type"], "image");
+        assert_eq!(image["source"]["type"], "base64");
+        assert_eq!(image["source"]["media_type"], "image/png");
+        assert_eq!(image["source"]["data"], "aGVsbG8=");
     }
 
     #[test]

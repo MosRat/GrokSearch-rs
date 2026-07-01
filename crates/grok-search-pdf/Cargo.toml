@@ -9,16 +9,17 @@ homepage.workspace = true
 description = "PDF download, validation, parsing, and artifact helpers for GrokSearch-rs"
 
 [dependencies]
-pdf_oxide.workspace = true
+pdf_oxide = { workspace = true, features = ["rendering"] }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
+image.workspace = true
 grok-search-content = { path = "../grok-search-content" }
 grok-search-net = { path = "../grok-search-net" }
 grok-search-types = { path = "../grok-search-types" }
 
 [dev-dependencies]
-image = { version = "0.25", default-features = false, features = ["png"] }
+image.workspace = true

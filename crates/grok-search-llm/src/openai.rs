@@ -401,6 +401,16 @@ fn openai_content_from_llm(content: &[LlmContentBlock]) -> Option<OpenAiMessageC
                     detail: detail.clone(),
                 },
             }),
+            LlmContentBlock::ImageBase64 {
+                media_type,
+                data,
+                detail,
+            } => Some(OpenAiContentBlock::ImageUrl {
+                image_url: OpenAiImageUrl {
+                    url: data_url(media_type, data),
+                    detail: detail.clone(),
+                },
+            }),
             LlmContentBlock::ToolResult { content, .. } => Some(OpenAiContentBlock::Text {
                 text: content.clone(),
             }),
@@ -419,6 +429,18 @@ fn openai_responses_content_from_llm(block: &LlmContentBlock) -> Value {
             }
             value
         }
+        LlmContentBlock::ImageBase64 {
+            media_type,
+            data,
+            detail,
+        } => {
+            let mut value =
+                serde_json::json!({"type": "input_image", "image_url": data_url(media_type, data)});
+            if let Some(detail) = detail {
+                value["detail"] = Value::String(detail.clone());
+            }
+            value
+        }
         LlmContentBlock::ToolResult {
             tool_call_id,
             content,
@@ -430,6 +452,10 @@ fn openai_responses_content_from_llm(block: &LlmContentBlock) -> Value {
             "is_error": is_error,
         }),
     }
+}
+
+fn data_url(media_type: &str, data: &str) -> String {
+    format!("data:{media_type};base64,{data}")
 }
 
 fn openai_tool_from_llm(tool: &LlmTool) -> OpenAiTool {
@@ -560,6 +586,32 @@ mod tests {
         request.max_tokens = Some(128);
         let value = serde_json::to_value(openai_responses_request_from_llm(&request)).unwrap();
         assert_eq!(value["max_output_tokens"], 128);
+    }
+
+    #[test]
+    fn chat_and_responses_request_map_base64_images_as_data_urls() {
+        let request = LlmRequest::new(
+            "gpt-test",
+            vec![LlmMessage::new(
+                LlmRole::User,
+                vec![LlmContentBlock::image_base64(
+                    "image/png",
+                    "aGVsbG8=",
+                    Some("low".to_string()),
+                )],
+            )],
+        );
+
+        let chat = serde_json::to_value(openai_chat_completion_request_from_llm(&request)).unwrap();
+        assert_eq!(
+            chat["messages"][0]["content"][0]["image_url"]["url"],
+            "data:image/png;base64,aGVsbG8="
+        );
+        let responses = serde_json::to_value(openai_responses_request_from_llm(&request)).unwrap();
+        assert_eq!(
+            responses["input"][0]["content"][0]["image_url"],
+            "data:image/png;base64,aGVsbG8="
+        );
     }
 
     #[test]
