@@ -1,5 +1,8 @@
 use clap::Parser;
-use grok_search_apps::InitOptions;
+use grok_search_apps::{
+    InitOptions, McpServiceCommand as AppsMcpServiceCommand, McpServiceInstallOptions,
+    McpServiceOptions,
+};
 use grok_search_config::Config;
 use grok_search_tools::{
     AcademicCitationsParams, AcademicDownloadPdfParams, AcademicGetParams, AcademicParsePdfParams,
@@ -9,7 +12,10 @@ use grok_search_tools::{
     WebSearchParams, WechatSearchParams, ZhihuSearchParams,
 };
 
-use crate::args::{AcademicCommand, AcademicSubcommand, Cli, Command, InitCommand, InitTargetArg};
+use crate::args::{
+    AcademicCommand, AcademicSubcommand, Cli, Command, InitCommand, InitTargetArg,
+    McpServiceCommand, McpServiceSubcommand,
+};
 use crate::auth::{run_login, run_logout, run_status};
 use crate::mcp::{run_mcp, run_mcp_http};
 use crate::output::{invoke_and_print, print_json};
@@ -29,6 +35,7 @@ pub async fn run() -> anyhow::Result<()> {
     match command {
         None | Some(Command::Mcp) => run_mcp().await,
         Some(Command::McpHttp(command)) => run_mcp_http(command).await,
+        Some(Command::McpService(command)) => run_mcp_service(command),
         Some(Command::Init(command)) => run_init(command),
         Some(Command::Login) => {
             let cfg = Config::try_load()?;
@@ -154,6 +161,55 @@ fn run_init(command: InitCommand) -> anyhow::Result<()> {
         target: command.target.into(),
         dry_run: command.dry_run,
     })?;
+    for message in report.messages {
+        println!("{message}");
+    }
+    Ok(())
+}
+
+fn run_mcp_service(command: McpServiceCommand) -> anyhow::Result<()> {
+    let options = match command.command {
+        McpServiceSubcommand::Install(command) => {
+            let cfg = Config::try_load()?;
+            let bind = match command.bind {
+                Some(bind) => bind,
+                None => cfg.mcp_http_bind.parse()?,
+            };
+            let path = command.path.unwrap_or_else(|| cfg.mcp_http_path.clone());
+            let allow_origin = command
+                .allow_origin
+                .or_else(|| cfg.mcp_http_allow_origin.clone());
+            McpServiceOptions {
+                name: Some(command.name),
+                command: AppsMcpServiceCommand::Install(McpServiceInstallOptions {
+                    bind,
+                    path,
+                    allow_origin,
+                    install_dir: command.install_dir,
+                    auth_token_configured: cfg.mcp_http_auth_token.is_some(),
+                    no_start: command.no_start,
+                }),
+            }
+        }
+        McpServiceSubcommand::Uninstall(command) => McpServiceOptions {
+            name: Some(command.name),
+            command: AppsMcpServiceCommand::Uninstall,
+        },
+        McpServiceSubcommand::Start(command) => McpServiceOptions {
+            name: Some(command.name),
+            command: AppsMcpServiceCommand::Start,
+        },
+        McpServiceSubcommand::Stop(command) => McpServiceOptions {
+            name: Some(command.name),
+            command: AppsMcpServiceCommand::Stop,
+        },
+        McpServiceSubcommand::Status(command) => McpServiceOptions {
+            name: Some(command.name),
+            command: AppsMcpServiceCommand::Status,
+        },
+    };
+
+    let report = grok_search_apps::run_mcp_service(options)?;
     for message in report.messages {
         println!("{message}");
     }

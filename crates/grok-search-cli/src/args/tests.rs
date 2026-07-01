@@ -50,6 +50,54 @@ fn parses_mcp_and_oauth_commands() {
             .command,
         Some(Command::McpHttp(_))
     ));
+    match Cli::try_parse_from([
+        "grok-search-rs",
+        "mcp-service",
+        "install",
+        "--bind",
+        "127.0.0.1:8787",
+        "--path",
+        "/mcp",
+        "--allow-origin",
+        "http://127.0.0.1:3000",
+        "--install-dir",
+        "managed-bin",
+        "--name",
+        "custom-service",
+        "--no-start",
+    ])
+    .unwrap()
+    .command
+    {
+        Some(Command::McpService(McpServiceCommand {
+            command: McpServiceSubcommand::Install(command),
+        })) => {
+            assert_eq!(
+                command.bind,
+                Some("127.0.0.1:8787".parse::<SocketAddr>().unwrap())
+            );
+            assert_eq!(command.path.as_deref(), Some("/mcp"));
+            assert_eq!(
+                command.allow_origin.as_deref(),
+                Some("http://127.0.0.1:3000")
+            );
+            assert_eq!(
+                command.install_dir.as_deref(),
+                Some(std::path::Path::new("managed-bin"))
+            );
+            assert_eq!(command.name, "custom-service");
+            assert!(command.no_start);
+        }
+        other => panic!("expected mcp-service install command, got {other:?}"),
+    }
+    assert!(matches!(
+        Cli::try_parse_from(["grok-search-rs", "mcp_service", "status"])
+            .unwrap()
+            .command,
+        Some(Command::McpService(McpServiceCommand {
+            command: McpServiceSubcommand::Status(_)
+        }))
+    ));
     assert!(matches!(
         Cli::try_parse_from(["grok-search-rs", "login"])
             .unwrap()

@@ -1,7 +1,8 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use grok_search_apps::InitTarget;
+use grok_search_apps::{InitTarget, DEFAULT_MCP_SERVICE_NAME};
 use grok_search_tools::RepoProviderParam;
 
 mod academic;
@@ -32,6 +33,9 @@ pub(crate) enum Command {
     /// Start the MCP Streamable HTTP server.
     #[command(name = "mcp-http", alias = "mcp_http")]
     McpHttp(McpHttpCommand),
+    /// Install/manage the current binary as a background HTTP MCP user service.
+    #[command(name = "mcp-service", alias = "mcp_service")]
+    McpService(McpServiceCommand),
     /// Initialize shared config and thin agent MCP entries.
     Init(InitCommand),
     /// Run xAI OAuth login.
@@ -110,6 +114,48 @@ pub(crate) struct McpHttpCommand {
     pub(crate) path: Option<String>,
     #[arg(long = "allow-origin")]
     pub(crate) allow_origin: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct McpServiceCommand {
+    #[command(subcommand)]
+    pub(crate) command: McpServiceSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum McpServiceSubcommand {
+    /// Install the current binary as a background HTTP MCP user service.
+    Install(McpServiceInstallCommand),
+    /// Uninstall the HTTP MCP user service.
+    Uninstall(McpServiceNameArg),
+    /// Start the HTTP MCP user service.
+    Start(McpServiceNameArg),
+    /// Stop the HTTP MCP user service.
+    Stop(McpServiceNameArg),
+    /// Print HTTP MCP user service status.
+    Status(McpServiceNameArg),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct McpServiceNameArg {
+    #[arg(long, default_value = DEFAULT_MCP_SERVICE_NAME)]
+    pub(crate) name: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct McpServiceInstallCommand {
+    #[arg(long)]
+    pub(crate) bind: Option<SocketAddr>,
+    #[arg(long)]
+    pub(crate) path: Option<String>,
+    #[arg(long = "allow-origin")]
+    pub(crate) allow_origin: Option<String>,
+    #[arg(long = "install-dir")]
+    pub(crate) install_dir: Option<PathBuf>,
+    #[arg(long, default_value = DEFAULT_MCP_SERVICE_NAME)]
+    pub(crate) name: String,
+    #[arg(long)]
+    pub(crate) no_start: bool,
 }
 
 #[derive(Debug, Args)]

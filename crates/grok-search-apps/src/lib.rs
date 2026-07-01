@@ -3,6 +3,13 @@ use std::process::Command;
 
 use grok_search_config::{self as config, InitOutcome};
 
+mod mcp_service;
+
+pub use mcp_service::{
+    run_mcp_service, McpServiceCommand, McpServiceInstallOptions, McpServiceOptions,
+    McpServiceReport, DEFAULT_MCP_SERVICE_NAME,
+};
+
 const INIT_BEGIN: &str = "# BEGIN grok-search-rs init";
 const INIT_END: &str = "# END grok-search-rs init";
 
