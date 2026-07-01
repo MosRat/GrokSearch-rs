@@ -23,7 +23,11 @@ MCP client
           -> crates/grok-search-content
               -> generic content parsing, truncation, and artifact file helpers
           -> crates/grok-search-pdf
-              -> PDF byte guards, downloads, pdf_oxide parsing, image/table artifacts
+              -> PDF byte guards, adaptive downloads, pdf_oxide parsing, pass-based text/image/table artifacts
+          -> crates/grok-search-cache
+              -> redb-backed PDF bytes cache and progressive reading cache
+          -> crates/grok-search-llm
+              -> Anthropic-compatible LLM client used by progressive PDF structure extraction
           -> crates/grok-search-providers
               -> Grok Responses provider: /v1/responses with web_search and optional x_search
               -> OpenAI-compatible chat-completions provider
@@ -41,13 +45,39 @@ MCP client
 - `web_map` discovers URLs through Tavily Map.
 - Tavily and Firecrawl are not the default answer generators inside `web_search`; they provide enrichment, fallback sources, fetch, and map capability.
 - Agents should use `web_search` for concise sourced summaries, call `get_sources` before source-specific claims, citation lists, or follow-up fetches, and call `web_fetch` for exact page evidence, quotes, technical details, or when the summary is insufficient.
-- Agents should use `academic_search` / `academic_get` / `academic_citations` / `academic_read` / `academic_parse_pdf` for computer-science paper discovery, metadata, citation summaries, PDF text extraction, and artifact-focused PDF parsing rather than forcing scholarly tasks through generic web tools.
+- Agents should use `academic_search` / `academic_get` / `academic_citations` for computer-science paper discovery, metadata, and citation summaries. For PDFs, prefer the intent-oriented tools: `academic_pdf_read` for text, `academic_pdf_structure` for LLM-assisted progressive reading structure, `academic_pdf_artifacts` for images/tables/manifests, and `academic_pdf_download` for saving the raw PDF.
 
 ## Academic Layer
 
-`grok-search-academic` owns scholarly orchestration and the concrete academic providers. Shared scholarly mechanics that are useful outside the academic service live below it: identifiers, title normalization, OpenAlex abstract reconstruction, and RRF/dedupe are in `grok-search-parse`; generic content parsing, truncation, and artifact file helpers are in `grok-search-content`; PDF byte validation, downloads, `pdf_oxide` parsing, and image/table artifact extraction are in `grok-search-pdf`; the `AcademicProvider` trait and capability defaults are in `grok-search-provider-core`.
+`grok-search-academic` owns scholarly orchestration and the concrete academic providers. Shared scholarly mechanics that are useful outside the academic service live below it: identifiers, title normalization, OpenAlex abstract reconstruction, and RRF/dedupe are in `grok-search-parse`; generic content parsing, truncation, and artifact file helpers are in `grok-search-content`; PDF byte validation, adaptive downloads, `pdf_oxide` parsing, and image/table artifact extraction are in `grok-search-pdf`; the `AcademicProvider` trait and capability defaults are in `grok-search-provider-core`.
 
 Academic providers are capability-based: dblp and Crossref are metadata-first, Semantic Scholar and OpenAlex add citations/references, arXiv and open-access locations provide PDFs, Unpaywall resolves DOI-based OA full text, and Sci-Hub is disabled by default and only used as a final explicitly configured fallback. Results are normalized into `AcademicPaper` while provenance URLs remain regular `Source` values.
+
+Academic PDF tools are facades over shared internals rather than stages users
+must chain manually. Each of `academic_pdf_read`, `academic_pdf_structure`,
+`academic_pdf_artifacts`, and `academic_pdf_download` accepts exactly one
+locator (`identifier`, `url`, or `pdf_url`) and internally performs resolve,
+download, cache lookup, parsing, and optional LLM structure extraction as
+needed. Legacy `academic_read`, `academic_parse_pdf`,
+`academic_download_pdf`, and `academic_progressive_get` remain as compatibility
+or diagnostic entry points, but they are not the default tools exposed to
+agents.
+
+The deterministic PDF parser remains synchronous and model-free in
+`grok-search-pdf`. Its pipeline runs validation, raw page extraction, text
+signal analysis, cleanup (`none`, `light`, or `clean`), image/table artifact
+extraction, artifact refinement, optional writes, and final truncation. The LLM
+progressive pass lives above it in `grok-search-academic`: it consumes the
+parsed source bundle, calls `grok-search-llm`, validates chunk JSON and local
+patches, assembles `AcademicProgressivePaper`, and stores the canonical result
+in the progressive cache.
+
+PDF downloads use an internal adaptive downloader. By default the academic
+facade reads/writes a redb PDF bytes cache, applies retry backoff, records
+elapsed time, and chooses between full-body and HTTP range strategies based on
+the source host. Known large/flaky PDF hosts such as arXiv, CVF Open Access,
+and ACL Anthology try range downloads first; other hosts keep full-body
+downloads first and fall back to range/direct strategies when needed.
 
 ## Provider Layer
 

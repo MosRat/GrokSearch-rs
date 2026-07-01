@@ -141,19 +141,48 @@ The `academic_*` MCP tools are independent of `web_*` and focus on computer-scie
 
 | Variable | Default | Description |
 |---|---|---|
-| `GROK_SEARCH_ACADEMIC_ENABLED` | `true` | Enables `academic_search`, `academic_get`, `academic_citations`, `academic_read`, `academic_parse_pdf`, and `academic_download_pdf`. |
+| `GROK_SEARCH_ACADEMIC_ENABLED` | `true` | Enables `academic_search`, `academic_get`, `academic_citations`, and the academic PDF tools. |
 | `GROK_SEARCH_ACADEMIC_EMAIL` | unset | Contact email for Unpaywall and polite OpenAlex/Crossref usage. Unpaywall is skipped when absent. Legacy `UNPAYWALL_EMAIL` is also accepted. |
 | `SEMANTIC_SCHOLAR_API_KEY` | unset | Optional Semantic Scholar key. When unset, anonymous Graph API requests are used. |
 | `OPENALEX_API_KEY` / `GROK_SEARCH_OPENALEX_API_KEY` | unset | Optional OpenAlex key. Recommended for more reliable OpenAlex search, citation, full-text metadata, and enrichment calls. |
-| `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | `false` | Explicit opt-in for Sci-Hub fallback in `academic_read`. It is never used by default. |
+| `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | `false` | Explicit opt-in for Sci-Hub fallback in academic PDF resolution. It is never used by default. |
 | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` | unset | Sci-Hub base URL, only used when Sci-Hub fallback is enabled. User/password components are redacted in Debug and doctor output. |
-| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED` | `true` | Enables IEEE/ACM institutional PDF fallback for `academic_read`; automatically disables itself when no usable route is found. |
+| `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED` | `true` | Enables IEEE/ACM institutional PDF fallback for academic PDF tools; automatically disables itself when no usable route is found. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS` | `false` | Allows invalid TLS certificates only for private/local IEEE/ACM institutional fallback routes. Public routes require HTTPS validation. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE` | `true` | Probes direct and discovered proxy routes for IEEE/ACM access before using the fallback. |
-| `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF bytes downloaded for `academic_read`, `academic_parse_pdf`, and `academic_download_pdf`. |
+| `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF bytes downloaded for academic PDF tools. |
 | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for parsed PDF output. Falls back to `GROK_SEARCH_FETCH_MAX_CHARS`, then `200000`. |
 
-`academic_read` accepts optional `parse_options` for detailed parsing, and `academic_parse_pdf` exposes the same options for artifact-focused workflows. PDF text now flows through a local pipeline: raw `pdf_oxide` extraction, text signal analysis, and `text_processing_mode` cleanup. The default mode is `clean`; use `text_processing_mode="none"` for raw extraction or `include_raw_content=true` / `save_raw_content_path` when comparing raw and processed text. `save_markdown_path` writes the final processed Markdown/text; missing parent directories are created and existing files are rejected. Image extraction is partial: `extract_images=true` requires `images_dir`, exports filtered bitmap XObjects as PNG files, and writes `images.json`; it does not reconstruct semantic figures or vector graphics. Table extraction is partial: `extract_tables=true` requires `tables_dir`, writes `tables.json` and Markdown snippets for detected tables, and may miss or filter layout-heavy tables. `academic_download_pdf` saves the resolved PDF directly to an explicit file path without parsing it; parent directories are created and existing files are rejected unless `overwrite=true`. Material link extraction is local URL/text classification only and does not fetch GitHub, Hugging Face, dataset, model, demo, or project URLs.
+Academic PDF tools are independent public entry points over shared internals:
+`academic_pdf_read` returns processed text, `academic_pdf_structure` returns an
+LLM-assisted progressive reading structure, `academic_pdf_artifacts` writes
+image/table artifacts and manifests, and `academic_pdf_download` saves the raw
+PDF. Each accepts exactly one locator: `identifier`, `url`, or `pdf_url`.
+Legacy `academic_read`, `academic_parse_pdf`, and `academic_download_pdf`
+remain compatible aliases for older clients.
+
+PDF text flows through a local pipeline: raw `pdf_oxide` extraction, text
+signal analysis, and cleanup. The default `text_mode` is `clean`; use
+`text_mode="none"` for raw extraction, or `include_raw_content=true` when
+comparing raw and processed text through `academic_pdf_read`. Artifact
+extraction is partial: `academic_pdf_artifacts` can export filtered bitmap
+XObjects as PNG files with `images.json`, and detected tables as Markdown
+snippets with `tables.json`; it does not reconstruct semantic vector figures
+or OCR scanned pages. Material link extraction is local URL/text
+classification only and does not fetch GitHub, Hugging Face, dataset, model,
+demo, or project URLs.
+
+PDF downloads use `cache_policy` per call. `auto` reads and writes the PDF
+bytes cache, `refresh` redownloads and overwrites it, and `bypass` skips it.
+Cold downloads use retry backoff and an adaptive full/range strategy; repeated
+calls for the same resolved PDF normally avoid the network entirely.
+
+`academic_pdf_structure` uses the LLM config below only when a progressive
+structure is requested. The public tool exposes `profile` (`fast`, `balanced`,
+or `strict`) instead of chunk sizes, prompt profiles, or concurrency. The
+progressive cache stores the typed JSON structure keyed by PDF/input/strategy
+hashes; it does not store API keys, raw prompts, raw model responses, or raw
+PDF bytes.
 
 Academic provider calls use conservative built-in stability guards. arXiv API requests are globally spaced by 3 seconds and retry `429` responses. OpenAlex requests retry transient `502`/`503`/`504` gateway failures, and broad `sort_by=date` searches without an explicit year filter avoid OpenAlex's `publication_date:desc` server-side sort to reduce 504 slow-query failures.
 

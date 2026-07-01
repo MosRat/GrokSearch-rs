@@ -1,15 +1,18 @@
 # Academic Literature Examples
 
-## `academic_search`
+Use academic tools for scholarly work instead of generic web search. For PDF
+tools, provide exactly one locator: `identifier`, `url`, or `pdf_url`.
+
+## Discovery
 
 Balanced topic search:
 
 ```json
 {
-  "query":"retrieval augmented generation evaluation benchmark",
-  "search_mode":"balanced",
-  "max_results":10,
-  "include_abstract":true
+  "query": "retrieval augmented generation evaluation benchmark",
+  "search_mode": "balanced",
+  "max_results": 10,
+  "include_abstract": true
 }
 ```
 
@@ -17,109 +20,160 @@ Broad recent search:
 
 ```json
 {
-  "query":"long context transformer retrieval",
-  "search_mode":"broad",
-  "sort_by":"date",
-  "year_from":2023,
-  "max_results":20,
-  "extract_material_links":true
+  "query": "long context transformer retrieval",
+  "search_mode": "broad",
+  "sort_by": "date",
+  "year_from": 2023,
+  "max_results": 20,
+  "extract_material_links": true
 }
 ```
 
-Use `sources` only when the user asks to constrain providers, for example `["arxiv","semantic"]`.
+Use `sources` only when the user asks to constrain providers, for example
+`["arxiv","semantic"]`.
 
-## `academic_get`
+## Metadata
 
 Resolve a known paper:
 
 ```json
-{"identifier":"1706.03762","include_citations":true,"include_open_access":true}
+{
+  "identifier": "1706.03762",
+  "include_citations": true,
+  "include_open_access": true,
+  "extract_material_links": true
+}
 ```
-
-Use this before PDF reading when you need normalized metadata or open-access links.
-
-## `academic_citations`
 
 Citation overview:
 
 ```json
-{"identifier":"10.48550/arXiv.1706.03762","limit":20}
+{"identifier": "10.48550/arXiv.1706.03762", "limit": 20}
 ```
 
-This returns an overview, not a full citation graph crawl.
+`academic_citations` returns an overview, not a full citation graph crawl.
 
-## `academic_read`
+## PDF Text
 
-Read a paper as processed Markdown. The PDF pipeline defaults to `clean` mode, which removes common layout noise and repairs conservative line breaks:
+Read a paper as processed Markdown:
 
 ```json
 {
-  "identifier":"https://arxiv.org/abs/1706.03762",
-  "max_chars":30000,
-  "output_format":"markdown"
+  "identifier": "https://arxiv.org/abs/1706.03762",
+  "text_mode": "clean",
+  "max_chars": 30000,
+  "cache_policy": "auto"
 }
 ```
 
-Use `url` instead of `identifier` when the user provides a direct PDF URL.
+Use `pdf_url` when the user gives a direct PDF URL:
+
+```json
+{
+  "pdf_url": "https://arxiv.org/pdf/1706.03762",
+  "text_mode": "clean",
+  "include_processing": true
+}
+```
 
 Inspect raw extraction alongside processed output:
 
 ```json
 {
-  "identifier":"1706.03762",
-  "max_chars":30000,
-  "output_format":"markdown",
-  "parse_options":{
-    "include_raw_content":true,
-    "text_processing_mode":"clean"
-  }
+  "identifier": "1706.03762",
+  "text_mode": "clean",
+  "include_raw_content": true,
+  "include_processing": true,
+  "max_chars": 50000
 }
 ```
 
-## `academic_parse_pdf`
+Use `text_mode:"none"` only when debugging raw `pdf_oxide` extraction.
 
-Parse and save processed Markdown:
+## Progressive Structure
+
+Get a compact LLM-assisted structure:
 
 ```json
 {
-  "identifier":"1706.03762",
-  "output_format":"markdown",
-  "parse_options":{
-    "save_markdown_path":"tmp/attention.md",
-    "text_processing_mode":"clean",
-    "extract_material_links":true
-  }
+  "identifier": "1706.03762",
+  "view": "summary",
+  "profile": "balanced",
+  "cache_policy": "auto"
 }
 ```
 
-Save processed and raw text for parser quality review:
+Fetch the full structure and save the canonical JSON:
 
 ```json
 {
-  "identifier":"1706.03762",
-  "max_chars":50000,
-  "output_format":"markdown",
-  "parse_options":{
-    "save_markdown_path":"tmp/attention.processed.md",
-    "save_raw_content_path":"tmp/attention.raw.md",
-    "include_raw_content":true,
-    "text_processing_mode":"clean"
-  }
+  "identifier": "1706.03762",
+  "view": "full",
+  "profile": "strict",
+  "include_section_text": false,
+  "save_json_path": "tmp/attention.progressive.json"
 }
 ```
 
-Use `text_processing_mode:"none"` when the task is debugging `pdf_oxide` extraction itself. Image/table extraction is partial: bitmap images and detected tables can be exported, but vector-only figures may only appear as text/caption evidence.
+Read one section after inspecting the outline:
 
-## `academic_download_pdf`
+```json
+{
+  "identifier": "1706.03762",
+  "view": "section",
+  "section_id": "sec-003",
+  "include_section_text": true
+}
+```
+
+Prefer `profile:"fast"` for a cheap overview, `balanced` for normal use, and
+`strict` when section boundaries or JSON repair quality matter more than speed.
+The structure tool internally resolves, downloads, parses, checks cache, and
+runs the LLM pass only when needed. Do not call a separate cache-key tool first.
+
+## Artifacts
+
+Extract images and tables without returning body text:
+
+```json
+{
+  "identifier": "1706.03762",
+  "extract_images": true,
+  "images_dir": "tmp/attention-images",
+  "extract_tables": true,
+  "tables_dir": "tmp/attention-tables",
+  "cache_policy": "auto"
+}
+```
+
+Image extraction exports filtered bitmap XObjects as PNG files and writes
+`images.json`. It does not reconstruct vector-only figures or perform OCR.
+Table extraction writes `tables.json` and Markdown snippets for detected
+tables; layout-heavy or sparse tables can be filtered or missed.
+
+## Download
 
 Download without parsing:
 
 ```json
 {
-  "identifier":"1706.03762",
-  "output_path":"tmp/attention.pdf",
-  "overwrite":false
+  "identifier": "1706.03762",
+  "output_path": "tmp/attention.pdf",
+  "overwrite": false,
+  "cache_policy": "auto"
 }
 ```
 
 Existing files are rejected unless `overwrite` is true.
+
+## Cache And Timing
+
+Use `cache_policy:"refresh"` when validating a cold download or when upstream
+PDF bytes may have changed. Use `cache_policy:"bypass"` when diagnosing cache
+corruption or measuring network behavior. Normal reading should leave
+`cache_policy` unset or `auto`.
+
+PDF tool outputs can include `pdf_cache` diagnostics with `hit`, `stored`,
+`bytes`, `attempts`, `download_elapsed_ms`, and warnings such as
+`download_plan=...`, `download_strategy=...`, or individual `download_attempt`
+records.

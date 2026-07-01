@@ -1,3 +1,3 @@
 display_name: GrokSearch Academic Literature
-short_description: Use GrokSearch-rs academic paper search, metadata, citation, PDF read, parse, and download tools.
-default_prompt: Use GrokSearch-rs academic tools to find, resolve, and analyze relevant papers.
+short_description: Use GrokSearch-rs academic search, metadata, citation, PDF text, structure, artifacts, and download tools.
+default_prompt: Use GrokSearch-rs academic tools to find, resolve, read, structure, and analyze relevant papers.

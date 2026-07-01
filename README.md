@@ -187,15 +187,27 @@ for the generic fallback path.
 | `GROK_SEARCH_ACADEMIC_EMAIL` | unset | Contact email for Unpaywall and polite academic API usage. Without it, Unpaywall full-text lookup is skipped. |
 | `SEMANTIC_SCHOLAR_API_KEY` | unset | Optional Semantic Scholar Graph API key; anonymous mode is used when unset. |
 | `OPENALEX_API_KEY` | unset | Optional OpenAlex key; recommended for more reliable academic search and metadata enrichment. |
-| `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | `false` | Explicit opt-in for Sci-Hub as the final `academic_read` fallback. Legal risk varies by jurisdiction and use. |
+| `GROK_SEARCH_ACADEMIC_SCIHUB_ENABLED` | `false` | Explicit opt-in for Sci-Hub as the final academic PDF fallback. Legal risk varies by jurisdiction and use. |
 | `GROK_SEARCH_ACADEMIC_SCIHUB_BASE_URL` | unset | Sci-Hub base URL, only read when Sci-Hub fallback is enabled. Credentials are redacted in diagnostics. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ENABLED` | `true` | Enables IEEE/ACM institutional PDF fallback for academic PDF read/parse/download flows; automatically disables itself when no usable route is found. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_ACCEPT_INVALID_CERTS` | `false` | Allows invalid TLS certificates only for private/local IEEE/ACM institutional fallback routes. Public routes require HTTPS validation. |
 | `GROK_SEARCH_ACADEMIC_INSTITUTIONAL_PROBE` | `true` | Probes direct and discovered proxy routes for IEEE/ACM access before using the fallback. |
 | `GROK_SEARCH_ACADEMIC_MAX_PDF_BYTES` | `52428800` | Maximum PDF download size for academic PDF read/parse/download flows. |
 | `GROK_SEARCH_ACADEMIC_PDF_MAX_CHARS` | unset | Character cap for `pdf_oxide` PDF text extraction. Falls back to `GROK_SEARCH_FETCH_MAX_CHARS`, then `200000`. |
+| `GROK_SEARCH_ACADEMIC_PDF_CACHE_ENABLED` | `true` | Enables the local PDF bytes cache used by academic PDF tools. |
+| `GROK_SEARCH_LLM_API_KEY` | unset | LLM key for `academic_pdf_structure`; Anthropic-compatible aliases are also supported. |
+| `GROK_SEARCH_LLM_BASE_URL` | `https://api.minimaxi.com/anthropic` | Anthropic-compatible LLM endpoint for progressive PDF structure extraction. |
+| `GROK_SEARCH_LLM_MODEL` | `MiniMax-M3` | Default model for progressive PDF structure extraction. |
+| `GROK_SEARCH_PROGRESSIVE_CACHE_ENABLED` | `true` | Enables the local KV cache for LLM progressive paper structures. |
 
 Academic providers include conservative upstream stability guards: arXiv API calls are globally spaced by 3 seconds and retry `429` responses, while OpenAlex retries transient `502`/`503`/`504` gateway failures and avoids broad date-sorted queries that OpenAlex may stop as too expensive.
+
+Academic PDF tools are intent-oriented. Use `academic_pdf_read` for text,
+`academic_pdf_structure` for LLM-assisted progressive reading structure,
+`academic_pdf_artifacts` for images/tables/manifests, and
+`academic_pdf_download` for saving the raw PDF. Legacy `academic_read`,
+`academic_parse_pdf`, and `academic_download_pdf` remain compatible but are no
+longer the recommended agent-facing entry points.
 
 ### Selection rules at startup
 
@@ -231,9 +243,10 @@ Tired of duplicating `env` blocks across clients? Run `grok-search-rs --init` on
 | `academic_search` | CS-focused literature search across dblp, Semantic Scholar, arXiv, OpenAlex, and Crossref with dedupe/RRF ranking. |
 | `academic_get` | Resolve one paper by DOI, arXiv ID/URL, Semantic Scholar ID, OpenAlex ID/URL, dblp URL/key, or title-like query. |
 | `academic_citations` | Citation/reference summary for one paper, using Semantic Scholar first and OpenAlex as fallback. |
-| `academic_read` | Resolve an academic PDF and return `pdf_oxide` parsed Markdown/text. Optional `parse_options` can save parsed Markdown/text and attach detected code, dataset, model, demo, project, or documentation links. |
-| `academic_parse_pdf` | Artifact-focused PDF parse tool. Supports explicit Markdown/text export paths plus partial image/table artifacts. Images are exported as PNG XObjects with an `images.json` manifest; tables are exported as `tables.json` plus Markdown snippets when detected. |
-| `academic_download_pdf` | Resolve and save an academic PDF without parsing it. Uses the same full-text resolver, institutional access handling, proxy settings, and byte limit as the academic read/parse tools. |
+| `academic_pdf_read` | Resolve/download one academic PDF and return processed text. `text_mode` defaults to `clean`; `cache_policy` defaults to `auto`. |
+| `academic_pdf_structure` | Generate or read cached LLM-assisted progressive paper structure. Choose `view: "summary"`, `"full"`, or `"section"`; use `profile` instead of low-level chunk/prompt options. |
+| `academic_pdf_artifacts` | Extract partial PDF artifacts without returning body text: filtered bitmap images, detected table Markdown files, and JSON manifests. |
+| `academic_pdf_download` | Resolve and save an academic PDF without parsing it. Uses the same resolver, institutional access, cache, proxy settings, and byte limit as the other PDF tools. |
 
 ---
 
@@ -252,7 +265,7 @@ agent configs. `grok-search-rs mcp` does the same explicitly.
 | `grok-search-rs web-fetch <url> ...` | Fetch one page as structured content. |
 | `grok-search-rs web-map <url> ...` | Discover URLs on a site/domain. |
 | `grok-search-rs repo-metadata --url <url> ...` | Fetch GitHub or Hugging Face repository metadata. |
-| `grok-search-rs academic search|get|citations|read|parse-pdf|download-pdf ...` | Run the academic tools from the shell. |
+| `grok-search-rs academic search|get|citations|pdf-read|pdf-structure|pdf-artifacts|pdf-download ...` | Run the academic tools from the shell. Legacy `read`, `parse-pdf`, and `download-pdf` subcommands remain as hidden compatibility aliases. |
 
 Use `--help` on any command for the full flag list. Kebab-case and underscore
 aliases are accepted for web tool command names, for example `web-search` and
