@@ -11,7 +11,8 @@ Use this skill when GrokSearch-rs setup, provider wiring, or MCP tool availabili
 
 1. Call `doctor` with default parameters for a quick health probe.
 2. Call `doctor` with `verbose: true` when debugging limits, provider wiring, URL policy, logging, or masked configuration.
-3. Treat diagnostics as safe to share only after confirming secrets are redacted.
-4. Use the reported provider status to decide whether the issue is configuration, network, credentials, or a disabled capability.
+3. Use `/healthz` or `mcp-service status` for HTTP service process checks; use `doctor` for provider/config/capability checks.
+4. Treat diagnostics as safe to share only after confirming secrets are redacted.
+5. Use the reported provider status to decide whether the issue is configuration, network, credentials, cache, or a disabled capability.
 
 Read `references/examples.md` for probe examples and interpretation notes.

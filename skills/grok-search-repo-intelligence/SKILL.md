@@ -16,4 +16,6 @@ Use this skill when a task needs structured GitHub or Hugging Face repository me
 5. Set `include_card` for Hugging Face model or dataset cards.
 6. Set `max_text_chars` when a README/card may be large.
 
+Use this as lightweight repository intelligence, not a repository crawler. It does not inspect commits, issues, releases, file trees, Spaces runtime state, or external links. Use `web_fetch` for a specific repository page when deeper page reading is needed.
+
 Read `references/examples.md` for supported input shapes and examples.

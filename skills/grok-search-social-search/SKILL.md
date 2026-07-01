@@ -15,4 +15,6 @@ Use this skill for Chinese content discovery on WeChat public accounts and Zhihu
 4. Use `include_content: false` for metadata-only scans and `include_content: true` when article bodies are needed.
 5. Use `zhihu_search` for Zhihu OpenAPI site search; it returns normalized metadata and does not fetch full page content.
 
+Do not promise WeChat Boolean or field syntax. The upstream query is plain keyword recall, and source/account filtering is local post-processing. Use `web_search` when the user needs broader Chinese web coverage beyond WeChat/Zhihu.
+
 Read `references/examples.md` for query patterns, quality checks, and example calls.

@@ -6,7 +6,9 @@
 {}
 ```
 
-Use this to confirm the server can run and report backend status.
+Use this to confirm the MCP handler can run and report backend status. It is a
+configuration/provider probe, not a replacement for checking whether a
+background HTTP process is currently alive.
 
 ## Verbose Probe
 
@@ -34,6 +36,11 @@ If a provider is unreachable, check the corresponding config key, endpoint overr
 
 If a tool reports missing capability, confirm whether the provider is intentionally optional or disabled.
 
+If a tool call fails but `doctor` looks healthy, inspect the tool's own output
+diagnostics next: PDF tools expose `pdf_cache`; LLM structure/artifact tools
+expose processing/vision reports; HTTP MCP service health is checked through
+`/healthz` and `mcp-service status`.
+
 ## HTTP MCP Checks
 
 For local Streamable HTTP MCP, start the server explicitly:
@@ -42,8 +49,31 @@ For local Streamable HTTP MCP, start the server explicitly:
 grok-search-rs mcp-http --bind 127.0.0.1:8787 --path /mcp
 ```
 
+For a persistent current-user background endpoint, install and manage the
+current binary as a service:
+
+```bash
+grok-search-rs mcp-service install --bind 127.0.0.1:8787 --path /mcp
+grok-search-rs mcp-service status
+grok-search-rs mcp-service stop
+grok-search-rs mcp-service uninstall
+```
+
+Use `mcp-http` for foreground logs and `mcp-service` when the endpoint should
+survive terminal exit. `install` starts by default and reports `/healthz`;
+`--no-start` only registers the service. The installer copies the current
+binary to a managed user bin directory and updates that copy when the current
+version is newer. On Linux it attempts `loginctl enable-linger <user>` so the
+service can continue after logout; if that warning appears, run the printed
+command manually.
+
 `GET /healthz` is intentionally small and does not reveal secrets. MCP requests
 go to the configured path, usually `/mcp`.
+
+`mcp-service status` reports the user-service controller state. It does not
+prove every provider credential is valid; use `doctor` for that. Conversely,
+`doctor` can succeed while a background service is not installed or not
+running.
 
 If HTTP MCP returns 401, set `Authorization: Bearer <mcp_http_auth_token>` or
 unset the token for loopback-only local use. If startup fails for `0.0.0.0` or

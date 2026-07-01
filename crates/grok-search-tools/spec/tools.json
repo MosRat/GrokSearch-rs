@@ -83,7 +83,7 @@
     },
     {
       "name": "web_map",
-      "description": "Map/discover URLs through Tavily Map.",
+      "description": "Discover URLs around a site or page through Tavily Map. Use this for URL inventory only; it does not read page bodies. Feed returned URLs to web_fetch when content details or evidence are needed.",
       "inputSchema": {
         "type": "object",
         "required": ["url"],
@@ -157,14 +157,14 @@
     },
     {
       "name": "doctor",
-      "description": "Diagnostic probe: live connectivity check for Grok, Tavily, and Firecrawl backends, plus masked configuration. Use to verify the server is wired up and reachable.",
+      "description": "Diagnostic probe for provider wiring, masked configuration, URL policy, response limits, caches, LLM settings, and HTTP MCP settings. Use it before changing tool parameters when search, academic PDF, LLM, or MCP connectivity behaves unexpectedly.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "verbose": {
             "type": "boolean",
             "default": false,
-            "description": "Include detailed limits, logging status, provider wiring, and URL policy diagnostics."
+            "description": "Include detailed limits, logging status, provider wiring, URL policy, PDF/progressive cache, LLM, and HTTP MCP diagnostics."
           }
         }
       }
@@ -290,7 +290,7 @@
     },
     {
       "name": "academic_pdf_read",
-      "description": "Read one academic paper PDF as processed text. Provide exactly one locator: identifier, url, or pdf_url. This tool is for text reading only; use academic_pdf_structure for LLM progressive structure and academic_pdf_artifacts for images or tables.",
+      "description": "Read one academic paper PDF as processed text. Provide exactly one locator: identifier, url, or pdf_url. Defaults to clean text and is independent of the structure/artifact tools. Use academic_pdf_structure for LLM progressive sections and academic_pdf_artifacts for images or tables.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -313,7 +313,7 @@
       },
     {
       "name": "academic_pdf_structure",
-      "description": "Generate or read a cached progressive reading structure for one academic paper PDF. Provide exactly one locator: identifier, url, or pdf_url. The tool internally resolves, downloads, parses, checks cache, runs the LLM pass when needed, and returns the requested view.",
+      "description": "Generate or read a cached LLM-assisted progressive reading structure for one academic paper PDF. Provide exactly one locator: identifier, url, or pdf_url. No cache key or prior PDF tool call is required; the tool internally resolves, downloads, parses, checks cache, runs the LLM pass when needed, and returns summary, full, or one section view.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -333,7 +333,7 @@
     },
     {
       "name": "academic_pdf_artifacts",
-      "description": "Extract PDF artifacts for one academic paper: filtered bitmap images, detected table Markdown files, and manifests. Provide exactly one locator: identifier, url, or pdf_url. This tool does not return the main body text or LLM progressive structure.",
+      "description": "Extract PDF artifacts for one academic paper: deterministic bitmap/table artifacts plus optional multimodal figure/table completions. Provide exactly one locator: identifier, url, or pdf_url. This tool does not return the main body text or LLM progressive structure. By default vision_profile=auto runs artifact_micro only when an LLM key is configured; use vision_profile=off for deterministic extraction only.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -358,7 +358,7 @@
       },
     {
       "name": "academic_pdf_download",
-      "description": "Resolve and download one academic PDF to a local path without parsing it. Provide exactly one locator: identifier, url, or pdf_url.",
+      "description": "Resolve and download one academic PDF to a local path without parsing it. Provide exactly one locator: identifier, url, or pdf_url. Uses the PDF bytes cache unless cache_policy is refresh or bypass.",
       "inputSchema": {
         "type": "object",
         "required": ["output_path"],
