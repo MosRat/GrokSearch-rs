@@ -13,6 +13,12 @@ Run `grok-search-rs init` to create the shared config if it is missing and keep 
 - Global config: provider URLs, models, source limits, proxy settings, and API keys.
 - Agent config: only `type = "stdio"` and `command = "grok-search-rs"`; add `GROK_SEARCH_CONFIG` only when you intentionally use a non-default config path.
 
+Stdio remains the recommended local MCP transport. For Streamable HTTP MCP,
+run `grok-search-rs mcp-http`; it listens on `127.0.0.1:8787/mcp` by default.
+Set `mcp_http_auth_token` / `GROK_SEARCH_MCP_HTTP_AUTH_TOKEN` before binding to
+anything other than loopback. Browser clients can set one explicit
+`mcp_http_allow_origin`; CORS is disabled by default.
+
 The same global config is used by both MCP mode and direct CLI tool calls such
 as `grok-search-rs doctor`, `grok-search-rs web-search "query"`,
 `grok-search-rs repo-metadata --url "https://github.com/owner/repo"`, and
@@ -161,6 +167,11 @@ PDF. Each accepts exactly one locator: `identifier`, `url`, or `pdf_url`.
 Legacy `academic_read`, `academic_parse_pdf`, and `academic_download_pdf`
 remain compatible aliases for older clients.
 
+Academic source names are normalized at the tool layer: the canonical Semantic
+Scholar provider name is `semantic`, and `semantic_scholar`, `semanticscholar`,
+and `s2` are accepted aliases. Known-paper and citation lookups accept arXiv
+IDs, arXiv URLs, and arXiv DOI forms such as `10.48550/arXiv.1706.03762`.
+
 PDF text flows through a local pipeline: raw `pdf_oxide` extraction, text
 signal analysis, and cleanup. The default `text_mode` is `clean`; use
 `text_mode="none"` for raw extraction, or `include_raw_content=true` when
@@ -176,6 +187,9 @@ PDF downloads use `cache_policy` per call. `auto` reads and writes the PDF
 bytes cache, `refresh` redownloads and overwrites it, and `bypass` skips it.
 Cold downloads use retry backoff and an adaptive full/range strategy; repeated
 calls for the same resolved PDF normally avoid the network entirely.
+If `pdf_cache.warnings` reports that the cache path cannot be opened, set
+`academic_pdf_cache_path` or `GROK_SEARCH_ACADEMIC_PDF_CACHE_PATH` to a writable
+directory. The tools degrade to cold downloads when cache open/write fails.
 
 `academic_pdf_structure` uses the LLM config below only when a progressive
 structure is requested. The public tool exposes `profile` (`fast`, `balanced`,
@@ -183,6 +197,9 @@ or `strict`) instead of chunk sizes, prompt profiles, or concurrency. The
 progressive cache stores the typed JSON structure keyed by PDF/input/strategy
 hashes; it does not store API keys, raw prompts, raw model responses, or raw
 PDF bytes.
+Progressive metadata extraction is intentionally conservative and
+evidence-bound. Title or abstract can be omitted when the PDF starts with
+copyright notices, publisher boilerplate, or unusual front matter.
 
 Academic provider calls use conservative built-in stability guards. arXiv API requests are globally spaced by 3 seconds and retry `429` responses. OpenAlex requests retry transient `502`/`503`/`504` gateway failures, and broad `sort_by=date` searches without an explicit year filter avoid OpenAlex's `publication_date:desc` server-side sort to reduce 504 slow-query failures.
 
@@ -333,6 +350,14 @@ This section is generated from the Rust config schema in `grok-search-config`. U
 | `progressive_cache_max_entries` | `GROK_SEARCH_PROGRESSIVE_CACHE_MAX_ENTRIES` | 512 | Maximum progressive reading cache entries retained after writes. |
 | `progressive_default_model` | `GROK_SEARCH_PROGRESSIVE_DEFAULT_MODEL` | MiniMax-M3 | Default model for LLM progressive PDF reading when the tool does not pass one. |
 | `progressive_default_profile` | `GROK_SEARCH_PROGRESSIVE_DEFAULT_PROFILE` | balanced | Default profile for LLM progressive PDF reading. |
+#### MCP HTTP Server
+
+| TOML key | Env aliases | Default | Description |
+|---|---|---|---|
+| `mcp_http_bind` | `GROK_SEARCH_MCP_HTTP_BIND` | 127.0.0.1:8787 | Address for the optional Streamable HTTP MCP server. |
+| `mcp_http_path` | `GROK_SEARCH_MCP_HTTP_PATH` | /mcp | Request path for the optional Streamable HTTP MCP endpoint. |
+| `mcp_http_auth_token` | `GROK_SEARCH_MCP_HTTP_AUTH_TOKEN` | unset | Bearer token required by HTTP MCP when set. Required for non-loopback binds. |
+| `mcp_http_allow_origin` | `GROK_SEARCH_MCP_HTTP_ALLOW_ORIGIN` | unset | Optional CORS allow-origin for browser-based HTTP MCP clients. |
 
 <!-- config-schema:end -->
 
@@ -388,6 +413,10 @@ This section is generated from the Rust config schema in `grok-search-config`. U
 | `progressive_cache_max_entries` | `GROK_SEARCH_PROGRESSIVE_CACHE_MAX_ENTRIES` |
 | `progressive_default_model` | `GROK_SEARCH_PROGRESSIVE_DEFAULT_MODEL` |
 | `progressive_default_profile` | `GROK_SEARCH_PROGRESSIVE_DEFAULT_PROFILE` |
+| `mcp_http_bind` | `GROK_SEARCH_MCP_HTTP_BIND` |
+| `mcp_http_path` | `GROK_SEARCH_MCP_HTTP_PATH` |
+| `mcp_http_auth_token` | `GROK_SEARCH_MCP_HTTP_AUTH_TOKEN` |
+| `mcp_http_allow_origin` | `GROK_SEARCH_MCP_HTTP_ALLOW_ORIGIN` |
 
 `semantic_scholar_api_key` is sent to Semantic Scholar as the `x-api-key`
 header. Semantic Scholar allows 1 request per second per key across all

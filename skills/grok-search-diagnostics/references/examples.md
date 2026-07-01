@@ -24,6 +24,7 @@ Use verbose mode when investigating:
 - response and fetch limits
 - debug logging status
 - URL policy failures
+- HTTP MCP bind/auth/CORS configuration
 
 ## Reading Results
 
@@ -32,6 +33,23 @@ Secrets should appear as `set` or `unset`, never raw values. URLs and proxy sett
 If a provider is unreachable, check the corresponding config key, endpoint override, proxy, timeout, and network access before changing tool parameters.
 
 If a tool reports missing capability, confirm whether the provider is intentionally optional or disabled.
+
+## HTTP MCP Checks
+
+For local Streamable HTTP MCP, start the server explicitly:
+
+```bash
+grok-search-rs mcp-http --bind 127.0.0.1:8787 --path /mcp
+```
+
+`GET /healthz` is intentionally small and does not reveal secrets. MCP requests
+go to the configured path, usually `/mcp`.
+
+If HTTP MCP returns 401, set `Authorization: Bearer <mcp_http_auth_token>` or
+unset the token for loopback-only local use. If startup fails for `0.0.0.0` or
+another non-loopback bind, configure `mcp_http_auth_token` first. If browser
+clients fail before the MCP request reaches the server, check
+`mcp_http_allow_origin`; CORS is disabled unless one explicit origin is set.
 
 ## Academic PDF And LLM Checks
 

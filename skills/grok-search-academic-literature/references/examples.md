@@ -30,7 +30,9 @@ Broad recent search:
 ```
 
 Use `sources` only when the user asks to constrain providers, for example
-`["arxiv","semantic"]`.
+`["arxiv","semantic"]`. The canonical Semantic Scholar source name is
+`semantic`; `semantic_scholar`, `semanticscholar`, and `s2` are accepted
+compatibility aliases.
 
 ## Metadata
 
@@ -51,7 +53,10 @@ Citation overview:
 {"identifier": "10.48550/arXiv.1706.03762", "limit": 20}
 ```
 
-`academic_citations` returns an overview, not a full citation graph crawl.
+`academic_get` and `academic_citations` accept arXiv IDs, arXiv URLs, and arXiv
+DOIs such as `10.48550/arXiv.1706.03762`. `academic_citations` internally
+resolves to provider-native Semantic Scholar/OpenAlex identifiers when
+available, then returns an overview, not a full citation graph crawl.
 
 ## PDF Text
 
@@ -130,6 +135,9 @@ Prefer `profile:"fast"` for a cheap overview, `balanced` for normal use, and
 `strict` when section boundaries or JSON repair quality matter more than speed.
 The structure tool internally resolves, downloads, parses, checks cache, and
 runs the LLM pass only when needed. Do not call a separate cache-key tool first.
+Progressive metadata is heuristic and evidence-bound; title and abstract fields
+may be absent when the PDF begins with publisher notices, copyright text, or
+unusual front matter.
 
 ## Artifacts
 
@@ -177,3 +185,8 @@ PDF tool outputs can include `pdf_cache` diagnostics with `hit`, `stored`,
 `bytes`, `attempts`, `download_elapsed_ms`, and warnings such as
 `download_plan=...`, `download_strategy=...`, or individual `download_attempt`
 records.
+
+If `pdf_cache.warnings` reports that the cache path cannot be opened, set
+`academic_pdf_cache_path` or `GROK_SEARCH_ACADEMIC_PDF_CACHE_PATH` to a writable
+directory. The PDF tools still work without cache, but repeated calls will pay
+the full cold-download cost.

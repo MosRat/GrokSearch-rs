@@ -4,7 +4,7 @@
 
 **A lightweight Rust MCP server for Grok / OpenAI‑compatible web search, plus Tavily fetch/map and Firecrawl fallback.**
 
-`grok-search-rs` is an **MCP stdio server** — your client (Claude Code, Codex, Cursor, VS Code, …) launches it; you do not run it directly. It exposes one set of tools (`web_search`, `get_sources`, `web_fetch`, `web_map`, `repo_metadata`, `doctor`) and supports two upstream transports so you can plug into either xAI's official API or any OpenAI-compatible relay.
+`grok-search-rs` is an **MCP server**. Stdio is the default transport for local clients (Claude Code, Codex, Cursor, VS Code, ...), and an optional Streamable HTTP MCP server is available for clients that speak HTTP. It exposes one set of tools (`web_search`, `get_sources`, `web_fetch`, `web_map`, `repo_metadata`, `doctor`) and supports two upstream search transports so you can plug into either xAI's official API or any OpenAI-compatible relay.
 
 ---
 
@@ -241,8 +241,8 @@ Tired of duplicating `env` blocks across clients? Run `grok-search-rs --init` on
 | `doctor` | Live connectivity probe + redacted config. Pass `verbose: true` for detailed diagnostics. |
 | `repo_metadata` | Structured metadata for GitHub repositories and Hugging Face models/datasets. Defaults to metadata only; `include_readme` / `include_card` opt into README/card text. |
 | `academic_search` | CS-focused literature search across dblp, Semantic Scholar, arXiv, OpenAlex, and Crossref with dedupe/RRF ranking. |
-| `academic_get` | Resolve one paper by DOI, arXiv ID/URL, Semantic Scholar ID, OpenAlex ID/URL, dblp URL/key, or title-like query. |
-| `academic_citations` | Citation/reference summary for one paper, using Semantic Scholar first and OpenAlex as fallback. |
+| `academic_get` | Resolve one paper by DOI, arXiv ID/URL/arXiv DOI, Semantic Scholar ID, OpenAlex ID/URL, dblp URL/key, or title-like query. |
+| `academic_citations` | Citation/reference summary for one paper, resolving arXiv/DOI/title inputs to Semantic Scholar or OpenAlex identifiers when possible. |
 | `academic_pdf_read` | Resolve/download one academic PDF and return processed text. `text_mode` defaults to `clean`; `cache_policy` defaults to `auto`. |
 | `academic_pdf_structure` | Generate or read cached LLM-assisted progressive paper structure. Choose `view: "summary"`, `"full"`, or `"section"`; use `profile` instead of low-level chunk/prompt options. |
 | `academic_pdf_artifacts` | Extract partial PDF artifacts without returning body text: filtered bitmap images, detected table Markdown files, and JSON manifests. |
@@ -253,11 +253,14 @@ Tired of duplicating `env` blocks across clients? Run `grok-search-rs --init` on
 ## CLI Commands
 
 `grok-search-rs` with no arguments starts the MCP stdio server for existing
-agent configs. `grok-search-rs mcp` does the same explicitly.
+agent configs. `grok-search-rs mcp` does the same explicitly. For HTTP MCP,
+run `grok-search-rs mcp-http --bind 127.0.0.1:8787 --path /mcp`; non-loopback
+binds require `mcp_http_auth_token` or `GROK_SEARCH_MCP_HTTP_AUTH_TOKEN`.
 
 | Command | Purpose |
 |---|---|
 | `grok-search-rs init [--target all|codex|claude-code|snippets] [--dry-run]` | Create shared config if missing and maintain thin agent MCP entries. |
+| `grok-search-rs mcp-http [--bind 127.0.0.1:8787] [--path /mcp] [--allow-origin <origin>]` | Start the optional Streamable HTTP MCP server. |
 | `grok-search-rs login\|status\|logout` | Manage local xAI OAuth tokens. |
 | `grok-search-rs doctor [--compact] [--verbose]` | Print diagnostic JSON. |
 | `grok-search-rs web-search <query> ...` | Run `web_search` once and print JSON. |

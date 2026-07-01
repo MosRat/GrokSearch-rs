@@ -4,8 +4,8 @@ GrokSearch-rs is a Rust MCP server that keeps the original GrokSearch product bo
 
 ```text
 MCP client
-  -> crates/grok-search-rs       CLI and stdio entrypoint
-      -> crates/grok-search-mcp  rmcp server adapter and tool schemas
+  -> crates/grok-search-rs       CLI plus stdio / HTTP MCP entrypoints
+      -> crates/grok-search-mcp  rmcp server adapter, shared handler, and transports
       -> crates/grok-search-runtime
           -> concrete runtime wiring from Config to providers, sources, academic service
       -> crates/grok-search-service
@@ -96,7 +96,7 @@ Authentication is separated from the Responses provider:
 - `api_key` mode returns the configured `GROK_SEARCH_API_KEY` as a static Bearer token.
 - `oauth` mode reads the local auth file, refreshes the access token when it is near expiry, and returns the fresh Bearer token for the same `/v1/responses` request body.
 
-OAuth login is not a service boundary. `grok-search-rs login` temporarily listens on `127.0.0.1:56121` for the browser callback, stores the token file, then exits. Normal MCP operation remains stdio only.
+OAuth login is not a service boundary. `grok-search-rs login` temporarily listens on `127.0.0.1:56121` for the browser callback, stores the token file, then exits. Normal local MCP operation remains stdio by default; Streamable HTTP MCP is an explicit server mode.
 
 ## Source Provenance
 
@@ -122,10 +122,22 @@ Fallback tries Tavily first, then Firecrawl when configured. The output exposes 
 
 ## MCP Transport
 
-The binary is a stdio JSON-RPC server. It handles:
+The binary exposes the same MCP handler over two transports:
+
+- stdio, the default for local agent integrations and `grok-search-rs mcp`.
+- Streamable HTTP, started explicitly with `grok-search-rs mcp-http`.
+
+Both transports handle:
 
 - `initialize`
 - `tools/list`
 - `tools/call`
 
-Tool responses are serialized JSON inside MCP text content for broad client compatibility.
+The HTTP transport uses `rmcp`'s official Streamable HTTP service with local
+sessions, SSE keepalive, Host/Origin validation, request body limits, and
+graceful shutdown. It binds to `127.0.0.1:8787` by default. Non-loopback binds
+are rejected unless `mcp_http_auth_token` / `GROK_SEARCH_MCP_HTTP_AUTH_TOKEN`
+is set, and Bearer tokens are never logged.
+
+Tool responses are returned as structured MCP content and also serialized JSON
+inside text content for broad client compatibility.
