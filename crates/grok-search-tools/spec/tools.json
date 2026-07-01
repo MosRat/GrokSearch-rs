@@ -229,8 +229,8 @@
           "query": { "type": "string" },
           "sources": {
             "type": "array",
-            "items": { "type": "string", "enum": ["dblp", "semantic", "arxiv", "openalex", "crossref"] },
-            "description": "Selected sources. Defaults depend on search_mode; balanced uses dblp, Semantic Scholar, and arXiv as primary sources and enriches from OpenAlex/Crossref when possible."
+            "items": { "type": "string", "enum": ["dblp", "semantic", "semantic_scholar", "semanticscholar", "s2", "arxiv", "openalex", "crossref"] },
+            "description": "Selected sources. Defaults depend on search_mode; balanced uses dblp, Semantic Scholar, and arXiv as primary sources and enriches from OpenAlex/Crossref when possible. Canonical Semantic Scholar source is semantic; semantic_scholar, semanticscholar, and s2 are accepted aliases."
           },
           "search_mode": {
             "type": "string",
@@ -260,7 +260,7 @@
     },
     {
       "name": "academic_get",
-      "description": "Resolve one academic paper by DOI, arXiv ID/URL, Semantic Scholar paperId, OpenAlex ID/URL, dblp URL/key, or title-like query. Returns normalized metadata and optionally citation/open-access enrichment.",
+      "description": "Resolve one academic paper by DOI, arXiv ID/URL, arXiv DOI such as 10.48550/arXiv.1706.03762, Semantic Scholar paperId, OpenAlex ID/URL, dblp URL/key, or title-like query. Returns normalized metadata and optionally citation/open-access enrichment.",
       "inputSchema": {
         "type": "object",
         "required": ["identifier"],
@@ -278,7 +278,7 @@
     },
     {
       "name": "academic_citations",
-      "description": "Return a summary of citing and referenced papers for one academic identifier. Uses Semantic Scholar first and OpenAlex as fallback; this is an overview, not a full citation graph crawl.",
+      "description": "Return a summary of citing and referenced papers for one academic identifier. Accepts DOI, arXiv ID/URL/arXiv DOI, Semantic Scholar paperId, OpenAlex ID/URL, dblp URL/key, or title-like query; internally resolves to provider-native citation identifiers. Uses Semantic Scholar first and OpenAlex as fallback; this is an overview, not a full citation graph crawl.",
       "inputSchema": {
         "type": "object",
         "required": ["identifier"],

@@ -175,7 +175,7 @@ impl AcademicService {
         let limit = input.max_results.unwrap_or(10).clamp(1, 50);
         let mode = search_mode(input.search_mode.as_deref())?;
         let sort_by = academic_sort_by(input.sort_by.as_deref())?;
-        let selected = selected_sources(&input.sources, mode);
+        let selected = selected_sources(&input.sources, mode)?;
         let mut errors = BTreeMap::new();
         let mut ranked: Vec<(String, Vec<AcademicPaper>)> = Vec::new();
 
@@ -299,28 +299,32 @@ impl AcademicService {
         limit: usize,
     ) -> Result<AcademicCitationsOutput> {
         let resolved = self.resolve_canonical_paper(identifier).await?;
-        let id = identifier_for_paper(&resolved.paper);
         let limit = limit.clamp(1, 50);
         let mut sources_used = Vec::new();
+        let ids = citation_identifiers_for_paper(&resolved.paper);
         for provider in [
             &self.providers.semantic as &dyn AcademicProvider,
             &self.providers.openalex,
         ] {
-            match provider.citations(&id, limit).await {
-                Ok(Some(summary)) => {
-                    sources_used.push(provider.name().to_string());
-                    let summary = clean_citation_summary(summary);
-                    return Ok(AcademicCitationsOutput {
-                        identifier: identifier.to_string(),
-                        citation_count: Some(summary.citations.len() as u32),
-                        reference_count: Some(summary.references.len() as u32),
-                        citations: summary.citations,
-                        references: summary.references,
-                        sources_used,
-                    });
+            for id in &ids {
+                match provider.citations(id, limit).await {
+                    Ok(Some(summary))
+                        if !summary.citations.is_empty() || !summary.references.is_empty() =>
+                    {
+                        sources_used.push(provider.name().to_string());
+                        let summary = clean_citation_summary(summary);
+                        return Ok(AcademicCitationsOutput {
+                            identifier: identifier.to_string(),
+                            citation_count: Some(summary.citations.len() as u32),
+                            reference_count: Some(summary.references.len() as u32),
+                            citations: summary.citations,
+                            references: summary.references,
+                            sources_used,
+                        });
+                    }
+                    Ok(Some(_)) | Ok(None) => {}
+                    Err(_) => {}
                 }
-                Ok(None) => {}
-                Err(_) => {}
             }
         }
         Err(GrokSearchError::NotFound(format!(
@@ -1571,7 +1575,7 @@ fn academic_sort_by(raw: Option<&str>) -> Result<AcademicSortBy> {
     }
 }
 
-fn selected_sources(raw: &[String], mode: AcademicSearchMode) -> Vec<String> {
+fn selected_sources(raw: &[String], mode: AcademicSearchMode) -> Result<Vec<String>> {
     let requested: Vec<String> = if raw.is_empty() {
         let defaults = match mode {
             AcademicSearchMode::Balanced | AcademicSearchMode::Precise => DEFAULT_SOURCES,
@@ -1581,14 +1585,27 @@ fn selected_sources(raw: &[String], mode: AcademicSearchMode) -> Vec<String> {
     } else {
         raw.iter()
             .flat_map(|s| s.split(','))
-            .map(|s| s.trim().to_ascii_lowercase())
+            .map(canonical_academic_source)
             .filter(|s| !s.is_empty())
             .collect()
     };
-    requested
-        .into_iter()
-        .filter(|source| ALL_SOURCES.contains(&source.as_str()))
-        .collect()
+    let unknown = requested
+        .iter()
+        .find(|source| !ALL_SOURCES.contains(&source.as_str()));
+    if let Some(source) = unknown {
+        return Err(GrokSearchError::InvalidParams(format!(
+            "unknown academic source: {source}; expected one of {}",
+            ALL_SOURCES.join(", ")
+        )));
+    }
+    Ok(requested)
+}
+
+fn canonical_academic_source(source: &str) -> String {
+    match source.trim().to_ascii_lowercase().as_str() {
+        "semantic_scholar" | "semanticscholar" | "s2" => "semantic".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn short_session_id() -> String {
@@ -1620,6 +1637,26 @@ fn identifier_for_paper(paper: &AcademicPaper) -> Identifier {
                 .map(|v| Identifier::OpenAlex(v.clone()))
         })
         .unwrap_or_else(|| Identifier::Query(paper.title.clone()))
+}
+
+fn citation_identifiers_for_paper(paper: &AcademicPaper) -> Vec<Identifier> {
+    let mut ids = Vec::new();
+    if let Some(id) = &paper.semantic_scholar_id {
+        ids.push(Identifier::Semantic(id.clone()));
+    }
+    if let Some(id) = &paper.openalex_id {
+        ids.push(Identifier::OpenAlex(id.clone()));
+    }
+    if let Some(doi) = &paper.doi {
+        ids.push(Identifier::Doi(doi.clone()));
+    }
+    if let Some(id) = &paper.arxiv_id {
+        ids.push(Identifier::Arxiv(id.clone()));
+    }
+    if ids.is_empty() {
+        ids.push(Identifier::Query(paper.title.clone()));
+    }
+    ids
 }
 
 fn resolved_paper_matches_identifier(id: &Identifier, paper: &AcademicPaper) -> bool {
@@ -2103,6 +2140,10 @@ mod tests {
             Identifier::Arxiv("1706.03762".to_string())
         );
         assert_eq!(
+            parse_identifier("10.48550/arXiv.1706.03762"),
+            Identifier::Arxiv("1706.03762".to_string())
+        );
+        assert_eq!(
             parse_identifier("10.1145/3368089.3409742"),
             Identifier::Doi("10.1145/3368089.3409742".to_string())
         );
@@ -2264,16 +2305,59 @@ mod tests {
     #[test]
     fn academic_search_modes_select_expected_default_sources() {
         assert_eq!(
-            selected_sources(&[], AcademicSearchMode::Balanced),
+            selected_sources(&[], AcademicSearchMode::Balanced).expect("default sources"),
             vec!["dblp", "semantic", "arxiv"]
         );
         assert_eq!(
-            selected_sources(&[], AcademicSearchMode::Precise),
+            selected_sources(&[], AcademicSearchMode::Precise).expect("default sources"),
             vec!["dblp", "semantic", "arxiv"]
         );
         assert_eq!(
-            selected_sources(&[], AcademicSearchMode::Broad),
+            selected_sources(&[], AcademicSearchMode::Broad).expect("default sources"),
             vec!["dblp", "semantic", "arxiv", "openalex", "crossref"]
+        );
+    }
+
+    #[test]
+    fn selected_sources_accept_common_semantic_scholar_aliases() {
+        assert_eq!(
+            selected_sources(
+                &["semantic_scholar".into(), "semanticscholar,s2".into()],
+                AcademicSearchMode::Balanced
+            )
+            .expect("aliases should normalize"),
+            vec!["semantic", "semantic", "semantic"]
+        );
+    }
+
+    #[test]
+    fn selected_sources_reject_unknown_values() {
+        let err = selected_sources(
+            &["semantic_scholar".into(), "scholar".into()],
+            AcademicSearchMode::Balanced,
+        )
+        .expect_err("unknown source should fail");
+        assert!(matches!(err, GrokSearchError::InvalidParams(_)));
+    }
+
+    #[test]
+    fn citation_identifiers_prefer_provider_native_ids() {
+        let paper = AcademicPaper {
+            title: "Attention Is All You Need".into(),
+            doi: Some("10.48550/arXiv.1706.03762".into()),
+            arxiv_id: Some("1706.03762".into()),
+            semantic_scholar_id: Some("semantic-id".into()),
+            openalex_id: Some("https://openalex.org/W123".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            citation_identifiers_for_paper(&paper),
+            vec![
+                Identifier::Semantic("semantic-id".into()),
+                Identifier::OpenAlex("https://openalex.org/W123".into()),
+                Identifier::Doi("10.48550/arXiv.1706.03762".into()),
+                Identifier::Arxiv("1706.03762".into()),
+            ]
         );
     }
 

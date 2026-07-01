@@ -355,9 +355,16 @@ fn infer_metadata(
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
+    let abstract_index = lines.iter().position(|line| {
+        line.trim_start_matches('#')
+            .trim()
+            .eq_ignore_ascii_case("abstract")
+    });
+    let title_search_end = abstract_index.unwrap_or(lines.len()).min(80);
     let title = lines
         .iter()
-        .find(|line| line.chars().count() >= 8 && !line.starts_with('#'))
+        .take(title_search_end)
+        .find(|line| looks_like_paper_title(line))
         .map(|line| line.trim_start_matches('#').trim().to_string());
     let abstract_text = lines.windows(2).find_map(|pair| {
         pair[0]
@@ -374,6 +381,34 @@ fn infer_metadata(
         identifiers: BTreeMap::new(),
         source_spans: evidence.values().next().into_iter().cloned().collect(),
     }
+}
+
+fn looks_like_paper_title(line: &str) -> bool {
+    let trimmed = line.trim().trim_start_matches('#').trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let chars = trimmed.chars().count();
+    if !(8..=180).contains(&chars) {
+        return false;
+    }
+    if trimmed.ends_with('.') || trimmed.contains("http://") || trimmed.contains("https://") {
+        return false;
+    }
+    if lower.starts_with("provided proper attribution")
+        || lower.contains("permission to reproduce")
+        || lower.contains("licensed under")
+        || lower.contains("copyright")
+        || lower.starts_with("arxiv:")
+        || lower.starts_with("doi:")
+        || lower == "abstract"
+        || lower.starts_with("abstract ")
+    {
+        return false;
+    }
+    let word_count = trimmed.split_whitespace().count();
+    if word_count > 24 {
+        return false;
+    }
+    trimmed.chars().any(|ch| ch.is_alphabetic())
 }
 
 fn accepted_patch_count(text: &str, chunks: &[Chunk], results: &[ChunkResult]) -> usize {
@@ -511,5 +546,40 @@ fn nonempty(value: &str, fallback: &str) -> String {
         fallback.to_string()
     } else {
         value.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paper_title_inference_skips_front_matter_boilerplate() {
+        let text = "\
+Provided proper attribution is provided, Google hereby grants permission to reproduce the tables and figures in this paper solely for use in journalistic or scholarly works.
+
+Attention Is All You Need
+
+Abstract
+The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.
+";
+        let metadata = infer_metadata(text, &BTreeMap::new());
+        assert_eq!(metadata.title.as_deref(), Some("Attention Is All You Need"));
+        assert_eq!(
+            metadata.abstract_text.as_deref(),
+            Some("The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.")
+        );
+    }
+
+    #[test]
+    fn paper_title_inference_omits_unusable_front_matter() {
+        let text = "\
+Copyright 2026 by the publisher.
+
+Abstract
+This paper starts with boilerplate and has no reliable title line.
+";
+        let metadata = infer_metadata(text, &BTreeMap::new());
+        assert_eq!(metadata.title, None);
     }
 }

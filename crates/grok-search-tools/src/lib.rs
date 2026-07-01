@@ -1076,6 +1076,22 @@ mod tests {
     }
 
     #[test]
+    fn academic_search_schema_documents_semantic_scholar_alias() {
+        let spec: Value = serde_json::from_str(TOOLS_SPEC_JSON).expect("valid tools spec json");
+        let academic = spec["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .find(|tool| tool["name"] == "academic_search")
+            .expect("academic_search tool");
+        let sources = academic["inputSchema"]["properties"]["sources"]["items"]["enum"]
+            .as_array()
+            .expect("sources enum");
+        assert!(sources.contains(&json!("semantic")));
+        assert!(sources.contains(&json!("semantic_scholar")));
+    }
+
+    #[test]
     fn typed_academic_parse_options_accept_llm_progressive_shape() {
         let params: AcademicParseOptionsParams = serde_json::from_value(json!({
             "text_processing_mode": "clean",

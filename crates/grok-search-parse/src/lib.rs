@@ -36,8 +36,17 @@ pub fn clean_html_title(title: &str) -> String {
 
 pub fn parse_academic_identifier(raw: &str) -> AcademicIdentifier {
     let value = raw.trim();
-    if value.starts_with("10.") || value.to_ascii_lowercase().starts_with("doi:10.") {
-        return AcademicIdentifier::Doi(value.trim_start_matches("doi:").to_string());
+    let lower = value.to_ascii_lowercase();
+    let value_without_doi_prefix = lower
+        .strip_prefix("doi:")
+        .and_then(|_| value.get(4..))
+        .unwrap_or(value)
+        .trim();
+    if let Some(arxiv_id) = arxiv_id_from_doi(value_without_doi_prefix) {
+        return AcademicIdentifier::Arxiv(arxiv_id);
+    }
+    if value_without_doi_prefix.starts_with("10.") {
+        return AcademicIdentifier::Doi(value_without_doi_prefix.to_string());
     }
     if let Ok(url) = Url::parse(value) {
         let host = url.host_str().unwrap_or_default();
@@ -54,8 +63,14 @@ pub fn parse_academic_identifier(raw: &str) -> AcademicIdentifier {
         }
         return AcademicIdentifier::Url(value.to_string());
     }
-    if value.starts_with("arXiv:") || looks_like_arxiv_id(value) {
-        return AcademicIdentifier::Arxiv(value.trim_start_matches("arXiv:").to_string());
+    if lower.starts_with("arxiv:") || looks_like_arxiv_id(value) {
+        return AcademicIdentifier::Arxiv(
+            value
+                .strip_prefix("arXiv:")
+                .or_else(|| value.strip_prefix("arxiv:"))
+                .unwrap_or(value)
+                .to_string(),
+        );
     }
     if value.starts_with('W') && value[1..].chars().all(|c| c.is_ascii_digit()) {
         return AcademicIdentifier::OpenAlex(value.to_string());
@@ -64,6 +79,14 @@ pub fn parse_academic_identifier(raw: &str) -> AcademicIdentifier {
         return AcademicIdentifier::Semantic(value.to_string());
     }
     AcademicIdentifier::Query(value.to_string())
+}
+
+fn arxiv_id_from_doi(value: &str) -> Option<String> {
+    value
+        .strip_prefix("10.48550/arXiv.")
+        .or_else(|| value.strip_prefix("10.48550/arxiv."))
+        .map(|id| id.trim().trim_end_matches(".pdf").to_string())
+        .filter(|id| looks_like_arxiv_id(id))
 }
 
 pub fn extract_arxiv_id_from_path(path: &str) -> Option<String> {
@@ -185,6 +208,14 @@ mod tests {
         assert_eq!(
             parse_academic_identifier("https://arxiv.org/pdf/1706.03762.pdf"),
             AcademicIdentifier::Arxiv("1706.03762".to_string())
+        );
+        assert_eq!(
+            parse_academic_identifier("10.48550/arXiv.1706.03762"),
+            AcademicIdentifier::Arxiv("1706.03762".to_string())
+        );
+        assert_eq!(
+            parse_academic_identifier("doi:10.48550/arXiv.1706.03762v7"),
+            AcademicIdentifier::Arxiv("1706.03762v7".to_string())
         );
         assert_eq!(
             parse_academic_identifier("10.1145/3368089.3409742"),
