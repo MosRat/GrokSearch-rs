@@ -68,3 +68,9 @@ Use `cache_policy:"refresh"` to force a new PDF download and cache overwrite.
 Use `cache_policy:"bypass"` to ignore the PDF bytes cache while diagnosing
 cache corruption or cold network performance. Keep `cache_policy:"auto"` for
 normal usage.
+
+`academic_pdf_artifacts` uses `vision_profile:"auto"` by default. If an LLM key
+is set, it may run the multimodal artifact pass and write `vision` diagnostics;
+if no key is set, it stays off without failing. Use `vision_profile:"off"` to
+isolate deterministic pdf_oxide image/table extraction, or
+`vision_cache_policy:"refresh"` to force a fresh LLM artifact pass.

@@ -4,6 +4,27 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.3.2 - 2026-07-01
+
+### Added
+
+- Added MiniMax/Anthropic-compatible multimodal PDF artifact completion for
+  `academic_pdf_artifacts`, including LLM-suggested figure/table bounding boxes,
+  refined crops, reconstructed table Markdown, raw completion diagnostics, and
+  validation warnings.
+- Added pdf_oxide-backed page rendering and high-risk page triage for vision
+  artifact analysis, plus redb-backed vision artifact caching.
+
+### Changed
+
+- Changed `academic_pdf_artifacts` vision handling to `vision_profile:"auto"`:
+  LLM-refined artifact completion runs by default when an LLM API key is
+  configured and otherwise stays off.
+- Increased default vision artifact concurrency to 4 while keeping explicit
+  per-call bounds.
+- Updated repo-local academic and diagnostics skills with LLM-refined PDF
+  artifact guidance.
+
 ## 0.3.1 - 2026-07-01
 
 ### Added

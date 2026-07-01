@@ -159,6 +159,34 @@ Image extraction exports filtered bitmap XObjects as PNG files and writes
 Table extraction writes `tables.json` and Markdown snippets for detected
 tables; layout-heavy or sparse tables can be filtered or missed.
 
+By default, `vision_profile` is `auto`. When an LLM key is configured, the
+tool also runs the `artifact_micro` pass on selected high-risk pages. This
+renders pages, asks a vision-capable Anthropic-compatible model for figure and
+table completion candidates, validates/refines the bounding boxes locally, and
+returns `vision.figure_completions` and `vision.table_completions`. Refined
+results are the preferred reading surface, but each item keeps raw model
+evidence, confidence, validation status, and warnings.
+
+Save LLM-refined artifact diagnostics and crops:
+
+```json
+{
+  "identifier": "1706.03762",
+  "images_dir": "tmp/attention-images",
+  "tables_dir": "tmp/attention-tables",
+  "vision_profile": "auto",
+  "vision_dir": "tmp/attention-vision",
+  "vision_cache_policy": "auto"
+}
+```
+
+Use `vision_profile:"off"` for deterministic pdf_oxide artifacts only. Use
+`vision_cache_policy:"refresh"` after changing model, endpoint, prompt behavior,
+or when checking whether a stale cached vision result hid a model improvement.
+The LLM artifact pass never edits body text and does not replace deterministic
+artifacts; LLM outputs are marked as `llm_vision_refined_*` artifacts and carry
+validation warnings when bbox or table cells look risky.
+
 ## Download
 
 Download without parsing:

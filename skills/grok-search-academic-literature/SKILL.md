@@ -14,9 +14,9 @@ Use this skill for computer-science literature work rather than forcing scholarl
 3. Use `academic_citations` for citing/referenced paper summaries.
 4. Use `academic_pdf_read` for PDF text or Markdown. It is independent and does not require another PDF tool first.
 5. Use `academic_pdf_structure` for progressive paper structure, section summaries, and cached LLM-assisted reading views.
-6. Use `academic_pdf_artifacts` for image/table extraction and manifests without returning body text.
+6. Use `academic_pdf_artifacts` for image/table extraction, LLM-refined figure/table completion, and manifests without returning body text.
 7. Use `academic_pdf_download` only when the user needs the raw PDF saved locally.
 
-Use exactly one PDF locator: `identifier`, `url`, or `pdf_url`. Keep `cache_policy:"auto"` unless debugging stale bytes or timing cold downloads. Legacy `academic_read`, `academic_parse_pdf`, and `academic_download_pdf` are compatibility paths, not the preferred agent-facing tools.
+Use exactly one PDF locator: `identifier`, `url`, or `pdf_url`. Keep `cache_policy:"auto"` unless debugging stale bytes or timing cold downloads. `academic_pdf_artifacts` defaults `vision_profile` to `auto`: it enables LLM-refined artifact completion when an LLM key is configured and otherwise stays deterministic. Legacy `academic_read`, `academic_parse_pdf`, and `academic_download_pdf` are compatibility paths, not the preferred agent-facing tools.
 
 Read `references/examples.md` for source selection, PDF profiles, cache policy, and example calls.
