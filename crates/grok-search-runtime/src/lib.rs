@@ -99,8 +99,9 @@ fn ai_provider(config: &Config, http: &reqwest::Client) -> Result<Arc<dyn AiProv
                 .clone()
                 .unwrap_or_else(|| config.grok_model.clone());
             if config.x_search_enabled {
-                eprintln!(
-                    "grok-search-rs: x_search_enabled is ignored when using OPENAI_COMPATIBLE_* transport"
+                tracing::warn!(
+                    target: "grok_search",
+                    "x_search_enabled is ignored when using OPENAI_COMPATIBLE_* transport"
                 );
             }
             Ok(Arc::new(OpenAICompatProvider::with_client_and_limit(
@@ -185,6 +186,7 @@ mod tests {
             ("GROK_SEARCH_API_KEY", "xai-fake"),
             ("TAVILY_API_KEY", "tvly-fake"),
             ("FIRECRAWL_API_KEY", "fc-fake"),
+            ("GROK_SEARCH_AUDIT_ENABLED", "false"),
         ]);
         let _service = new(config).expect("runtime should assemble service");
     }
@@ -196,6 +198,7 @@ mod tests {
             ("OPENAI_COMPATIBLE_API_KEY", "sk-fake"),
             ("OPENAI_COMPATIBLE_MODEL", "gpt-4o-mini"),
             ("TAVILY_API_KEY", "fake-tavily"),
+            ("GROK_SEARCH_AUDIT_ENABLED", "false"),
         ]);
         let _service = new(config).expect("runtime should assemble chat transport");
     }

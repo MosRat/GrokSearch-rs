@@ -446,9 +446,13 @@ fn missing_config_file_falls_back_to_env_and_defaults() {
 fn config_file_supports_all_documented_keys() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("config.toml");
+    let debug_log_path = dir.path().join("legacy-debug.jsonl");
+    let audit_db_path = dir.path().join("custom-audit.redb");
+    let audit_log_path = dir.path().join("custom-audit.jsonl");
     fs::write(
         &path,
-        r#"
+        format!(
+            r#"
 grok_api_url          = "https://api.modelverse.cn"
 grok_api_key          = "xai-full"
 grok_auth_mode        = "oauth"
@@ -492,7 +496,16 @@ fetch_max_chars       = 12345
 cache_size            = 128
 timeout_seconds       = 30
 max_response_bytes    = 2097152
+debug_log_path        = {:?}
+audit_enabled         = false
+audit_path            = {:?}
+audit_recent_limit    = 25
+audit_log_path        = {:?}
 "#,
+            debug_log_path.display().to_string(),
+            audit_db_path.display().to_string(),
+            audit_log_path.display().to_string(),
+        ),
     )
     .unwrap();
 
@@ -539,6 +552,19 @@ max_response_bytes    = 2097152
     assert_eq!(cfg.cache_size, 128);
     assert_eq!(cfg.timeout.as_secs(), 30);
     assert_eq!(cfg.max_response_bytes, 2 * 1024 * 1024);
+    assert_eq!(cfg.debug_log_path, Some(debug_log_path));
+    assert!(!cfg.audit_enabled);
+    assert_eq!(cfg.audit_path, audit_db_path);
+    assert_eq!(cfg.audit_recent_limit, 25);
+    assert_eq!(cfg.audit_log_path, Some(audit_log_path));
+    assert!(
+        !cfg.debug_log_path.as_ref().unwrap().exists(),
+        "deprecated debug_log_path must not be touched when audit_log_path is set"
+    );
+    assert!(
+        cfg.audit_log_path.as_ref().unwrap().exists(),
+        "effective audit_log_path should be validated and created"
+    );
     assert!(!cfg.progressive_cache_enabled);
     assert_eq!(
         cfg.progressive_cache_path,
@@ -714,12 +740,20 @@ fn response_budget_defaults_and_env_overrides() {
     assert_eq!(defaults.response_max_chars, 60_000);
     assert_eq!(defaults.max_response_bytes, 10 * 1024 * 1024);
     assert_eq!(defaults.debug_log_path, None);
+    assert!(defaults.audit_enabled);
+    assert_eq!(defaults.audit_path, std::path::PathBuf::from("audit.redb"));
+    assert_eq!(defaults.audit_recent_limit, 1000);
+    assert_eq!(defaults.audit_log_path, None);
 
     let overridden = Config::from_env_map([
         ("GROK_SEARCH_MAX_INLINE_SOURCES", "2"),
         ("GROK_SEARCH_RESPONSE_MAX_CHARS", "30000"),
         ("GROK_SEARCH_MAX_RESPONSE_BYTES", "123456"),
         ("GROK_SEARCH_DEBUG_LOG_PATH", "logs/debug.jsonl"),
+        ("GROK_SEARCH_AUDIT_ENABLED", "false"),
+        ("GROK_SEARCH_AUDIT_PATH", "logs/audit.redb"),
+        ("GROK_SEARCH_AUDIT_RECENT_LIMIT", "200"),
+        ("GROK_SEARCH_AUDIT_LOG_PATH", "logs/audit.jsonl"),
     ]);
     assert_eq!(overridden.max_inline_sources, 2);
     assert_eq!(overridden.response_max_chars, 30_000);
@@ -727,6 +761,16 @@ fn response_budget_defaults_and_env_overrides() {
     assert_eq!(
         overridden.debug_log_path.as_deref(),
         Some(std::path::Path::new("logs/debug.jsonl"))
+    );
+    assert!(!overridden.audit_enabled);
+    assert_eq!(
+        overridden.audit_path,
+        std::path::PathBuf::from("logs/audit.redb")
+    );
+    assert_eq!(overridden.audit_recent_limit, 200);
+    assert_eq!(
+        overridden.audit_log_path.as_deref(),
+        Some(std::path::Path::new("logs/audit.jsonl"))
     );
 }
 
@@ -760,7 +804,24 @@ fn debug_log_path_loads_from_toml_and_is_created() {
     .expect("debug log path should be valid");
 
     assert_eq!(cfg.debug_log_path.as_deref(), Some(log_path.as_path()));
+    assert_eq!(cfg.audit_log_path.as_deref(), Some(log_path.as_path()));
     assert!(log_path.exists());
+}
+
+#[test]
+fn audit_path_defaults_next_to_config() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("nested").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "").unwrap();
+
+    let cfg = Config::try_load_from([
+        ("GROK_SEARCH_CONFIG", path.to_string_lossy().to_string()),
+        ("GROK_SEARCH_API_KEY", "fake".into()),
+    ])
+    .unwrap();
+
+    assert_eq!(cfg.audit_path, path.with_file_name("audit.redb"));
 }
 
 #[test]

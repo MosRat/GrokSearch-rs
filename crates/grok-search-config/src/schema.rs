@@ -423,7 +423,7 @@ config_schema! {
             default: "10485760",
             sample: "10485760",
         }
-        /// Optional JSONL debug log path.
+        /// Deprecated alias for audit_log_path JSONL export.
         DEBUG_LOG_PATH {
             field: debug_log_path,
             type: String,
@@ -434,6 +434,54 @@ config_schema! {
             redaction: Path,
             default: "unset",
             sample: "\"logs/grok-search-rs-debug.jsonl\"",
+        }
+        /// Enables tool-call audit recording.
+        AUDIT_ENABLED {
+            field: audit_enabled,
+            type: bool,
+            toml: "audit_enabled",
+            env: "GROK_SEARCH_AUDIT_ENABLED",
+            aliases: ["GROK_SEARCH_AUDIT_ENABLED"],
+            kind: Bool,
+            redaction: None,
+            default: "true",
+            sample: "true",
+        }
+        /// Persistent audit database path.
+        AUDIT_PATH {
+            field: audit_path,
+            type: String,
+            toml: "audit_path",
+            env: "GROK_SEARCH_AUDIT_PATH",
+            aliases: ["GROK_SEARCH_AUDIT_PATH"],
+            kind: Path,
+            redaction: Path,
+            default: "default audit.redb next to config.toml",
+            sample: "\"/path/to/audit.redb\"",
+        }
+        /// Recent audit call detail entries retained.
+        AUDIT_RECENT_LIMIT {
+            field: audit_recent_limit,
+            type: usize,
+            toml: "audit_recent_limit",
+            env: "GROK_SEARCH_AUDIT_RECENT_LIMIT",
+            aliases: ["GROK_SEARCH_AUDIT_RECENT_LIMIT"],
+            kind: Usize,
+            redaction: None,
+            default: "1000",
+            sample: "1000",
+        }
+        /// Optional JSONL audit export path for development.
+        AUDIT_LOG_PATH {
+            field: audit_log_path,
+            type: String,
+            toml: "audit_log_path",
+            env: "GROK_SEARCH_AUDIT_LOG_PATH",
+            aliases: ["GROK_SEARCH_AUDIT_LOG_PATH"],
+            kind: Path,
+            redaction: Path,
+            default: "unset",
+            sample: "\"logs/grok-search-rs-audit.jsonl\"",
         }
     }
 

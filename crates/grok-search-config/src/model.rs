@@ -64,6 +64,10 @@ pub struct Config {
     pub response_max_chars: usize,
     pub max_response_bytes: usize,
     pub debug_log_path: Option<PathBuf>,
+    pub audit_enabled: bool,
+    pub audit_path: PathBuf,
+    pub audit_recent_limit: usize,
+    pub audit_log_path: Option<PathBuf>,
     pub academic_enabled: bool,
     pub academic_email: Option<String>,
     pub semantic_scholar_api_key: Option<String>,
@@ -165,6 +169,10 @@ impl std::fmt::Debug for Config {
             .field("response_max_chars", &self.response_max_chars)
             .field("max_response_bytes", &self.max_response_bytes)
             .field("debug_log_path", &self.debug_log_path)
+            .field("audit_enabled", &self.audit_enabled)
+            .field("audit_path", &self.audit_path)
+            .field("audit_recent_limit", &self.audit_recent_limit)
+            .field("audit_log_path", &self.audit_log_path)
             .field("academic_enabled", &self.academic_enabled)
             .field("academic_email", &self.academic_email_status())
             .field(
@@ -284,7 +292,11 @@ impl Config {
             .map(|(k, v)| (k.into(), v.into()))
             .collect();
         Self::try_load_from(env_vec.clone()).unwrap_or_else(|err| {
-            eprintln!("grok-search-rs: {err}; falling back to env/defaults");
+            tracing::warn!(
+                target: "grok_search",
+                error = %err,
+                "config load failed; falling back to env/defaults"
+            );
             Self::from_env_map(env_vec)
         })
     }
@@ -324,6 +336,9 @@ impl Config {
         let default_academic_pdf_cache_path =
             paths::academic_pdf_cache_path_for(map.iter().map(|(k, v)| (k.clone(), v.clone())))
                 .unwrap_or_else(|| PathBuf::from("academic-pdf-cache.redb"));
+        let default_audit_path =
+            paths::audit_path_for(map.iter().map(|(k, v)| (k.clone(), v.clone())))
+                .unwrap_or_else(|| PathBuf::from("audit.redb"));
         let reader = ConfigReader::new(&map);
         let grok_auth_mode = auth_mode_value(&reader);
 
@@ -372,6 +387,14 @@ impl Config {
             response_max_chars: reader.usize(RESPONSE_MAX_CHARS, default_usize(RESPONSE_MAX_CHARS)),
             max_response_bytes: reader.usize(MAX_RESPONSE_BYTES, default_usize(MAX_RESPONSE_BYTES)),
             debug_log_path: reader.path(DEBUG_LOG_PATH),
+            audit_enabled: reader.bool(AUDIT_ENABLED, default_bool(AUDIT_ENABLED)),
+            audit_path: reader.path(AUDIT_PATH).unwrap_or(default_audit_path),
+            audit_recent_limit: reader
+                .usize(AUDIT_RECENT_LIMIT, default_usize(AUDIT_RECENT_LIMIT))
+                .max(1),
+            audit_log_path: reader
+                .path(AUDIT_LOG_PATH)
+                .or_else(|| reader.path(DEBUG_LOG_PATH)),
             academic_enabled: reader.bool(ACADEMIC_ENABLED, default_bool(ACADEMIC_ENABLED)),
             academic_email: reader.optional(ACADEMIC_EMAIL),
             semantic_scholar_api_key: reader.secret(SEMANTIC_SCHOLAR_API_KEY),
@@ -532,6 +555,21 @@ impl Config {
                         .unwrap_or_else(|| "unset".to_string()),
                 ),
             ),
+            diagnostic_pair(AUDIT_ENABLED, Some(self.audit_enabled.to_string())),
+            diagnostic_pair(AUDIT_PATH, Some(self.audit_path.display().to_string())),
+            diagnostic_pair(
+                AUDIT_RECENT_LIMIT,
+                Some(self.audit_recent_limit.to_string()),
+            ),
+            diagnostic_pair(
+                AUDIT_LOG_PATH,
+                Some(
+                    self.audit_log_path
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| "unset".to_string()),
+                ),
+            ),
             diagnostic_pair(ACADEMIC_ENABLED, Some(self.academic_enabled.to_string())),
             diagnostic_pair(ACADEMIC_EMAIL, self.academic_email.clone()),
             diagnostic_pair(
@@ -661,9 +699,10 @@ fn auth_mode_value(reader: &ConfigReader<'_>) -> AuthMode {
         Some((_, value)) if value == "api_key" || value.is_empty() => AuthMode::ApiKey,
         Some((_, value)) if value == "oauth" => AuthMode::OAuth,
         Some((raw, _)) => {
-            eprintln!(
-                "unknown GROK_SEARCH_AUTH_MODE=\"{}\"; falling back to api_key. Valid values: api_key, oauth.",
-                raw
+            tracing::warn!(
+                target: "grok_search",
+                value = %raw,
+                "unknown GROK_SEARCH_AUTH_MODE; falling back to api_key. Valid values: api_key, oauth"
             );
             AuthMode::ApiKey
         }

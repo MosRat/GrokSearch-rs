@@ -8,48 +8,39 @@ use super::*;
 impl SearchService {
     pub async fn web_search(&self, input: WebSearchInput) -> Result<WebSearchOutput> {
         let op_start = Instant::now();
-        let request_id = self.logger.request_id();
-        self.logger.event(
-            &request_id,
-            "debug",
-            "web_search.start",
-            Some("web_search"),
-            None,
-            json!({
-                "query_chars": input.query.chars().count(),
-                "extra_sources": input.extra_sources,
-                "recency_days": input.recency_days,
-                "include_domains": input.include_domains,
-                "exclude_domains": input.exclude_domains,
-                "include_content": input.include_content,
-                "response_format": input.response_format,
-            }),
-        );
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
+        let request_id = self.audit.request_id();
+        let input_payload = json!({
+            "query_chars": input.query.chars().count(),
+            "extra_sources": input.extra_sources,
+            "recency_days": input.recency_days,
+            "include_domains": input.include_domains,
+            "exclude_domains": input.exclude_domains,
+            "include_content": input.include_content,
+            "response_format": input.response_format,
+        });
         let result = self.web_search_inner(input).await;
-        match &result {
-            Ok(output) => self.logger.event(
-                &request_id,
-                "debug",
-                "web_search.success",
-                Some("web_search"),
-                Some(op_start.elapsed()),
-                json!({
+        let payload = match &result {
+            Ok(output) => json!({
+                "input": input_payload,
+                "output": {
                     "session_id": output.session_id,
                     "sources_count": output.sources_count,
                     "fallback_used": output.fallback_used,
                     "fallback_reason": output.fallback_reason,
                     "truncated": output.truncated,
-                }),
-            ),
-            Err(err) => self.logger.error(
-                &request_id,
-                "web_search.error",
-                Some("web_search"),
-                Some(op_start.elapsed()),
-                err,
-                json!({}),
-            ),
-        }
+                }
+            }),
+            Err(_) => json!({ "input": input_payload }),
+        };
+        self.audit_result(
+            &request_id,
+            "web_search",
+            started_at_unix_ms,
+            op_start,
+            &result,
+            payload,
+        );
         result
     }
 

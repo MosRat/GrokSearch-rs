@@ -592,6 +592,7 @@ async fn invoke_tool_doctor_accepts_verbose_param() {
         .await
         .expect("doctor should succeed");
 
-    assert_eq!(value["diagnostics"]["debug_log"]["enabled"], false);
+    assert_eq!(value["diagnostics"]["audit"]["enabled"], true);
+    assert_eq!(value["diagnostics"]["debug_log"]["deprecated"], true);
     assert!(value["diagnostics"]["limits"]["max_response_bytes"].is_number());
 }

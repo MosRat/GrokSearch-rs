@@ -227,6 +227,116 @@ async fn http_server_requires_bearer_token_when_configured() {
 }
 
 #[tokio::test]
+async fn http_audit_endpoints_share_service_state_and_auth() {
+    let (base_url, shutdown, task) = spawn_test_http(Some("secret".to_string())).await;
+    let client = reqwest::Client::new();
+
+    let unauthorized = client
+        .get(format!("{base_url}/audit"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), reqwest::StatusCode::UNAUTHORIZED);
+    for (method, path) in [
+        ("GET", "/audit"),
+        ("GET", "/audit/recent"),
+        ("POST", "/audit/clear"),
+    ] {
+        let response = match method {
+            "GET" => client.get(format!("{base_url}{path}")),
+            "POST" => client.post(format!("{base_url}{path}")),
+            _ => unreachable!(),
+        }
+        .bearer_auth("wrong")
+        .send()
+        .await
+        .unwrap();
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "{method} {path} should reject wrong token"
+        );
+    }
+
+    let session_id = initialize_authorized_session(&client, &base_url, "secret").await;
+    let search = call_authorized_tool(
+        &client,
+        &base_url,
+        &session_id,
+        "secret",
+        "audit-search".to_string(),
+        "web_search",
+        json!({ "query": "audit endpoint", "extra_sources": 1 }),
+    )
+    .await;
+    assert!(search["result"]["structuredContent"]["session_id"].is_string());
+
+    let audit: serde_json::Value = client
+        .get(format!("{base_url}/audit"))
+        .bearer_auth("secret")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(audit["summary"]["tools"]["web_search"]["success"], 1);
+    assert_eq!(audit["recent"][0]["tool_name"], "web_search");
+
+    let recent: serde_json::Value = client
+        .get(format!(
+            "{base_url}/audit/recent?limit=1&tool=web_search&status=success"
+        ))
+        .bearer_auth("secret")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(recent.as_array().expect("recent array").len(), 1);
+
+    let invalid_status = client
+        .get(format!("{base_url}/audit/recent?status=bogus"))
+        .bearer_auth("secret")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid_status.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let cleared: serde_json::Value = client
+        .post(format!("{base_url}/audit/clear"))
+        .bearer_auth("secret")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cleared["ok"], true);
+
+    let audit: serde_json::Value = client
+        .get(format!("{base_url}/audit"))
+        .bearer_auth("secret")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        audit["summary"]["tools"]
+            .as_object()
+            .expect("summary tools object")
+            .len(),
+        0
+    );
+
+    shutdown.cancel();
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn http_server_handles_concurrent_independent_sessions() {
     timeout(TokioDuration::from_secs(10), async {
         let (base_url, shutdown, task) = spawn_test_http(None).await;
@@ -463,6 +573,42 @@ async fn initialize_session(
         .to_string()
 }
 
+async fn initialize_authorized_session(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+) -> String {
+    let response = client
+        .post(format!("{base_url}/mcp"))
+        .header("accept", "application/json, text/event-stream")
+        .bearer_auth(token)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": "init-authorized",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "audit-test", "version": "0.0.0" }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "authorized initialize status {}",
+        response.status()
+    );
+    response
+        .headers()
+        .get("mcp-session-id")
+        .expect("session id")
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
 async fn list_tools(
     client: &reqwest::Client,
     base_url: &str,
@@ -479,6 +625,38 @@ async fn list_tools(
             "id": format!("list-{agent_id}-{round}"),
             "method": "tools/list",
             "params": {}
+        }))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    json_from_streamable_http_body(&body)
+}
+
+async fn call_authorized_tool(
+    client: &reqwest::Client,
+    base_url: &str,
+    session_id: &str,
+    token: &str,
+    id: String,
+    name: &str,
+    arguments: serde_json::Value,
+) -> serde_json::Value {
+    let body = client
+        .post(format!("{base_url}/mcp"))
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-session-id", session_id)
+        .bearer_auth(token)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {
+                "name": name,
+                "arguments": arguments
+            }
         }))
         .send()
         .await

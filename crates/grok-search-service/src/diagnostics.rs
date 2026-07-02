@@ -16,16 +16,9 @@ impl SearchService {
     pub async fn doctor_with_options(&self, verbose: bool) -> serde_json::Value {
         use grok_search_config::Transport;
 
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
-        self.logger.event(
-            &request_id,
-            "debug",
-            "doctor.start",
-            Some("doctor"),
-            None,
-            json!({ "verbose": verbose }),
-        );
         let grok_probe = self.probe_grok().await;
         let tavily_probe = match &self.sources {
             Some(provider) => probe_source(provider.as_ref(), "https://example.com").await,
@@ -101,10 +94,13 @@ impl SearchService {
         if verbose {
             report["diagnostics"] = serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
+                "runtime_log": runtime_log_diagnostics(),
+                "audit": self.audit.diagnostics(),
                 "debug_log": {
-                    "enabled": self.logger.enabled(),
-                    "path": self.logger.path().map(|path| path.display().to_string()),
-                    "session_id": self.logger.session_id(),
+                    "deprecated": true,
+                    "enabled": self.audit.enabled(),
+                    "path": self.audit.jsonl_path().map(|path| path.display().to_string()),
+                    "session_id": self.audit.session_id(),
                 },
                 "limits": {
                     "timeout_seconds": self.config.timeout.as_secs(),
@@ -135,12 +131,13 @@ impl SearchService {
                 },
             });
         }
-        self.logger.event(
+        self.audit.record_tool_call(
+            "doctor",
             &request_id,
-            "debug",
-            "doctor.success",
-            Some("doctor"),
-            Some(start.elapsed()),
+            started_at_unix_ms,
+            start.elapsed(),
+            grok_search_audit::AuditStatus::Success,
+            None,
             json!({ "verbose": verbose }),
         );
         report
@@ -173,4 +170,32 @@ async fn probe_source(provider: &dyn crate::service::SourceProvider, sample_url:
         Ok(_) => Probe::ok(format!("reachable (sample probe via {sample_url} ok)")),
         Err(err) => Probe::failed(err.to_string()),
     }
+}
+
+fn runtime_log_diagnostics() -> serde_json::Value {
+    let filter = std::env::var("GROK_SEARCH_LOG_EFFECTIVE_FILTER").unwrap_or_else(|_| {
+        std::env::var("GROK_SEARCH_LOG")
+            .or_else(|_| std::env::var("RUST_LOG"))
+            .unwrap_or_else(|_| "unknown".to_string())
+    });
+    let source = std::env::var("GROK_SEARCH_LOG_FILTER_SOURCE").unwrap_or_else(|_| {
+        if std::env::var("GROK_SEARCH_LOG").is_ok() {
+            "GROK_SEARCH_LOG".to_string()
+        } else if std::env::var("RUST_LOG").is_ok() {
+            "RUST_LOG".to_string()
+        } else {
+            "unknown".to_string()
+        }
+    });
+    let explicit = std::env::var("GROK_SEARCH_LOG_EXPLICIT")
+        .ok()
+        .and_then(|value| value.parse::<bool>().ok())
+        .unwrap_or_else(|| source == "GROK_SEARCH_LOG" || source == "RUST_LOG");
+    serde_json::json!({
+        "enabled": filter.trim() != "off",
+        "filter": filter,
+        "source": source,
+        "explicit": explicit,
+        "stream": "stderr",
+    })
 }

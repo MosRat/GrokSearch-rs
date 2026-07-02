@@ -19,6 +19,7 @@ grok-search-service = { path = "../grok-search-service" }
 grok-search-sources = { path = "../grok-search-sources" }
 grok-search-types = { path = "../grok-search-types" }
 reqwest.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

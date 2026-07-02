@@ -17,6 +17,7 @@ serde_json.workspace = true
 tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
+grok-search-audit = { path = "../grok-search-audit" }
 grok-search-config = { path = "../grok-search-config" }
 grok-search-net = { path = "../grok-search-net" }
 grok-search-provider-core = { path = "../grok-search-provider-core" }

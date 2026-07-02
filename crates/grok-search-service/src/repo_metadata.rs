@@ -14,49 +14,40 @@ use crate::service::SearchService;
 impl SearchService {
     pub async fn repo_metadata(&self, input: RepoMetadataInput) -> Result<RepoMetadataOutput> {
         let op_start = Instant::now();
-        let request_id = self.logger.request_id();
-        self.logger.event(
-            &request_id,
-            "debug",
-            "repo_metadata.start",
-            Some("repo_metadata"),
-            None,
-            json!({
-                "url": input.url.as_deref().map(summarize_url),
-                "provider": input.provider,
-                "repo_id_present": input.repo_id.as_ref().is_some_and(|v| !v.trim().is_empty()),
-                "owner_present": input.owner.as_ref().is_some_and(|v| !v.trim().is_empty()),
-                "name_present": input.name.as_ref().is_some_and(|v| !v.trim().is_empty()),
-                "repo_type": input.repo_type,
-                "include_readme": input.include_readme,
-                "include_card": input.include_card,
-                "max_text_chars": input.max_text_chars,
-            }),
-        );
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
+        let request_id = self.audit.request_id();
+        let input_payload = json!({
+            "url": input.url.as_deref().map(summarize_url),
+            "provider": input.provider,
+            "repo_id_present": input.repo_id.as_ref().is_some_and(|v| !v.trim().is_empty()),
+            "owner_present": input.owner.as_ref().is_some_and(|v| !v.trim().is_empty()),
+            "name_present": input.name.as_ref().is_some_and(|v| !v.trim().is_empty()),
+            "repo_type": input.repo_type,
+            "include_readme": input.include_readme,
+            "include_card": input.include_card,
+            "max_text_chars": input.max_text_chars,
+        });
         let result = self.repo_metadata_inner(input).await;
-        match &result {
-            Ok(output) => self.logger.event(
-                &request_id,
-                "debug",
-                "repo_metadata.success",
-                Some("repo_metadata"),
-                Some(op_start.elapsed()),
-                json!({
+        let payload = match &result {
+            Ok(output) => json!({
+                "input": input_payload,
+                "output": {
                     "provider": output.provider,
                     "kind": output.kind,
                     "id": output.id,
                     "warnings": output.warnings.len(),
-                }),
-            ),
-            Err(err) => self.logger.error(
-                &request_id,
-                "repo_metadata.error",
-                Some("repo_metadata"),
-                Some(op_start.elapsed()),
-                err,
-                json!({}),
-            ),
-        }
+                }
+            }),
+            Err(_) => json!({ "input": input_payload }),
+        };
+        self.audit_result(
+            &request_id,
+            "repo_metadata",
+            started_at_unix_ms,
+            op_start,
+            &result,
+            payload,
+        );
         result
     }
 

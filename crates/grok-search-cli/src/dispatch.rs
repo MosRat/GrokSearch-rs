@@ -13,16 +13,18 @@ use grok_search_tools::{
 };
 
 use crate::args::{
-    AcademicCommand, AcademicSubcommand, Cli, Command, InitCommand, InitTargetArg,
+    AcademicCommand, AcademicSubcommand, AuditSubcommand, Cli, Command, InitCommand, InitTargetArg,
     McpServiceCommand, McpServiceSubcommand,
 };
 use crate::auth::{run_login, run_logout, run_status};
+use crate::logging;
 use crate::mcp::{run_mcp, run_mcp_http};
 use crate::output::{invoke_and_print, print_json};
 use crate::service::build_service;
 
 pub async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    logging::init(&cli);
     let command = if cli.init_alias {
         Some(Command::Init(InitCommand {
             target: InitTargetArg::All,
@@ -56,6 +58,7 @@ pub async fn run() -> anyhow::Result<()> {
                 output.compact,
             )
         }
+        Some(Command::Audit(command)) => run_audit(command).await,
         Some(Command::WebSearch(command)) => {
             invoke_and_print(
                 "web_search",
@@ -153,6 +156,39 @@ pub async fn run() -> anyhow::Result<()> {
             .await
         }
         Some(Command::Academic(command)) => run_academic(command).await,
+    }
+}
+
+async fn run_audit(command: crate::args::AuditCommand) -> anyhow::Result<()> {
+    let cfg = Config::try_load()?;
+    let audit = grok_search_audit::AuditRecorder::existing(grok_search_audit::AuditOptions {
+        enabled: cfg.audit_enabled,
+        path: Some(cfg.audit_path),
+        recent_limit: cfg.audit_recent_limit,
+        jsonl_path: cfg.audit_log_path,
+    });
+    match command.command {
+        AuditSubcommand::Summary(output) => {
+            print_json(serde_json::to_value(audit.summary())?, output.compact)
+        }
+        AuditSubcommand::Recent(command) => {
+            let status = command.status.map(|status| match status {
+                crate::args::AuditStatusArg::Success => grok_search_audit::AuditStatus::Success,
+                crate::args::AuditStatusArg::Error => grok_search_audit::AuditStatus::Error,
+            });
+            print_json(
+                serde_json::to_value(audit.recent(grok_search_audit::AuditRecentQuery {
+                    limit: command.limit,
+                    tool: command.tool,
+                    status,
+                }))?,
+                command.output.compact,
+            )
+        }
+        AuditSubcommand::Clear => {
+            audit.clear()?;
+            print_json(serde_json::json!({ "ok": true }), false)
+        }
     }
 }
 

@@ -187,7 +187,19 @@ Notes:
 | `GROK_SEARCH_MAX_INLINE_SOURCES` | `5` | Max `web_search` sources carrying inline content, clamped to `0..20`; `0` returns metadata-only sources. |
 | `GROK_SEARCH_RESPONSE_MAX_CHARS` | `60000` | Whole-response char budget for `web_search`; over-budget output is truncated tail-first with `truncated: true`. |
 | `GROK_SEARCH_MAX_RESPONSE_BYTES` | `10485760` | Global upstream HTTP response body byte cap before parsing/trimming. |
-| `GROK_SEARCH_DEBUG_LOG_PATH` | unset | Optional JSONL debug log path. Disabled by default; payloads are redacted before writing. |
+| `GROK_SEARCH_LOG` | command-dependent | Runtime log filter for stderr logs. Overrides `RUST_LOG`; for example `GROK_SEARCH_LOG=grok_search=debug`. |
+| `GROK_SEARCH_AUDIT_ENABLED` | `true` | Enables local tool-call audit counters and recent call metadata. |
+| `GROK_SEARCH_AUDIT_PATH` | config sibling `audit.redb` | Persistent audit KV database path. |
+| `GROK_SEARCH_AUDIT_RECENT_LIMIT` | `1000` | Recent audited tool-call details retained. |
+| `GROK_SEARCH_AUDIT_LOG_PATH` | unset | Optional redacted JSONL audit export for development. |
+| `GROK_SEARCH_DEBUG_LOG_PATH` | unset | Deprecated alias for `GROK_SEARCH_AUDIT_LOG_PATH`. |
+
+Runtime logs and command output are separated. CLI results and interactive
+prompts use stdout; lifecycle warnings and diagnostics use stderr; audit data
+uses the local KV store, with optional redacted JSONL export for development.
+Stdio MCP defaults runtime stderr logging to `off` unless `GROK_SEARCH_LOG` or
+`RUST_LOG` is set, while HTTP MCP defaults to `info` so the listening address is
+visible.
 
 ### Source extraction (`web_fetch` specialists / `web_search` enrichment)
 

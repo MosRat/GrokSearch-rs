@@ -1,6 +1,7 @@
 mod args;
 mod auth;
 mod dispatch;
+mod logging;
 mod mcp;
 mod output;
 mod service;

@@ -53,7 +53,7 @@ mod transport_dispatch_tests {
             ("OPENAI_COMPATIBLE_API_KEY", "sk-fake"),
             ("OPENAI_COMPATIBLE_MODEL", "gpt-4o-mini"),
             ("GROK_SEARCH_MODEL", "grok-4-1-fast-reasoning"),
-            // X-search is silently ignored on this transport �?doctor must
+            // X-search is silently ignored on this transport  - doctor must
             // report the effective behavior (false), not the raw env flag.
             ("GROK_SEARCH_X_SEARCH", "true"),
         ]);
@@ -75,7 +75,7 @@ mod transport_dispatch_tests {
             academic: None,
             wechat: None,
             zhihu: None,
-            logger: DebugLogger::disabled(),
+            audit: grok_search_audit::AuditRecorder::disabled(),
         };
 
         let report = svc.doctor().await;
@@ -108,7 +108,7 @@ mod transport_dispatch_tests {
             academic: None,
             wechat: None,
             zhihu: None,
-            logger: DebugLogger::disabled(),
+            audit: grok_search_audit::AuditRecorder::disabled(),
         };
 
         let report = svc.doctor().await;
@@ -137,7 +137,7 @@ mod transport_dispatch_tests {
             academic: None,
             wechat: None,
             zhihu: None,
-            logger: DebugLogger::disabled(),
+            audit: grok_search_audit::AuditRecorder::disabled(),
         };
         let report = svc.doctor().await;
         assert_eq!(report["github_token"], "set");
@@ -163,7 +163,7 @@ mod transport_dispatch_tests {
             academic: None,
             wechat: None,
             zhihu: None,
-            logger: DebugLogger::disabled(),
+            audit: grok_search_audit::AuditRecorder::disabled(),
         };
         let report_unset = svc_unset.doctor().await;
         assert_eq!(report_unset["github_token"], "unset");
@@ -198,7 +198,7 @@ mod transport_dispatch_tests {
             academic: None,
             wechat: None,
             zhihu: None,
-            logger: DebugLogger::disabled(),
+            audit: grok_search_audit::AuditRecorder::disabled(),
         };
 
         let report = svc.doctor().await;
@@ -306,7 +306,7 @@ mod enrich_tests {
         }
     }
 
-    /// Hangs far past any test deadline �?used to trigger the timeout note.
+    /// Hangs far past any test deadline  - used to trigger the timeout note.
     struct HangingExtractor;
     #[async_trait]
     impl SourceExtractor for HangingExtractor {
@@ -328,8 +328,8 @@ mod enrich_tests {
     }
 
     /// Supplemental provider whose `search_sources` returns example.com sources
-    /// but whose generic `fetch` always errors �?used to exercise the
-    /// "specialist failed AND generic fetch failed �?note" path.
+    /// but whose generic `fetch` always errors  - used to exercise the
+    /// "specialist failed AND generic fetch failed  - note" path.
     struct SearchOkFetchErrProvider;
     #[async_trait]
     impl SourceProvider for SearchOkFetchErrProvider {
@@ -374,7 +374,7 @@ mod enrich_tests {
             academic: None,
             wechat: None,
             zhihu: None,
-            logger: DebugLogger::disabled(),
+            audit: grok_search_audit::AuditRecorder::disabled(),
         }
     }
 
@@ -432,7 +432,7 @@ mod enrich_tests {
 
     #[tokio::test]
     async fn enrich_generic_url_uses_provider_fetch_fallback() {
-        // No specialist matches the supplemental URLs �?inline enrichment must
+        // No specialist matches the supplemental URLs  - inline enrichment must
         // fall back to the configured source provider's generic fetch (mirroring
         // web_fetch), not emit a `_Failed to retrieve: no_specialist_match_`
         // note for ordinary search results (P1).
@@ -467,7 +467,7 @@ mod enrich_tests {
         let svc = service_with(config, router);
 
         let _ = svc.web_search(base_input()).await.expect("web_search");
-        // 4 sources, concurrency 2 �?peak must never exceed 2.
+        // 4 sources, concurrency 2  - peak must never exceed 2.
         assert!(
             peak.load(Ordering::SeqCst) <= 2,
             "peak={}",
@@ -626,7 +626,7 @@ mod enrich_tests {
         let svc = service_with(enrich_config(), router);
 
         let mut input = base_input();
-        input.extra_sources = Some(0); // effective_extra_sources == 0 �?dual gate suppresses enrich
+        input.extra_sources = Some(0); // effective_extra_sources == 0  - dual gate suppresses enrich
         let out = svc.web_search(input).await.expect("web_search");
 
         for s in &out.sources {

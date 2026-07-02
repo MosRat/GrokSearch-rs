@@ -13,43 +13,34 @@ use grok_search_types::{GrokSearchError, Result};
 impl SearchService {
     pub async fn web_fetch(&self, url: &str, max_chars: Option<usize>) -> Result<WebFetchOutput> {
         let op_start = Instant::now();
-        let request_id = self.logger.request_id();
-        self.logger.event(
-            &request_id,
-            "debug",
-            "web_fetch.start",
-            Some("web_fetch"),
-            None,
-            json!({
-                "url": summarize_url(url),
-                "max_chars": max_chars,
-            }),
-        );
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
+        let request_id = self.audit.request_id();
+        let input_payload = json!({
+            "url": summarize_url(url),
+            "max_chars": max_chars,
+        });
         let result = self.web_fetch_inner(url, max_chars).await;
-        match &result {
-            Ok(output) => self.logger.event(
-                &request_id,
-                "debug",
-                "web_fetch.success",
-                Some("web_fetch"),
-                Some(op_start.elapsed()),
-                json!({
+        let payload = match &result {
+            Ok(output) => json!({
+                "input": input_payload,
+                "output": {
                     "url": summarize_url(&output.url),
                     "source_type": format!("{:?}", output.source_type),
                     "original_length": output.original_length,
                     "truncated": output.truncated,
                     "fallback_reason": output.fallback_reason,
-                }),
-            ),
-            Err(err) => self.logger.error(
-                &request_id,
-                "web_fetch.error",
-                Some("web_fetch"),
-                Some(op_start.elapsed()),
-                err,
-                json!({ "url": summarize_url(url) }),
-            ),
-        }
+                }
+            }),
+            Err(_) => json!({ "input": input_payload }),
+        };
+        self.audit_result(
+            &request_id,
+            "web_fetch",
+            started_at_unix_ms,
+            op_start,
+            &result,
+            payload,
+        );
         result
     }
 
@@ -102,18 +93,12 @@ impl SearchService {
 
     pub async fn web_map(&self, url: &str, max_results: usize) -> Result<Vec<Source>> {
         let op_start = Instant::now();
-        let request_id = self.logger.request_id();
-        self.logger.event(
-            &request_id,
-            "debug",
-            "web_map.start",
-            Some("web_map"),
-            None,
-            json!({
-                "url": summarize_url(url),
-                "max_results": max_results,
-            }),
-        );
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
+        let request_id = self.audit.request_id();
+        let input_payload = json!({
+            "url": summarize_url(url),
+            "max_results": max_results,
+        });
         let result = async {
             validate_public_http_url(url)?;
             self.sources
@@ -123,27 +108,21 @@ impl SearchService {
                 .await
         }
         .await;
-        match &result {
-            Ok(sources) => self.logger.event(
-                &request_id,
-                "debug",
-                "web_map.success",
-                Some("web_map"),
-                Some(op_start.elapsed()),
-                json!({
-                    "url": summarize_url(url),
-                    "sources_count": sources.len(),
-                }),
-            ),
-            Err(err) => self.logger.error(
-                &request_id,
-                "web_map.error",
-                Some("web_map"),
-                Some(op_start.elapsed()),
-                err,
-                json!({ "url": summarize_url(url), "max_results": max_results }),
-            ),
-        }
+        let payload = match &result {
+            Ok(sources) => json!({
+                "input": input_payload,
+                "output": { "sources_count": sources.len() },
+            }),
+            Err(_) => json!({ "input": input_payload }),
+        };
+        self.audit_result(
+            &request_id,
+            "web_map",
+            started_at_unix_ms,
+            op_start,
+            &result,
+            payload,
+        );
         result
     }
 }

@@ -51,6 +51,10 @@ pub fn academic_pdf_cache_path() -> Option<PathBuf> {
     academic_pdf_cache_path_for(std::env::vars())
 }
 
+pub fn audit_path() -> Option<PathBuf> {
+    audit_path_for(std::env::vars())
+}
+
 pub fn auth_path_for<I, K, V>(env_vars: I) -> Option<PathBuf>
 where
     I: IntoIterator<Item = (K, V)>,
@@ -103,6 +107,22 @@ where
         return Some(PathBuf::from(explicit));
     }
     resolve_config_path(&env).map(|path| path.with_file_name("academic-pdf-cache.redb"))
+}
+
+pub fn audit_path_for<I, K, V>(env_vars: I) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: Into<String>,
+    V: Into<String>,
+{
+    let env: HashMap<String, String> = env_vars
+        .into_iter()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
+    if let Some(explicit) = env.get("GROK_SEARCH_AUDIT_PATH").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(explicit));
+    }
+    resolve_config_path(&env).map(|path| path.with_file_name("audit.redb"))
 }
 
 /// Test-friendly variant of [`config_path`] that takes an explicit env map.

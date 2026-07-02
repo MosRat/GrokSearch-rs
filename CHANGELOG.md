@@ -4,6 +4,40 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.3.4 - 2026-07-03
+
+### Added
+
+- Added a dedicated `grok-search-audit` crate with default-on tool-call audit
+  recording, redacted recent-call metadata, aggregate success/failure counts,
+  redb persistence, memory fallback, and optional JSONL development export.
+- Added `grok-search-rs audit summary`, `audit recent`, and `audit clear`
+  commands for local audit inspection without initializing search providers.
+- Added HTTP MCP audit management endpoints: `GET /audit`,
+  `GET /audit/recent`, and `POST /audit/clear`, protected by the existing
+  Bearer token middleware.
+
+### Changed
+
+- Replaced service-level JSONL debug logging with `AuditRecorder` integration
+  across web, repository, academic, WeChat, Zhihu, and doctor tool calls while
+  keeping tracing runtime logs on stderr.
+- Added audit configuration keys and environment variables:
+  `GROK_SEARCH_AUDIT_ENABLED`, `GROK_SEARCH_AUDIT_PATH`,
+  `GROK_SEARCH_AUDIT_RECENT_LIMIT`, and `GROK_SEARCH_AUDIT_LOG_PATH`.
+- Marked `GROK_SEARCH_DEBUG_LOG_PATH` / `debug_log_path` as a deprecated
+  compatibility alias for the audit JSONL export path.
+
+### Fixed
+
+- Avoided creating an audit database for read-only CLI audit queries when no
+  database exists yet.
+- Made redb audit updates read and write state inside one write transaction to
+  avoid lost updates across concurrent service instances.
+- Ensured academic provider setup failures are counted in audit failure stats.
+- Warned on audit JSONL write failures and expanded redaction coverage for
+  hyphenated secret-like keys such as `x-api-key`.
+
 ## 0.3.3 - 2026-07-02
 
 ### Added

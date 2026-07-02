@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use grok_search_audit::AuditOptions;
 
 use super::*;
 
@@ -18,7 +19,7 @@ impl SearchService {
             academic: parts.academic,
             wechat: parts.wechat,
             zhihu: parts.zhihu,
-            logger: DebugLogger::new(config.debug_log_path.clone()),
+            audit: audit_from_config(&config),
         }
     }
 
@@ -41,7 +42,7 @@ impl SearchService {
             academic: None,
             wechat: None,
             zhihu: None,
-            logger: DebugLogger::new(config.debug_log_path.clone()),
+            audit: AuditRecorder::memory(config.audit_recent_limit),
         }
     }
 
@@ -89,7 +90,7 @@ impl SearchService {
             academic: None,
             wechat: None,
             zhihu: None,
-            logger: DebugLogger::new(config.debug_log_path.clone()),
+            audit: AuditRecorder::memory(config.audit_recent_limit),
         }
     }
 
@@ -126,7 +127,7 @@ impl SearchService {
             academic: None,
             wechat: None,
             zhihu: None,
-            logger: DebugLogger::new(config.debug_log_path.clone()),
+            audit: AuditRecorder::memory(config.audit_recent_limit),
         }
     }
 
@@ -141,6 +142,15 @@ impl SearchService {
         service.zhihu = Some(zhihu);
         service
     }
+}
+
+pub(crate) fn audit_from_config(config: &Config) -> AuditRecorder {
+    AuditRecorder::new(AuditOptions {
+        enabled: config.audit_enabled,
+        path: Some(config.audit_path.clone()),
+        recent_limit: config.audit_recent_limit,
+        jsonl_path: config.audit_log_path.clone(),
+    })
 }
 
 pub(crate) fn resolve_default_model(config: &Config) -> String {

@@ -9,32 +9,43 @@ impl SearchService {
         &self,
         input: AcademicSearchInput,
     ) -> Result<AcademicSearchOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
-        let result = self.academic_service()?.search(input).await;
-        self.log_result(&request_id, "academic_search", start, &result, json!({}));
+        let result = async { self.academic_service()?.search(input).await }.await;
+        self.log_result(
+            &request_id,
+            "academic_search",
+            started_at_unix_ms,
+            start,
+            &result,
+            json!({}),
+        );
         result
     }
 
     pub async fn wechat_search(&self, mut input: WechatSearchInput) -> Result<WechatSearchOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
         let query_chars = input.query.chars().count();
-        if input.query.trim().is_empty() {
-            return Err(GrokSearchError::InvalidParams(
+        let result = if input.query.trim().is_empty() {
+            Err(GrokSearchError::InvalidParams(
                 "wechat_search.query is required".to_string(),
-            ));
-        }
-        input.max_results = Some(input.max_results.unwrap_or(10));
-        input.pages = Some(input.pages.unwrap_or(1));
-        input.max_content_chars = input
-            .max_content_chars
-            .or(self.config.fetch_max_chars)
-            .or(Some(self.config.enrich_max_chars));
-        let result = self.wechat_provider()?.search(input).await;
+            ))
+        } else {
+            input.max_results = Some(input.max_results.unwrap_or(10));
+            input.pages = Some(input.pages.unwrap_or(1));
+            input.max_content_chars = input
+                .max_content_chars
+                .or(self.config.fetch_max_chars)
+                .or(Some(self.config.enrich_max_chars));
+            self.wechat_provider()?.search(input).await
+        };
         self.log_result(
             &request_id,
             "wechat_search",
+            started_at_unix_ms,
             start,
             &result,
             json!({ "query_chars": query_chars }),
@@ -43,19 +54,22 @@ impl SearchService {
     }
 
     pub async fn zhihu_search(&self, mut input: ZhihuSearchInput) -> Result<ZhihuSearchOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
         let query_chars = input.query.chars().count();
-        if input.query.trim().is_empty() {
-            return Err(GrokSearchError::InvalidParams(
+        let result = if input.query.trim().is_empty() {
+            Err(GrokSearchError::InvalidParams(
                 "zhihu_search.query is required".to_string(),
-            ));
-        }
-        input.count = Some(input.count.unwrap_or(10));
-        let result = self.zhihu_provider()?.search(input).await;
+            ))
+        } else {
+            input.count = Some(input.count.unwrap_or(10));
+            self.zhihu_provider()?.search(input).await
+        };
         self.log_result(
             &request_id,
             "zhihu_search",
+            started_at_unix_ms,
             start,
             &result,
             json!({ "query_chars": query_chars }),
@@ -70,22 +84,24 @@ impl SearchService {
         include_open_access: bool,
         extract_material_links: bool,
     ) -> Result<AcademicGetOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
-        let result = self
-            .academic_service()
-            .map(|service| {
-                service.get(
+        let result = async {
+            self.academic_service()?
+                .get(
                     identifier,
                     include_citations,
                     include_open_access,
                     extract_material_links,
                 )
-            })?
-            .await;
+                .await
+        }
+        .await;
         self.log_result(
             &request_id,
             "academic_get",
+            started_at_unix_ms,
             start,
             &result,
             json!({ "identifier": identifier }),
@@ -98,15 +114,19 @@ impl SearchService {
         identifier: &str,
         limit: Option<usize>,
     ) -> Result<AcademicCitationsOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
-        let result = self
-            .academic_service()?
-            .citations(identifier, limit.unwrap_or(10))
-            .await;
+        let result = async {
+            self.academic_service()?
+                .citations(identifier, limit.unwrap_or(10))
+                .await
+        }
+        .await;
         self.log_result(
             &request_id,
             "academic_citations",
+            started_at_unix_ms,
             start,
             &result,
             json!({ "identifier": identifier, "limit": limit }),
@@ -122,13 +142,23 @@ impl SearchService {
         output_format: Option<String>,
         parse_options: Option<AcademicParseOptions>,
     ) -> Result<AcademicReadOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
-        let result = self
-            .academic_service()?
-            .read(identifier, url, max_chars, output_format, parse_options)
-            .await;
-        self.log_result(&request_id, "academic_read", start, &result, json!({}));
+        let result = async {
+            self.academic_service()?
+                .read(identifier, url, max_chars, output_format, parse_options)
+                .await
+        }
+        .await;
+        self.log_result(
+            &request_id,
+            "academic_read",
+            started_at_unix_ms,
+            start,
+            &result,
+            json!({}),
+        );
         result
     }
 
@@ -140,13 +170,23 @@ impl SearchService {
         output_format: Option<String>,
         parse_options: Option<AcademicParseOptions>,
     ) -> Result<AcademicParsePdfOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
-        let result = self
-            .academic_service()?
-            .parse_pdf(identifier, url, max_chars, output_format, parse_options)
-            .await;
-        self.log_result(&request_id, "academic_parse_pdf", start, &result, json!({}));
+        let result = async {
+            self.academic_service()?
+                .parse_pdf(identifier, url, max_chars, output_format, parse_options)
+                .await
+        }
+        .await;
+        self.log_result(
+            &request_id,
+            "academic_parse_pdf",
+            started_at_unix_ms,
+            start,
+            &result,
+            json!({}),
+        );
         result
     }
 
@@ -157,15 +197,19 @@ impl SearchService {
         output_path: String,
         overwrite: bool,
     ) -> Result<AcademicDownloadPdfOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
-        let result = self
-            .academic_service()?
-            .download_pdf(identifier, url, output_path, overwrite)
-            .await;
+        let result = async {
+            self.academic_service()?
+                .download_pdf(identifier, url, output_path, overwrite)
+                .await
+        }
+        .await;
         self.log_result(
             &request_id,
             "academic_download_pdf",
+            started_at_unix_ms,
             start,
             &result,
             json!({}),
@@ -177,10 +221,18 @@ impl SearchService {
         &self,
         input: AcademicPdfReadInput,
     ) -> Result<AcademicPdfReadOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
-        let result = self.academic_service()?.pdf_read(input).await;
-        self.log_result(&request_id, "academic_pdf_read", start, &result, json!({}));
+        let result = async { self.academic_service()?.pdf_read(input).await }.await;
+        self.log_result(
+            &request_id,
+            "academic_pdf_read",
+            started_at_unix_ms,
+            start,
+            &result,
+            json!({}),
+        );
         result
     }
 
@@ -188,12 +240,14 @@ impl SearchService {
         &self,
         input: AcademicPdfStructureInput,
     ) -> Result<AcademicPdfStructureOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
-        let result = self.academic_service()?.pdf_structure(input).await;
+        let result = async { self.academic_service()?.pdf_structure(input).await }.await;
         self.log_result(
             &request_id,
             "academic_pdf_structure",
+            started_at_unix_ms,
             start,
             &result,
             json!({}),
@@ -205,12 +259,14 @@ impl SearchService {
         &self,
         input: AcademicPdfArtifactsInput,
     ) -> Result<AcademicPdfArtifactsOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
-        let result = self.academic_service()?.pdf_artifacts(input).await;
+        let result = async { self.academic_service()?.pdf_artifacts(input).await }.await;
         self.log_result(
             &request_id,
             "academic_pdf_artifacts",
+            started_at_unix_ms,
             start,
             &result,
             json!({}),
@@ -222,12 +278,14 @@ impl SearchService {
         &self,
         input: AcademicPdfDownloadInput,
     ) -> Result<AcademicPdfDownloadOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
-        let result = self.academic_service()?.pdf_download(input).await;
+        let result = async { self.academic_service()?.pdf_download(input).await }.await;
         self.log_result(
             &request_id,
             "academic_pdf_download",
+            started_at_unix_ms,
             start,
             &result,
             json!({}),
@@ -239,13 +297,15 @@ impl SearchService {
         &self,
         input: AcademicProgressiveGetInput,
     ) -> Result<AcademicProgressiveGetOutput> {
-        let request_id = self.logger.request_id();
+        let request_id = self.audit.request_id();
+        let started_at_unix_ms = grok_search_audit::now_unix_ms();
         let start = Instant::now();
         let cache_key = input.cache_key.clone();
-        let result = self.academic_service()?.progressive_get(input).await;
+        let result = async { self.academic_service()?.progressive_get(input).await }.await;
         self.log_result(
             &request_id,
             "academic_progressive_get",
+            started_at_unix_ms,
             start,
             &result,
             json!({ "cache_key": cache_key }),
@@ -288,27 +348,18 @@ impl SearchService {
         &self,
         request_id: &str,
         operation: &str,
+        started_at_unix_ms: u128,
         start: Instant,
         result: &Result<T>,
         payload: serde_json::Value,
     ) {
-        match result {
-            Ok(_) => self.logger.event(
-                request_id,
-                "debug",
-                &format!("{operation}.success"),
-                Some(operation),
-                Some(start.elapsed()),
-                payload,
-            ),
-            Err(err) => self.logger.error(
-                request_id,
-                &format!("{operation}.error"),
-                Some(operation),
-                Some(start.elapsed()),
-                err,
-                payload,
-            ),
-        }
+        self.audit_result(
+            request_id,
+            operation,
+            started_at_unix_ms,
+            start,
+            result,
+            payload,
+        );
     }
 }

@@ -2,9 +2,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::extract::Query;
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use grok_search_service::SearchService;
 use rmcp::transport::streamable_http_server::{
@@ -93,12 +94,13 @@ pub(crate) async fn run_http_with_shutdown(
     let cancellation_token = CancellationToken::new();
     let router = build_http_router(service, &options, cancellation_token.clone())?;
 
-    eprintln!(
-        "grok-search-rs HTTP MCP listening on http://{}{} (auth: {}, cors: {})",
-        local_addr,
-        options.path,
-        options.auth_status(),
-        options.allow_origin.as_deref().unwrap_or("disabled")
+    tracing::info!(
+        target: "grok_search",
+        address = %local_addr,
+        path = %options.path,
+        auth = options.auth_status(),
+        cors = options.allow_origin.as_deref().unwrap_or("disabled"),
+        "HTTP MCP listening"
     );
 
     axum::serve(listener, router)
@@ -126,6 +128,51 @@ pub(crate) fn build_http_router(
 
     let mut router = Router::new()
         .route("/healthz", get(healthz))
+        .route(
+            "/audit",
+            get({
+                let service = service.clone();
+                move || async move {
+                    Json(
+                        serde_json::to_value(service.audit_snapshot(Default::default()))
+                            .unwrap_or_else(|_| json!({ "error": "audit_snapshot_failed" })),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/audit/recent",
+            get({
+                let service = service.clone();
+                move |Query(query): Query<AuditRecentHttpQuery>| async move {
+                    let query = match query.try_into_audit_query() {
+                        Ok(query) => query,
+                        Err(err) => {
+                            return Err((
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": "invalid_status", "message": err })),
+                            ));
+                        }
+                    };
+                    Ok(Json(
+                        serde_json::to_value(service.audit_recent(query))
+                            .unwrap_or_else(|_| json!({ "error": "audit_recent_failed" })),
+                    ))
+                }
+            }),
+        )
+        .route(
+            "/audit/clear",
+            post({
+                let service = service.clone();
+                move || async move {
+                    match service.audit_clear() {
+                        Ok(()) => Json(json!({ "ok": true })),
+                        Err(err) => Json(json!({ "ok": false, "error": err.to_string() })),
+                    }
+                }
+            }),
+        )
         .nest_service(&options.path, mcp_service)
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
@@ -167,4 +214,27 @@ async fn healthz() -> Json<Value> {
         "server": "grok-search-rs",
         "transport": "streamable_http"
     }))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AuditRecentHttpQuery {
+    limit: Option<usize>,
+    tool: Option<String>,
+    status: Option<String>,
+}
+
+impl AuditRecentHttpQuery {
+    fn try_into_audit_query(self) -> Result<grok_search_audit::AuditRecentQuery, String> {
+        let status = match self.status.as_deref() {
+            Some("success") => Some(grok_search_audit::AuditStatus::Success),
+            Some("error") => Some(grok_search_audit::AuditStatus::Error),
+            Some(other) => return Err(format!("status must be success or error, got {other}")),
+            None => None,
+        };
+        Ok(grok_search_audit::AuditRecentQuery {
+            limit: self.limit,
+            tool: self.tool,
+            status,
+        })
+    }
 }

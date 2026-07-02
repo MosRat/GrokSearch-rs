@@ -210,6 +210,54 @@ fn parses_web_tool_commands() {
 }
 
 #[test]
+fn parses_audit_commands() {
+    match Cli::try_parse_from(["grok-search-rs", "audit", "summary", "--compact"])
+        .unwrap()
+        .command
+    {
+        Some(Command::Audit(AuditCommand {
+            command: AuditSubcommand::Summary(output),
+        })) => assert!(output.compact),
+        other => panic!("expected audit summary command, got {other:?}"),
+    }
+
+    match Cli::try_parse_from([
+        "grok-search-rs",
+        "audit",
+        "recent",
+        "--limit",
+        "10",
+        "--tool",
+        "web_search",
+        "--status",
+        "error",
+        "--compact",
+    ])
+    .unwrap()
+    .command
+    {
+        Some(Command::Audit(AuditCommand {
+            command: AuditSubcommand::Recent(command),
+        })) => {
+            assert_eq!(command.limit, Some(10));
+            assert_eq!(command.tool.as_deref(), Some("web_search"));
+            assert_eq!(command.status, Some(AuditStatusArg::Error));
+            assert!(command.output.compact);
+        }
+        other => panic!("expected audit recent command, got {other:?}"),
+    }
+
+    assert!(matches!(
+        Cli::try_parse_from(["grok-search-rs", "audit", "clear"])
+            .unwrap()
+            .command,
+        Some(Command::Audit(AuditCommand {
+            command: AuditSubcommand::Clear
+        }))
+    ));
+}
+
+#[test]
 fn parses_academic_tool_commands() {
     assert!(matches!(
         Cli::try_parse_from([

@@ -46,6 +46,8 @@ pub(crate) enum Command {
     Logout,
     /// Run connectivity diagnostics.
     Doctor(OutputArgs),
+    /// Inspect local tool-call audit data.
+    Audit(AuditCommand),
     /// Run web_search once and print JSON.
     #[command(name = "web-search", alias = "web_search")]
     WebSearch(WebSearchCommand),
@@ -104,6 +106,40 @@ pub(crate) struct OutputArgs {
     pub(crate) compact: bool,
     #[arg(long)]
     pub(crate) verbose: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AuditCommand {
+    #[command(subcommand)]
+    pub(crate) command: AuditSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum AuditSubcommand {
+    /// Print aggregate audit counters.
+    Summary(OutputArgs),
+    /// Print recent audited tool calls.
+    Recent(AuditRecentCommand),
+    /// Clear aggregate counters and recent calls.
+    Clear,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AuditRecentCommand {
+    #[arg(long)]
+    pub(crate) limit: Option<usize>,
+    #[arg(long)]
+    pub(crate) tool: Option<String>,
+    #[arg(long, value_enum)]
+    pub(crate) status: Option<AuditStatusArg>,
+    #[command(flatten)]
+    pub(crate) output: OutputArgs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum AuditStatusArg {
+    Success,
+    Error,
 }
 
 #[derive(Debug, Args)]

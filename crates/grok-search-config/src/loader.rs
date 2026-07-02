@@ -67,7 +67,7 @@ pub(crate) fn try_load_from_env_map(
         .unwrap_or_default();
     let mut config = Config::from_env_map(merge_env_over_file(file_map, env_map));
     config.apply_github_cli_token_fallback();
-    validate_debug_log_path(&config)?;
+    validate_debug_log_path(config.audit_log_path.as_ref())?;
     Ok(config)
 }
 
@@ -108,8 +108,8 @@ fn merge_env_over_file(
     base
 }
 
-fn validate_debug_log_path(config: &Config) -> std::result::Result<(), ConfigLoadError> {
-    let Some(path) = config.debug_log_path.as_ref() else {
+fn validate_debug_log_path(path: Option<&PathBuf>) -> std::result::Result<(), ConfigLoadError> {
+    let Some(path) = path else {
         return Ok(());
     };
     if let Some(parent) = path

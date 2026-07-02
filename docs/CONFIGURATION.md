@@ -109,7 +109,15 @@ command = "grok-search-rs"
 | `GROK_SEARCH_PROXY` | `auto` | Proxy mode. `auto` discovers environment/system proxies and uses one only after API reachability checks; `off` forces direct; a URL such as `http://127.0.0.1:7890` or `socks5://127.0.0.1:1080` forces that candidate. |
 | `GROK_SEARCH_FETCH_MAX_CHARS` | unset | Default character cap on `web_fetch` content. Overridden per call by `max_chars`. Unset means no truncation. |
 | `GROK_SEARCH_MAX_RESPONSE_BYTES` | `10485760` | Global upstream HTTP response body byte cap before JSON/PDF/text parsing. |
+| `GROK_SEARCH_LOG` | command-dependent | Runtime log filter for stderr logs. Overrides `RUST_LOG`; for example `GROK_SEARCH_LOG=grok_search=debug`. |
 | `GROK_SEARCH_DEBUG_LOG_PATH` | unset | Optional JSONL debug log path. Disabled when unset; payloads are redacted before writing. |
+
+Output is layered deliberately: CLI results and interactive prompts go to
+stdout, runtime lifecycle/warning logs go to stderr, and structured tool-call
+debug events go to `GROK_SEARCH_DEBUG_LOG_PATH` when configured. Stdio MCP
+defaults runtime stderr logging to `off` unless `GROK_SEARCH_LOG` or `RUST_LOG`
+is set, so JSON-RPC transport stays quiet. HTTP MCP defaults to `info` so the
+listening address is visible.
 
 ## Proxy
 
@@ -352,7 +360,11 @@ This section is generated from the Rust config schema in `grok-search-config`. U
 | `timeout_seconds` | `GROK_SEARCH_TIMEOUT_SECONDS` | 60 | HTTP timeout in seconds for upstream requests. |
 | `proxy` | `GROK_SEARCH_PROXY` | auto | Proxy mode: auto, off, or an explicit proxy URL. |
 | `max_response_bytes` | `GROK_SEARCH_MAX_RESPONSE_BYTES` | 10485760 | Global upstream response body byte cap before parsing or trimming. |
-| `debug_log_path` | `GROK_SEARCH_DEBUG_LOG_PATH` | unset | Optional JSONL debug log path. |
+| `debug_log_path` | `GROK_SEARCH_DEBUG_LOG_PATH` | unset | Deprecated alias for audit_log_path JSONL export. |
+| `audit_enabled` | `GROK_SEARCH_AUDIT_ENABLED` | true | Enables tool-call audit recording. |
+| `audit_path` | `GROK_SEARCH_AUDIT_PATH` | default audit.redb next to config.toml | Persistent audit database path. |
+| `audit_recent_limit` | `GROK_SEARCH_AUDIT_RECENT_LIMIT` | 1000 | Recent audit call detail entries retained. |
+| `audit_log_path` | `GROK_SEARCH_AUDIT_LOG_PATH` | unset | Optional JSONL audit export path for development. |
 #### OpenAI-compatible transport
 
 | TOML key | Env aliases | Default | Description |
@@ -449,7 +461,11 @@ This section is generated from the Rust config schema in `grok-search-config`. U
 | `max_inline_sources` | `GROK_SEARCH_MAX_INLINE_SOURCES` |
 | `response_max_chars` | `GROK_SEARCH_RESPONSE_MAX_CHARS` |
 | `max_response_bytes` | `GROK_SEARCH_MAX_RESPONSE_BYTES` |
-| `debug_log_path` | `GROK_SEARCH_DEBUG_LOG_PATH` |
+| `debug_log_path` | `GROK_SEARCH_DEBUG_LOG_PATH` (deprecated alias for `audit_log_path`) |
+| `audit_enabled` | `GROK_SEARCH_AUDIT_ENABLED` |
+| `audit_path` | `GROK_SEARCH_AUDIT_PATH` |
+| `audit_recent_limit` | `GROK_SEARCH_AUDIT_RECENT_LIMIT` |
+| `audit_log_path` | `GROK_SEARCH_AUDIT_LOG_PATH` |
 | `academic_enabled` | `GROK_SEARCH_ACADEMIC_ENABLED` |
 | `academic_email` | `GROK_SEARCH_ACADEMIC_EMAIL` |
 | `semantic_scholar_api_key` | `SEMANTIC_SCHOLAR_API_KEY` |
@@ -525,7 +541,11 @@ default_extra_sources = 3
 fallback_sources      = 5
 fetch_max_chars       = 200000
 max_response_bytes    = 10485760
-debug_log_path        = "logs/grok-search-rs-debug.jsonl"
+audit_enabled         = true
+audit_path            = "audit.redb"
+audit_recent_limit    = 1000
+audit_log_path        = "logs/grok-search-rs-audit.jsonl"
+# debug_log_path      = "logs/grok-search-rs-debug.jsonl" # deprecated alias
 cache_size            = 256
 timeout_seconds       = 60
 proxy                 = "auto"

@@ -23,8 +23,8 @@ struct Discovery {
 }
 
 pub async fn login(auth_path: &Path, open_browser: bool) -> Result<TokenStore> {
-    eprintln!("WARNING: OAuth mode reuses Hermes' xAI OAuth client_id.");
-    eprintln!("This may violate xAI terms or affect your account. Use at your own risk.");
+    println!("WARNING: OAuth mode reuses Hermes' xAI OAuth client_id.");
+    println!("This may violate xAI terms or affect your account. Use at your own risk.");
 
     let client = Client::builder()
         .timeout(Duration::from_secs(30))

@@ -101,11 +101,13 @@ impl FirecrawlProvider {
                 Err(failure) => {
                     let key_scoped = failure.status.is_some_and(is_key_scoped_status);
                     if key_scoped && offset + 1 < attempts {
-                        eprintln!(
-                            "grok-search-rs: Firecrawl key {}/{} hit HTTP {}; rotating to next key",
-                            (start + offset) % attempts + 1,
-                            attempts,
-                            failure.status.unwrap_or_default(),
+                        tracing::warn!(
+                            target: "grok_search",
+                            provider = "Firecrawl",
+                            key_index = (start + offset) % attempts + 1,
+                            key_count = attempts,
+                            status = failure.status.unwrap_or_default(),
+                            "provider key hit key-scoped HTTP status; rotating to next key"
                         );
                         last_error = Some(failure.error);
                         continue;

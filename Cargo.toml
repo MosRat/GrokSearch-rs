@@ -2,6 +2,7 @@
 members = [
     "crates/grok-search-academic",
     "crates/grok-search-apps",
+    "crates/grok-search-audit",
     "crates/grok-search-auth",
     "crates/grok-search-cache",
     "crates/grok-search-cli",
@@ -36,7 +37,7 @@ homepage = "https://github.com/MosRat/GrokSearch-rs"
 [workspace.dependencies]
 anyhow = "1"
 async-trait = "0.1"
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 getrandom = "0.3"
@@ -59,6 +60,8 @@ tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "rt",
 tokio-util = "0.7"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 tower-http = { version = "0.6", default-features = false, features = ["cors", "limit", "timeout"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 pdf_oxide = "0.3"

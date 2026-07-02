@@ -7,8 +7,8 @@ use tokio::sync::Mutex;
 
 use crate::cache::SourceCache;
 use crate::domain_filter::filter_sources_by_domains;
-use crate::logging::DebugLogger;
 use crate::response_budget::apply_response_budget;
+use grok_search_audit::{AuditRecorder, AuditStatus};
 use grok_search_config::Config;
 use grok_search_net::proxy::ProxyDiagnostics;
 pub use grok_search_provider_core::{
@@ -66,7 +66,7 @@ pub struct SearchService {
     pub(crate) academic: Option<Arc<dyn AcademicServiceProvider>>,
     pub(crate) wechat: Option<Arc<dyn WechatProvider>>,
     pub(crate) zhihu: Option<Arc<dyn ZhihuProvider>>,
-    pub(crate) logger: DebugLogger,
+    pub(crate) audit: AuditRecorder,
 }
 
 pub struct SearchServiceParts {
@@ -80,6 +80,61 @@ pub struct SearchServiceParts {
     pub academic: Option<Arc<dyn AcademicServiceProvider>>,
     pub wechat: Option<Arc<dyn WechatProvider>>,
     pub zhihu: Option<Arc<dyn ZhihuProvider>>,
+}
+
+impl SearchService {
+    pub fn audit_snapshot(
+        &self,
+        query: grok_search_audit::AuditRecentQuery,
+    ) -> grok_search_audit::AuditSnapshot {
+        self.audit.snapshot(query)
+    }
+
+    pub fn audit_summary(&self) -> grok_search_audit::AuditSummary {
+        self.audit.summary()
+    }
+
+    pub fn audit_recent(
+        &self,
+        query: grok_search_audit::AuditRecentQuery,
+    ) -> Vec<grok_search_audit::AuditRecentCall> {
+        self.audit.recent(query)
+    }
+
+    pub fn audit_clear(&self) -> Result<()> {
+        self.audit.clear()
+    }
+
+    pub(crate) fn audit_result<T>(
+        &self,
+        request_id: &str,
+        operation: &str,
+        started_at_unix_ms: u128,
+        start: Instant,
+        result: &Result<T>,
+        payload: serde_json::Value,
+    ) {
+        match result {
+            Ok(_) => self.audit.record_tool_call(
+                operation,
+                request_id,
+                started_at_unix_ms,
+                start.elapsed(),
+                AuditStatus::Success,
+                None,
+                payload,
+            ),
+            Err(err) => self.audit.record_tool_call(
+                operation,
+                request_id,
+                started_at_unix_ms,
+                start.elapsed(),
+                AuditStatus::Error,
+                Some(err.kind()),
+                payload,
+            ),
+        }
+    }
 }
 
 #[cfg(test)]

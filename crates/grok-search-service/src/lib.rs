@@ -3,7 +3,6 @@ mod diagnostics;
 mod domain_filter;
 mod enrichment;
 mod fetch;
-pub mod logging;
 mod repo_metadata;
 mod response_budget;
 mod service;
